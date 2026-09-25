@@ -291,7 +291,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // The name the run would actually create, before anything is written.
   await expect(page.getByText(ACCOUNT_NAME)).toBeVisible();
   await page.getByRole('button', { name: 'Save profile' }).click();
-  await expect(page.getByText('Saved.')).toBeVisible();
+  await expect(page.getByText('Account profile saved')).toBeVisible();
 
   await page.goBack();
   await page.getByRole('link', { name: 'Business rules' }).click();
@@ -313,7 +313,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   const impact = page.locator('p', { hasText: 'This rule matches' });
   await expect(impact).toContainText(/matches\s*1\s*of/);
   await page.getByRole('button', { name: 'Save rule' }).click();
-  await expect(page.getByText('Saved.')).toBeVisible();
+  await expect(page.getByText('Rule created')).toBeVisible();
 
   // The compound-condition editor, end to end: group the just-saved leaf
   // with AND and add a second leaf naming the SAME department, so the
@@ -329,7 +329,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await page.getByRole('button', { name: 'Preview impact' }).click();
   await expect(impact).toContainText(/matches\s*1\s*of/);
   await page.getByRole('button', { name: 'Save rule' }).click();
-  await expect(page.getByText('Saved.')).toBeVisible();
+  await expect(page.getByText('Rule saved')).toBeVisible();
   await expect(
     page.getByText(
       `(contract.department is ${DEPARTMENT}) AND (contract.department is ${DEPARTMENT})`,

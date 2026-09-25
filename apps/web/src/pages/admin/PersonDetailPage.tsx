@@ -8,6 +8,7 @@ import {
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
 } from '@syntra/ui';
@@ -20,6 +21,9 @@ import { EmployeeMover } from './EmployeeMover.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 import { useCan } from '../../session/SessionProvider.js';
+import { PersonLifecycleSummary } from './PersonLifecycleSummary.js';
+import { lifecycleVerdict } from './lifecycle-verdict.js';
+import { usePersonReceipts } from './use-person-receipts.js';
 
 interface Contract {
   id: string;
@@ -115,6 +119,19 @@ export function PersonDetailPage() {
   // that set.
   const unlinked = unlinkedData?.accounts ?? [];
 
+  const receipts = usePersonReceipts(id ?? '');
+  /**
+   * What is still live for somebody who has left. Read only for an inactive
+   * person — for an active one the verdict comes from receipts — and its
+   * refusal is tolerated silently: it needs three permissions, and an
+   * operator without them still gets the page, with the target count shown as
+   * not visible rather than as zero.
+   */
+  const departed = data !== null && data.status !== 'active';
+  const { data: offboardingData } = useApiResource<{
+    targets: { status: string }[];
+  }>(departed ? `/api/admin/persons/${id}/offboarding` : null);
+
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (loading || !data) {
     return (
@@ -124,10 +141,28 @@ export function PersonDetailPage() {
     );
   }
 
+  const liveSignIns = data.users.filter((u) => u.status === 'active').length;
+  const liveTargetAccounts = offboardingData
+    ? offboardingData.targets.filter((t) => ['active', 'pending', 'conflict'].includes(t.status)).length
+    : null;
+  // No verdict for an active person until the receipts have answered: before
+  // then (or when this operator may not read provisioning) "No provisioning
+  // recorded" would be a guess dressed as a finding.
+  const verdict =
+    data.status !== 'active' || receipts.receipts !== null
+      ? lifecycleVerdict({
+          personStatus: data.status,
+          receipts: receipts.receipts ?? [],
+          liveSignIns,
+          liveTargetAccounts,
+        })
+      : null;
+
   return (
     <>
       <PageHeader
         title={`${data.givenName} ${data.familyName}`}
+        status={verdict ? <StateBadge state={verdict.state}>{verdict.label}</StateBadge> : undefined}
         actions={
           <>
             {can('privacy.manage') && (
@@ -187,6 +222,21 @@ export function PersonDetailPage() {
       />
 
       <div className="space-y-6">
+        {verdict && (
+          <PersonLifecycleSummary
+            personId={data.id}
+            result={verdict}
+            receipts={receipts}
+            liveSignIns={liveSignIns}
+            liveTargetAccounts={liveTargetAccounts}
+          />
+        )}
+
+        {/* The evidence behind the verdict, directly under it. It used to sit
+            below the mover and above the audit log, a scroll away from the
+            question it answers. */}
+        <PersonProvisionReceipts state={receipts} />
+
         {editing && (
           <RecordPanel
             title={`Edit ${data.givenName} ${data.familyName}`}
@@ -222,12 +272,14 @@ export function PersonDetailPage() {
                 <Field
                   label="Given name"
                   value={v.givenName ?? ''}
+                  name="givenName"
                   onChange={(x) => set('givenName', x)}
                   error={errs.givenName}
                 />
                 <Field
                   label="Family name"
                   value={v.familyName ?? ''}
+                  name="familyName"
                   onChange={(x) => set('familyName', x)}
                   error={errs.familyName}
                 />
@@ -235,12 +287,14 @@ export function PersonDetailPage() {
                   label="Business email"
                   type="email"
                   value={v.businessEmail ?? ''}
+                  name="businessEmail"
                   onChange={(x) => set('businessEmail', x)}
                   error={errs.businessEmail}
                 />
                 <Select
                   label="Org unit"
                   value={v.orgUnitId ?? ''}
+                  name="orgUnitId"
                   onChange={(x) => set('orgUnitId', x)}
                   error={errs.orgUnitId}
                   options={[
@@ -255,6 +309,7 @@ export function PersonDetailPage() {
                 <Field
                   label="Source reference"
                   value={v.externalId ?? ''}
+                  name="externalId"
                   onChange={(x) => set('externalId', x)}
                   error={errs.externalId}
                   warning={
@@ -318,30 +373,35 @@ export function PersonDetailPage() {
                     <Field
                       label="Job title"
                       value={v.jobTitle ?? ''}
+                      name="jobTitle"
                       onChange={(x) => set('jobTitle', x)}
                       error={errs.jobTitle}
                     />
                     <Field
                       label="Department"
                       value={v.department ?? ''}
+                      name="department"
                       onChange={(x) => set('department', x)}
                       error={errs.department}
                     />
                     <Field
                       label="Cost centre"
                       value={v.costCentre ?? ''}
+                      name="costCentre"
                       onChange={(x) => set('costCentre', x)}
                       error={errs.costCentre}
                     />
                     <Field
                       label="Employer"
                       value={v.employer ?? ''}
+                      name="employer"
                       onChange={(x) => set('employer', x)}
                       error={errs.employer}
                     />
                     <Field
                       label="Location"
                       value={v.location ?? ''}
+                      name="location"
                       onChange={(x) => set('location', x)}
                       error={errs.location}
                     />
@@ -349,6 +409,7 @@ export function PersonDetailPage() {
                       label="End date"
                       type="date"
                       value={v.endDate ?? ''}
+                      name="endDate"
                       onChange={(x) => set('endDate', x)}
                       error={errs.endDate}
                     />
@@ -474,6 +535,7 @@ export function PersonDetailPage() {
                   <Field
                     label="Job title"
                     value={v.jobTitle ?? ''}
+                    name="jobTitle"
                     onChange={(x) => set('jobTitle', x)}
                     error={errs.jobTitle}
                     placeholder="Staff Nurse"
@@ -481,6 +543,7 @@ export function PersonDetailPage() {
                   <Field
                     label="Department"
                     value={v.department ?? ''}
+                    name="department"
                     onChange={(x) => set('department', x)}
                     error={errs.department}
                     placeholder="Nursing"
@@ -489,6 +552,7 @@ export function PersonDetailPage() {
                     label="Start date"
                     type="date"
                     value={v.startDate ?? ''}
+                    name="startDate"
                     onChange={(x) => set('startDate', x)}
                     error={errs.startDate}
                   />
@@ -496,30 +560,35 @@ export function PersonDetailPage() {
                     label="End date"
                     type="date"
                     value={v.endDate ?? ''}
+                    name="endDate"
                     onChange={(x) => set('endDate', x)}
                     error={errs.endDate}
                   />
                   <Field
                     label="Cost centre"
                     value={v.costCentre ?? ''}
+                    name="costCentre"
                     onChange={(x) => set('costCentre', x)}
                     error={errs.costCentre}
                   />
                   <Field
                     label="Employer"
                     value={v.employer ?? ''}
+                    name="employer"
                     onChange={(x) => set('employer', x)}
                     error={errs.employer}
                   />
                   <Field
                     label="Location"
                     value={v.location ?? ''}
+                    name="location"
                     onChange={(x) => set('location', x)}
                     error={errs.location}
                   />
                   <Field
                     label="FTE"
                     value={v.fte ?? ''}
+                    name="fte"
                     onChange={(x) => set('fte', x)}
                     error={errs.fte}
                     placeholder="1.0"
@@ -587,6 +656,7 @@ export function PersonDetailPage() {
                   <Select
                     label="Account"
                     value={v.userId ?? ''}
+                    name="userId"
                     onChange={(x) => set('userId', x)}
                     error={errs.userId}
                     options={[
@@ -610,8 +680,6 @@ export function PersonDetailPage() {
             onApplied={reload}
           />
         )}
-
-        <PersonProvisionReceipts personId={data.id} />
 
         {/*
           The person AND every account linked to them. A person's own record

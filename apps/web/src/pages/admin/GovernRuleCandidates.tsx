@@ -80,9 +80,9 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
         <Table>
           <thead>
             <tr>
-              <th>Suggested rule</th>
-              <th>How true it already is</th>
-              <th>Held elsewhere</th>
+              <th scope="col">Suggested rule</th>
+              <th scope="col">How true it already is</th>
+              <th scope="col">Held elsewhere</th>
             </tr>
           </thead>
           <tbody>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Metric, MetricRow, Panel, Select, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Metric, MetricRow, Panel, Select, SkeletonRows, StateBadge, Table } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
 interface HealthBucket {
@@ -29,7 +29,18 @@ export function TargetHealthPanel({ targetId }: { targetId: string }) {
   const incompleteRate = data && data.totals.readBackChecks
     ? Math.round((data.totals.incompleteReadBacks / data.totals.readBackChecks) * 100)
     : 0;
-  return <Panel title="Connector health">
+  // The period's verdict, in the console's agreed states, beside the title:
+  // "is this connector all right" is answered before the table is read.
+  // Nothing checked and nothing written is `inactive` — no evidence either
+  // way — never a quiet `healthy`.
+  const totals = data?.totals;
+  const verdict = !totals ? null
+    : totals.authenticationFailures > 0 || totals.readinessFailures > 0 || totals.ambiguousActions > 0
+      ? <StateBadge state="attention" />
+      : totals.readinessChecks === 0 && totals.provisionActions === 0
+        ? <StateBadge state="inactive">No activity</StateBadge>
+        : <StateBadge state="healthy" />;
+  return <Panel title="Connector health" actions={verdict}>
     <div className="space-y-5 p-4">
       <Select className="max-w-48" label="Period" value={days} onChange={setDays} options={RANGE_OPTIONS} />
       {resource.error ? <Alert tone="danger">{resource.error}</Alert> : null}
@@ -49,7 +60,7 @@ export function TargetHealthPanel({ targetId }: { targetId: string }) {
         </tr></thead><tbody aria-live="polite">
           {[...data.series].reverse().map((row) => <tr key={row.date}>
             <td>{row.date}</td>
-            <td>{row.readinessChecks ? <Status tone={row.readinessFailures ? 'danger' : 'active'}>{row.readinessChecks - row.readinessFailures}/{row.readinessChecks} passed{row.authenticationFailures ? ` · ${row.authenticationFailures} auth` : ''}</Status> : '—'}</td>
+            <td>{row.readinessChecks ? <StateBadge state={row.readinessFailures ? 'attention' : 'healthy'}>{row.readinessChecks - row.readinessFailures}/{row.readinessChecks} passed{row.authenticationFailures ? ` · ${row.authenticationFailures} auth` : ''}</StateBadge> : '—'}</td>
             <td>{row.averageLatencyMs === null ? '—' : `${row.averageLatencyMs} / ${row.p95LatencyMs} ms`}</td>
             <td>{row.provisionActions ? `${row.provisionActions - row.failedActions - row.ambiguousActions}/${row.provisionActions} succeeded${row.throttledActions ? ` · ${row.throttledActions} throttled` : ''}${row.ambiguousActions ? ` · ${row.ambiguousActions} unknown` : ''}` : '—'}</td>
             <td>{row.retries || '—'}</td>

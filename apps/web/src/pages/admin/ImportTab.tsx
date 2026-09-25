@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Alert, Button, Panel } from '@syntra/ui';
+import { Alert, Button, Panel, Textarea } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
 interface ImportResult {
@@ -62,17 +62,14 @@ export function ImportTab() {
           bodyClassName="p-4"
         >
           <form onSubmit={onSubmit}>
-            <label htmlFor="csv" className="mb-1.5 block font-medium text-ink">
-              Rows
-            </label>
-            <textarea
-              id="csv"
+            <Textarea
+              label="Rows"
+              mono
               value={csv}
-              onChange={(e) => setCsv(e.target.value)}
+              onChange={setCsv}
               rows={10}
               spellCheck={false}
               placeholder={SAMPLE}
-              className="w-full rounded-control border border-border-control bg-bg px-3 py-2 font-mono text-sm text-ink placeholder:text-muted hover:border-border-strong"
             />
             <div className="mt-3 flex items-center gap-3">
               <Button

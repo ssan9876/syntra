@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Check, Empty, Field, Panel, Select } from '@syntra/ui';
+import { Alert, Button, Check, Empty, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../session/api.js';
 import { useApiResource } from '../session/use-api-resource.js';
 
@@ -78,6 +78,12 @@ export function TasksPage() {
         </div>
       )}
 
+      {!data && loading && (
+        <div className="mt-6">
+          <SkeletonRows rows={2} cols={2} />
+        </div>
+      )}
+
       {!loading && !error && tasks.length === 0 && (
         <div className="mt-6">
           <Empty title="Nothing has been delegated to you">
@@ -153,8 +159,11 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
 
   return (
     <div className="mx-auto w-full max-w-xl px-6 py-8">
-      <Panel title={task.name} {...(task.description ? { description: task.description } : {})}>
+      <Panel title={task.name}>
         <div className="space-y-4 p-4">
+          {/* Written by whoever defined the task; data, not console prose.
+              It used to go to a `Panel` prop that no longer exists. */}
+          {task.description && <p className="whitespace-pre-line text-ink">{task.description}</p>}
           {optionError && <Alert tone="danger">{optionError}</Alert>}
 
           {done ? (
@@ -197,13 +206,10 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
                 }
                 if (field.type === 'checkbox') {
                   return (
-                    <Check
-                      key={field.key}
-                      checked={values[field.key] === true}
-                      onChange={set}
-                      label={field.label}
-                      {...(field.help ? { hint: field.help } : {})}
-                    />
+                    <div key={field.key}>
+                      <Check checked={values[field.key] === true} onChange={set} label={field.label} />
+                      {field.help && <p className="mt-1 pl-6.5 text-sm text-muted">{field.help}</p>}
+                    </div>
                   );
                 }
                 return (

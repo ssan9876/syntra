@@ -7,6 +7,7 @@ export * from './mfa.js';
 export * from './enrol.js';
 export * from './reset.js';
 export * from './access.js';
+export * from './app-icons.js';
 export * from './policy.js';
 export * from './tenant.js';
 export * from './webhook.js';

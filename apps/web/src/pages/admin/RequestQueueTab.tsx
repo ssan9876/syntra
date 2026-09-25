@@ -1,7 +1,18 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  buttonClasses,
+  Empty,
+  Identifier,
+  Panel,
+  RefreshStatus,
+  SkeletonRows,
+  StateBadge,
+  Table,
+  TableToolbar,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { REQUEST_LABEL, REQUEST_TONE, when } from '../automate/status.js';
+import { REQUEST_LABEL, REQUEST_STATE, when } from '../automate/status.js';
 
 interface QueueRow {
   id: string;
@@ -27,7 +38,7 @@ const STUCK = [
 ];
 
 export function RequestQueueTab() {
-  const { data, error, loading } = useApiResource<{ requests: QueueRow[] }>(
+  const { data, error, loading, updatedAt, reload } = useApiResource<{ requests: QueueRow[] }>(
     '/api/admin/automate/requests',
   );
 
@@ -41,18 +52,30 @@ export function RequestQueueTab() {
   return (
     <>
       {error && <Alert tone="danger">{error}</Alert>}
+      {!error && data && (
+        <TableToolbar>
+          <RefreshStatus updatedAt={updatedAt} onRefresh={reload} refreshing={loading} />
+        </TableToolbar>
+      )}
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={6} cols={4} />}
-          {!loading && rows.length === 0 && (
+          {!data && <SkeletonRows rows={6} cols={4} />}
+          {data && rows.length === 0 && (
             <div className="p-6">
-              <Empty title="No requests yet">
+              <Empty
+                title="No requests yet"
+                action={
+                  <Link to="/admin/requests?tab=catalog" className={buttonClasses('secondary')}>
+                    Review what can be requested
+                  </Link>
+                }
+              >
                 Requests appear here as soon as somebody asks for something.
               </Empty>
             </div>
           )}
-          {!loading && rows.length > 0 && (
-            <Table>
+          {rows.length > 0 && (
+            <Table stickyHeader label="Request queue">
               <thead>
                 <tr>
                   <th scope="col">
@@ -69,13 +92,13 @@ export function RequestQueueTab() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
+              <tbody>
                 {rows.map((row) => (
                   <tr key={row.id}>
-                    <td className="py-3">
+                    <td>
                       <Link
                         to={`/admin/automate/requests/${row.id}`}
-                        className="text-ink hover:text-primary"
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
                       >
                         {row.product?.name ?? 'Requested access'}
                       </Link>
@@ -92,16 +115,16 @@ export function RequestQueueTab() {
                           </p>
                         ))}
                     </td>
-                    <td className="py-3">
-                      {row.subjectPersonId}
+                    <td>
+                      <Identifier value={row.subjectPersonId} truncate />
                     </td>
-                    <td className="py-3">
+                    <td>
                       {when(row.submittedAt)}
                     </td>
-                    <td className="py-3">
-                      <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
+                    <td>
+                      <StateBadge state={REQUEST_STATE[row.status] ?? 'setup'}>
                         {REQUEST_LABEL[row.status] ?? row.status}
-                      </Status>
+                      </StateBadge>
                     </td>
                   </tr>
                 ))}

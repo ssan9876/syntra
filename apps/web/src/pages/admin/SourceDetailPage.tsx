@@ -1,13 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
   Check,
+  ErrorSummary,
   Field,
+  FormActions,
+  FormSection,
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
@@ -18,6 +23,7 @@ import {
   type MappingRule,
 } from './MappingEditor.js';
 import { TestReport, type TestResult } from './SourceTestReport.js';
+import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
 import {
   BLANK,
   FLAVOURS,
@@ -30,6 +36,35 @@ import {
   type SourceDetail,
   type TlsMode,
 } from './source-form.js';
+
+/** On-screen names for the fields the API reports problems against. */
+const LABELS: Record<string, string> = {
+  name: 'Name',
+  url: 'Server URL',
+  tlsMode: 'Transport',
+  bindDn: 'Bind DN',
+  bindPassword: 'Bind password',
+  userSearchBase: 'User search base',
+  userFilter: 'User filter',
+  groupSearchBase: 'Group search base',
+  groupFilter: 'Group filter',
+  orgUnitSearchBase: 'Org unit search base',
+  orgUnitFilter: 'Org unit filter',
+  anchorAttribute: 'Anchor attribute',
+  schedule: 'Schedule',
+  deactivationThresholdPercent: 'Deactivation threshold',
+};
+
+const CONNECTION_FIELDS = ['name', 'url', 'tlsMode', 'bindDn', 'bindPassword'];
+const SCOPE_FIELDS = [
+  'userSearchBase', 'userFilter', 'groupSearchBase', 'groupFilter',
+  'orgUnitSearchBase', 'orgUnitFilter', 'anchorAttribute',
+];
+const SCHEDULE_FIELDS = ['schedule', 'deactivationThresholdPercent'];
+
+/** What a connection test sends, and so what its report describes. */
+const testedDraft = (form: Form, extraConfig: Record<string, unknown>) =>
+  draftKey({ config: configFromForm(form, extraConfig), secret: form.bindPassword });
 
 export function SourceDetailPage() {
   const { id } = useParams();
@@ -50,7 +85,10 @@ export function SourceDetailPage() {
     assignableFields: AssignableFields;
   }>('/api/admin/sources/mapping-defaults');
 
+  const toast = useToast();
   const [form, setForm] = useState<Form>(BLANK);
+  // The form as it last matched the server; "Unsaved changes" compares to it.
+  const [baseline, setBaseline] = useState<Form>(BLANK);
   const [extraConfig, setExtraConfig] = useState<Record<string, unknown>>({});
   const [rules, setRules] = useState<MappingRule[]>([]);
   const [rulesTouched, setRulesTouched] = useState(false);
@@ -61,6 +99,10 @@ export function SourceDetailPage() {
     null,
   );
   const [result, setResult] = useState<TestResult | null>(null);
+  // The draft the report was produced from. The counts and the schema are
+  // what one URL, bind and set of search bases returned; once any of those
+  // differ on screen the report describes somewhere else, and says so.
+  const [resultFor, setResultFor] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) =>
@@ -92,7 +134,9 @@ export function SourceDetailPage() {
 
   useEffect(() => {
     if (!data) return;
-    setForm(formFrom(data));
+    const loaded = formFrom(data);
+    setForm(loaded);
+    setBaseline(loaded);
     setExtraConfig(
       Object.fromEntries(
         Object.entries(data.config ?? {}).filter(
@@ -156,20 +200,23 @@ export function SourceDetailPage() {
     setInvalid({});
     setProblem(null);
     setResult(null);
+    const sentFor = testedDraft(form, extraConfig);
     try {
-      setResult(
-        await api<TestResult>('/api/admin/sources/test', {
-          method: 'POST',
-          body: JSON.stringify({
-            config: configFromForm(form, extraConfig),
-            // Sent only when it was typed. Otherwise the saved source is
-            // named and the server reads its own vault entry: the browser is
-            // never handed the stored password to send back.
-            ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
-            ...(isNew ? {} : { sourceId: id }),
-          }),
+      const answer = await api<TestResult>('/api/admin/sources/test', {
+        method: 'POST',
+        body: JSON.stringify({
+          config: configFromForm(form, extraConfig),
+          // Sent only when it was typed. Otherwise the saved source is
+          // named and the server reads its own vault entry: the browser is
+          // never handed the stored password to send back.
+          ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
+          ...(isNew ? {} : { sourceId: id }),
         }),
-      );
+      });
+      // Bound to what was sent: an edit made while the test was in flight
+      // leaves the answer arriving already out of date, and labelled so.
+      setResult(answer);
+      setResultFor(sentFor);
     } catch (cause) {
       fail(cause, 'The connection could not be tested.');
     } finally {
@@ -177,7 +224,8 @@ export function SourceDetailPage() {
     }
   }
 
-  async function onSave() {
+  async function onSave(event?: FormEvent) {
+    event?.preventDefault();
     setBusy('save');
     setInvalid({});
     setProblem(null);
@@ -273,10 +321,12 @@ export function SourceDetailPage() {
         { method: 'PUT', body: JSON.stringify({ rules }) },
       );
 
-      setForm((current) => ({ ...current, bindPassword: '' }));
+      const saved = { ...form, bindPassword: '' };
+      setForm(saved);
+      setBaseline(saved);
       setRules(stored.rules);
       setRulesTouched(false);
-      setNotice('Saved.');
+      toast({ tone: 'success', title: 'Source saved' });
       reload();
       reloadMappings();
     } catch (cause) {
@@ -337,7 +387,7 @@ export function SourceDetailPage() {
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (!isNew && loading) {
+  if (!isNew && loading && !data) {
     return (
       <Panel>
         <SkeletonRows rows={8} cols={2} />
@@ -349,195 +399,246 @@ export function SourceDetailPage() {
   const ownsSomething =
     owned.users > 0 || owned.groups > 0 || owned.orgUnits > 0;
 
+  const testStale = result !== null && resultFor !== testedDraft(form, extraConfig);
+  const dirty = draftKey(form) !== draftKey(baseline) || rulesTouched;
+
+  /** How many of a stage's fields were refused, as that stage's state. */
+  const refusedIn = (fields: string[]) => {
+    const count = fields.filter((field) => invalid[field]).length;
+    return count > 0 ? (
+      <StateBadge state="blocked">{count === 1 ? '1 to fix' : `${count} to fix`}</StateBadge>
+    ) : null;
+  };
+
+  const connectionState =
+    refusedIn(CONNECTION_FIELDS) ??
+    (busy === 'test' ? (
+      <StateBadge state="running">Testing</StateBadge>
+    ) : result === null ? (
+      <StateBadge state="setup">Not tested</StateBadge>
+    ) : testStale ? (
+      <StaleBadge />
+    ) : result.ok ? (
+      <StateBadge state="healthy">Tested</StateBadge>
+    ) : (
+      <StateBadge state="blocked">Test failed</StateBadge>
+    ));
+
   return (
     <>
       <PageHeader
         title={isNew ? 'New directory source' : form.name || 'Directory source'}
         actions={
-          <>
-            <Button onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
-              Test connection
+          // Running is not part of editing, so it stays at the top of the
+          // record rather than in the form's own bar.
+          !isNew && (
+            <Button onClick={onRun} loading={busy === 'run'} disabled={!!busy}>
+              Run now
             </Button>
-            {!isNew && (
-              <Button onClick={onRun} loading={busy === 'run'} disabled={!!busy}>
-                Run now
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              onClick={onSave}
-              loading={busy === 'save'}
-              disabled={!!busy}
-            >
-              Save
-            </Button>
-          </>
+          )
         }
       />
 
       <div className="space-y-6">
         {notice && <Alert tone="info">{notice}</Alert>}
         {problem && <Alert tone="danger">{problem}</Alert>}
-        {Object.keys(invalid).length > 0 && (
-          <Alert tone="danger" title="Some of this was refused">
-            The fields concerned are marked below.
-          </Alert>
-        )}
 
-        {result && <TestReport result={result} />}
-
-        <Panel title="Connection" bodyClassName="grid gap-4 p-4 sm:grid-cols-2">
-          <Field
-            label="Name"
-            value={form.name}
-            onChange={(v) => set('name', v)}
-            {...mark('name')}
-            className="sm:col-span-2"
-          />
-          <Field
-            label="Server URL"
-            value={form.url}
-            onChange={(v) => set('url', v)}
-            {...mark('url')}
-          />
-          <Select
-            label="Transport"
-            value={form.tlsMode}
-            onChange={(v) => set('tlsMode', v as TlsMode)}
-            {...mark('tlsMode')}
-            options={[
-              { value: 'plain', label: 'Not encrypted' },
-              { value: 'starttls', label: 'StartTLS' },
-              { value: 'ldaps', label: 'LDAPS' },
-            ]}
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.rejectUnauthorized}
-            onChange={(v) => set('rejectUnauthorized', v)}
-            label="Verify the directory server's TLS certificate"
-          />
-          <Field
-            label="Bind DN"
-            value={form.bindDn}
-            onChange={(v) => set('bindDn', v)}
-            {...mark('bindDn')}
-          />
-          <Field
-            label="Bind password"
-            type="password"
-            autoComplete="new-password"
-            value={form.bindPassword}
-            onChange={(v) => set('bindPassword', v)}
-            // In the box rather than under it. On a saved source an empty
-            // password field is genuinely ambiguous — it could mean "clear
-            // it" — and the answer is only wanted by somebody looking at the
-            // box, which is exactly when a placeholder is read.
-            placeholder={isNew ? undefined : 'Leave blank to keep the stored password'}
-            {...mark('bindPassword')}
-          />
-        </Panel>
-
-        <Panel
-          title="What to read"
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
+        {/*
+          One form in the order a source is set up: reach the directory, say
+          what to read from it, say what each attribute becomes, and only then
+          when to run it unattended. Write-back is last because it is the part
+          most sources never turn on, and the part that changes the directory
+          rather than reading it. Not a Panel, whose `overflow-hidden` would
+          stop the completion bar from sticking.
+        */}
+        <form
+          onSubmit={(event) => void onSave(event)}
+          noValidate
+          aria-label={isNew ? 'New directory source' : 'Directory source settings'}
+          className="space-y-6 rounded-panel border border-border-subtle bg-bg px-4 pt-4"
         >
-          <Field
-            label="User search base"
-            value={form.userSearchBase}
-            onChange={(v) => set('userSearchBase', v)}
-            {...mark('userSearchBase')}
-          />
-          <Field
-            label="User filter"
-            value={form.userFilter}
-            onChange={(v) => set('userFilter', v)}
-            {...mark('userFilter')}
-          />
-          <Field
-            label="Group search base"
-            value={form.groupSearchBase}
-            onChange={(v) => set('groupSearchBase', v)}
-            {...mark('groupSearchBase')}
-          />
-          <Field
-            label="Group filter"
-            value={form.groupFilter}
-            onChange={(v) => set('groupFilter', v)}
-            {...mark('groupFilter')}
-          />
-          <Field
-            label="Org unit search base"
-            value={form.orgUnitSearchBase}
-            onChange={(v) => set('orgUnitSearchBase', v)}
-            {...mark('orgUnitSearchBase')}
-          />
-          <Field
-            label="Org unit filter"
-            value={form.orgUnitFilter}
-            onChange={(v) => set('orgUnitFilter', v)}
-            {...mark('orgUnitFilter')}
-          />
-          <Field
-            label="Anchor attribute"
-            value={form.anchorAttribute}
-            onChange={(v) => set('anchorAttribute', v)}
-            {...mark('anchorAttribute')}
-            className="sm:col-span-2"
-          />
-        </Panel>
+          <ErrorSummary errors={summaryOf(invalid, LABELS)} />
 
-        <MappingEditor
-          rules={rules}
-          onChange={(next) => {
-            setRulesTouched(true);
-            setRules(next);
-          }}
-          assignableFields={defaults?.assignableFields ?? null}
-          onSeed={seed}
-          disabled={busy === 'save'}
-        />
+          <FormSection title="Connection" status={connectionState}>
+            <Field
+              label="Name"
+              name="name"
+              value={form.name}
+              onChange={(v) => set('name', v)}
+              {...mark('name')}
+              className="sm:col-span-2"
+            />
+            <Field
+              label="Server URL"
+              name="url"
+              value={form.url}
+              onChange={(v) => set('url', v)}
+              {...mark('url')}
+            />
+            <Select
+              label="Transport"
+              name="tlsMode"
+              value={form.tlsMode}
+              onChange={(v) => set('tlsMode', v as TlsMode)}
+              {...mark('tlsMode')}
+              warning={
+                form.tlsMode === 'plain'
+                  ? 'The bind password crosses the network unencrypted.'
+                  : undefined
+              }
+              options={[
+                { value: 'plain', label: 'Not encrypted' },
+                { value: 'starttls', label: 'StartTLS' },
+                { value: 'ldaps', label: 'LDAPS' },
+              ]}
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.rejectUnauthorized}
+              onChange={(v) => set('rejectUnauthorized', v)}
+              label="Verify the directory server's TLS certificate"
+            />
+            <Field
+              label="Bind DN"
+              name="bindDn"
+              value={form.bindDn}
+              onChange={(v) => set('bindDn', v)}
+              {...mark('bindDn')}
+            />
+            <Field
+              label="Bind password"
+              name="bindPassword"
+              type="password"
+              autoComplete="new-password"
+              value={form.bindPassword}
+              onChange={(v) => set('bindPassword', v)}
+              // In the box rather than under it. On a saved source an empty
+              // password field is genuinely ambiguous — it could mean "clear
+              // it" — and the answer is only wanted by somebody looking at the
+              // box, which is exactly when a placeholder is read.
+              placeholder={isNew ? undefined : 'Leave blank to keep the stored password'}
+              {...mark('bindPassword')}
+            />
+          </FormSection>
 
-        <Panel
-          title="Schedule and safety"
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
-        >
-          <Field
-            label="Schedule"
-            value={form.schedule}
-            onChange={(v) => set('schedule', v)}
-            placeholder="0 3 * * *"
-            {...mark('schedule')}
-          />
-          <Field
-            label="Deactivation threshold"
-            value={form.deactivationThresholdPercent}
-            onChange={(v) => set('deactivationThresholdPercent', v)}
-            inputMode="numeric"
-            {...mark('deactivationThresholdPercent')}
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.enabled}
-            onChange={(v) => set('enabled', v)}
-            label="Enabled"
-            // Precisely what it does. A disabled source is skipped by the
-            // scheduler; Run now still works, because running one by hand is
-            // how you check a source before letting it run unattended, and
-            // saying otherwise would be copy that the product contradicts.
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.autoApply}
-            onChange={(v) => set('autoApply', v)}
-            label="Apply scheduled runs automatically"
-          />
-        </Panel>
+          <FormSection title="What to read" status={refusedIn(SCOPE_FIELDS)}>
+            <Field
+              label="User search base"
+              name="userSearchBase"
+              value={form.userSearchBase}
+              onChange={(v) => set('userSearchBase', v)}
+              {...mark('userSearchBase')}
+            />
+            <Field
+              label="User filter"
+              name="userFilter"
+              value={form.userFilter}
+              onChange={(v) => set('userFilter', v)}
+              {...mark('userFilter')}
+            />
+            <Field
+              label="Group search base"
+              name="groupSearchBase"
+              value={form.groupSearchBase}
+              onChange={(v) => set('groupSearchBase', v)}
+              {...mark('groupSearchBase')}
+            />
+            <Field
+              label="Group filter"
+              name="groupFilter"
+              value={form.groupFilter}
+              onChange={(v) => set('groupFilter', v)}
+              {...mark('groupFilter')}
+            />
+            <Field
+              label="Org unit search base"
+              name="orgUnitSearchBase"
+              value={form.orgUnitSearchBase}
+              onChange={(v) => set('orgUnitSearchBase', v)}
+              {...mark('orgUnitSearchBase')}
+            />
+            <Field
+              label="Org unit filter"
+              name="orgUnitFilter"
+              value={form.orgUnitFilter}
+              onChange={(v) => set('orgUnitFilter', v)}
+              {...mark('orgUnitFilter')}
+            />
+            <Field
+              label="Anchor attribute"
+              name="anchorAttribute"
+              value={form.anchorAttribute}
+              onChange={(v) => set('anchorAttribute', v)}
+              {...mark('anchorAttribute')}
+              className="sm:col-span-2"
+            />
+            {/* After the search bases, because the counts it reports are what
+                those bases found — and the object classes and attributes are
+                what the mapping table below needs in front of it. */}
+            {result && <TestReport result={result} stale={testStale} />}
+          </FormSection>
 
-        <Panel
-          title="Write-back"
-        >
-          <div className="grid gap-4 p-4 sm:grid-cols-2">
+          <FormSection
+            title="Attribute mappings"
+            status={rulesTouched ? <StateBadge state="attention">Changed</StateBadge> : null}
+          >
+            <MappingEditor
+              rules={rules}
+              onChange={(next) => {
+                setRulesTouched(true);
+                setRules(next);
+              }}
+              assignableFields={defaults?.assignableFields ?? null}
+              onSeed={seed}
+              disabled={busy === 'save'}
+            />
+          </FormSection>
+
+          <FormSection title="Schedule and safety" status={refusedIn(SCHEDULE_FIELDS)}>
+            <Field
+              label="Schedule"
+              name="schedule"
+              value={form.schedule}
+              onChange={(v) => set('schedule', v)}
+              placeholder="0 3 * * *"
+              {...mark('schedule')}
+            />
+            <Field
+              label="Deactivation threshold"
+              name="deactivationThresholdPercent"
+              value={form.deactivationThresholdPercent}
+              onChange={(v) => set('deactivationThresholdPercent', v)}
+              inputMode="numeric"
+              {...mark('deactivationThresholdPercent')}
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.enabled}
+              onChange={(v) => set('enabled', v)}
+              label="Enabled"
+              // Precisely what it does. A disabled source is skipped by the
+              // scheduler; Run now still works, because running one by hand is
+              // how you check a source before letting it run unattended, and
+              // saying otherwise would be copy that the product contradicts.
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.autoApply}
+              onChange={(v) => set('autoApply', v)}
+              label="Apply scheduled runs automatically"
+            />
+          </FormSection>
+
+          <FormSection
+            title="Write-back"
+            status={
+              form.writebackEnabled ? (
+                <StateBadge state="attention">Writes to this directory</StateBadge>
+              ) : (
+                <StateBadge state="inactive">Read only</StateBadge>
+              )
+            }
+          >
             <Check
               className="sm:col-span-2"
               checked={form.writebackEnabled}
@@ -563,7 +664,13 @@ export function SourceDetailPage() {
               label="Self-service password change writes through to this directory"
               // The consequence people do not expect: the directory's policy
               // starts applying, including the minimum age, and it will refuse
-              // things Syntra's own policy would have accepted.
+              // things Syntra's own policy would have accepted. Shown while it
+              // is ticked, which is exactly while it applies.
+              warning={
+                form.writebackEnabled && form.writebackPassword
+                  ? 'The directory’s own password policy then applies, and can refuse a change Syntra would accept.'
+                  : undefined
+              }
             />
             <Check
               className="sm:col-span-2"
@@ -571,14 +678,33 @@ export function SourceDetailPage() {
               disabled={!form.writebackEnabled}
               onChange={(v) => set('writebackDelete', v)}
               label="Deleting a user or org unit removes it from this directory"
-              // The one on this panel that writing the opposite value back
+              // The one in this stage that writing the opposite value back
               // does not undo. Everything else here is a state: a disabled
               // account is enabled again, a changed password is changed again.
-              // This is not, so the hint leads with that rather than with what
-              // the feature does.
+              // This is not, so the warning says so while it is ticked.
+              warning={
+                form.writebackEnabled && form.writebackDelete
+                  ? 'A deletion here cannot be undone from Syntra.'
+                  : undefined
+              }
             />
-          </div>
-        </Panel>
+          </FormSection>
+
+          <FormActions
+            sticky
+            status={draftStatus({
+              dirty,
+              stale: testStale ? 'Test result is out of date' : null,
+            })}
+          >
+            <Button type="button" onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
+              Test connection
+            </Button>
+            <Button type="submit" variant="primary" loading={busy === 'save'} disabled={!!busy}>
+              Save
+            </Button>
+          </FormActions>
+        </form>
 
         {!isNew && (
           <Panel title="Delete this source">

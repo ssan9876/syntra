@@ -106,6 +106,45 @@ describe('employee offboarding', () => {
     expect(resolved.json().counts).toEqual({ onboarding: 0, offboarding: 1, failed: 0, total: 1 });
   });
 
+  it('puts each item in one lane, filters by it, and keeps every lane count when a lane is empty', async () => {
+    const f = await fixture();
+    await withTenant(ctx.tenantId, async (tx) => {
+      const target = await tx.targetSystem.create({ data: {
+        tenantId: ctx.tenantId,
+        name: 'Directory',
+        config: { url: 'ldaps://dc.test:636', tlsMode: 'ldaps' },
+        secretName: 'target/test',
+      } });
+      const waiting = await tx.person.create({ data: { tenantId: ctx.tenantId, givenName: 'Wen', familyName: 'Ito' } });
+      await tx.personProvisionReceipt.create({ data: {
+        tenantId: ctx.tenantId, personId: waiting.id, targetSystemId: target.id, targetName: target.name,
+        requestKey: '33333333-3333-4333-8333-333333333333', status: 'verification_pending',
+      } });
+      await tx.personProvisionReceipt.create({ data: {
+        tenantId: ctx.tenantId, personId: f.person.id, targetSystemId: target.id, targetName: target.name,
+        requestKey: '44444444-4444-4444-8444-444444444444', status: 'failed', message: 'Directory unavailable',
+      } });
+    });
+    const get = (query = '') => ctx.app.inject({ method: 'GET', url: `/api/admin/employee-work${query}`, headers: { host: ctx.host, cookie: f.cookie } });
+
+    const all = (await get()).json();
+    expect(all.lanes).toEqual({ action: 0, waiting: 1, blocked: 1, overdue: 0 });
+    // Blocked sorts ahead of waiting whatever their age.
+    expect(all.items.map((item: { lane: string }) => item.lane)).toEqual(['blocked', 'waiting']);
+    expect(all.items[0]).toMatchObject({ targetName: 'Directory' });
+
+    const waiting = (await get('?lane=waiting')).json();
+    expect(waiting.items).toEqual([expect.objectContaining({ personName: 'Wen Ito', lane: 'waiting' })]);
+    expect(waiting.total).toBe(1);
+
+    const overdue = (await get('?lane=overdue')).json();
+    expect(overdue.items).toEqual([]);
+    expect(overdue.lanes).toEqual(all.lanes);
+    expect(overdue.counts).toEqual(all.counts);
+
+    expect((await get('?lane=later')).statusCode).toBe(400);
+  });
+
   it('shows one lifecycle operation instead of duplicating its target receipts', async () => {
     const f = await fixture();
     await withTenant(ctx.tenantId, async (tx) => {

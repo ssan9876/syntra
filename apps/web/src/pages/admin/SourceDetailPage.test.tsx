@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { ToastProvider } from '@syntra/ui';
 import { SourceDetailPage } from './SourceDetailPage.js';
 
 const DEFAULTS = {
@@ -306,7 +307,13 @@ describe('creating a source', () => {
 
     const schedule = await screen.findByLabelText('Schedule');
     await waitFor(() => expect(schedule).toHaveAttribute('aria-invalid', 'true'));
-    expect(screen.getByText(/not a cron expression/i)).toBeInTheDocument();
+    // On the field, and once more in the summary at the top of the form —
+    // which is a link to the field, not a second copy of a banner.
+    expect(screen.getAllByText(/not a cron expression/i)).toHaveLength(2);
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Schedule: not a cron expression/i }),
+    );
+    expect(schedule).toHaveFocus();
     // And no mappings were written for a source that was never created.
     expect(calls.some((c) => c.init.method === 'PUT')).toBe(false);
   });
@@ -338,8 +345,9 @@ describe('creating a source', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(
-      await screen.findByText(/needs an ldaps:\/\/ URL/i),
+      await screen.findByRole('button', { name: /^Transport: .*needs an ldaps:\/\/ URL/i }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText('Transport')).toHaveAttribute('aria-invalid', 'true');
   });
 });
 
@@ -537,14 +545,24 @@ describe('saving a mapping change', () => {
       return Promise.resolve(json(savedSource()));
     });
 
-    renderEdit();
+    render(
+      <ToastProvider>
+        <MemoryRouter initialEntries={['/admin/sources/s1']}>
+          <Routes>
+            <Route path="/admin/sources/:id" element={<SourceDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>,
+    );
 
     const attribute = await screen.findByLabelText('Users directory attribute 1');
     await userEvent.clear(attribute);
     await userEvent.type(attribute, 'sAMAccountName');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    // The save is confirmed by a toast now, not an inline "Saved." that
+    // stayed on the page after it stopped being true.
+    expect(await screen.findByText('Source saved')).toBeInTheDocument();
     expect(written).toHaveLength(1);
     expect(screen.getByLabelText('Users directory attribute 1')).toHaveValue(
       'sAMAccountName',
@@ -806,5 +824,45 @@ describe('the correlation key', () => {
     expect(
       rules.filter((r) => r.objectType === 'user' && r.isCorrelation),
     ).toHaveLength(1);
+  });
+});
+
+describe('a test report beside a draft that has moved on', () => {
+  it('is labelled out of date when a search base changes, not left looking current', async () => {
+    mockFetch({
+      mappings: [
+        {
+          objectType: 'user',
+          sourceAttribute: 'uid',
+          targetField: 'login',
+          transform: 'lowercase',
+          isCorrelation: true,
+        },
+      ],
+      onPost: (url) =>
+        url.endsWith('/sources/test')
+          ? json({
+              ok: true,
+              message: 'Connected',
+              sampleCounts: { user: 412, group: 22, orgUnit: 5 },
+              schema: null,
+            })
+          : undefined,
+    });
+    renderEdit();
+
+    await screen.findByDisplayValue('Corporate LDAP');
+    await userEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    expect(await screen.findByText(/412/)).toBeInTheDocument();
+    expect(screen.queryByText('Test result is out of date')).toBeNull();
+
+    // The counts are what THESE bases found. A mapping edit does not touch
+    // them; a search-base edit does.
+    await userEvent.type(screen.getByLabelText('Users directory attribute 1'), 'x');
+    expect(screen.queryByText('Test result is out of date')).toBeNull();
+
+    await userEvent.type(screen.getByLabelText('User search base'), 'x');
+    expect(screen.getByText('Test result is out of date')).toBeInTheDocument();
+    expect(screen.getAllByText('Out of date — run again').length).toBeGreaterThanOrEqual(2);
   });
 });

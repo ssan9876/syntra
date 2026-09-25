@@ -1,8 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Check, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  Checkbox,
+  Empty,
+  Field,
+  Panel,
+  SkeletonRows,
+  StateBadge,
+  useToast,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import { ActionState, RunState } from './run-states.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -84,13 +96,6 @@ const nameOf = (person: Person | null) =>
   person === null
     ? 'Not attributed to a person'
     : `${person.givenName ?? ''} ${person.familyName ?? ''}`.trim() || person.id;
-
-const actionTone = (status: string): 'active' | 'warning' | 'danger' | 'neutral' => {
-  if (status === 'applied') return 'active';
-  if (status === 'conflict' || status === 'pending_retry') return 'warning';
-  if (status === 'failed' || status === 'refused') return 'danger';
-  return 'neutral';
-};
 
 /**
  * The only two statuses `applyProvisionRun` will accept.
@@ -217,6 +222,7 @@ export function ProvisionRunDetailPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
   // Bumped on every `reload()`, so a run or drift response for an id/runId
   // pair this screen has since moved away from - a rapid navigation between
   // runs - cannot land after the newer pair's response and overwrite it.
@@ -343,6 +349,7 @@ export function ProvisionRunDetailPage() {
         method: 'PATCH',
         body: JSON.stringify({ status: 'acknowledged' }),
       });
+      toast({ title: 'Drift finding acknowledged' });
       reload();
     } catch {
       setProblem('That finding could not be acknowledged.');
@@ -411,6 +418,7 @@ export function ProvisionRunDetailPage() {
     <>
       <PageHeader
         title="Run detail"
+        status={<RunState status={superseded ? 'superseded' : run.status} />}
         actions={
           isCancellable(run, CANCELLABLE) ? (
             <CancelRunButton
@@ -596,22 +604,18 @@ export function ProvisionRunDetailPage() {
                         key={action.id}
                         className="flex flex-wrap items-center gap-3 border-b border-border-subtle px-4 py-2.5 last:border-0"
                       >
-                        <input
-                          type="checkbox"
-                          className="size-4 accent-primary"
-                          aria-label={`Apply ${action.actionType} for ${person}`}
+                        <Checkbox
+                          label={`Apply ${action.actionType} for ${person}`}
                           disabled={action.status !== 'proposed'}
                           checked={selected.has(action.id)}
-                          onChange={(e) => toggle(action.id, e.target.checked)}
+                          onChange={(on) => toggle(action.id, on)}
                         />
                         <code className="font-mono text-ink">
                           {action.actionType}
                         </code>
-                        <Status tone={actionTone(action.status)}>
-                          {action.status}
-                        </Status>
+                        <ActionState status={action.status} />
                         {action.requiresConfirmation && (
-                          <Status tone="warning">needs confirmation</Status>
+                          <StateBadge state="attention">Needs confirmation</StateBadge>
                         )}
                         {action.message && (
                           <span className="text-muted">{action.message}</span>
@@ -641,7 +645,7 @@ export function ProvisionRunDetailPage() {
                   >
                     <code className="font-mono text-ink">{action.actionType}</code>
                     <span className="text-ink">{nameOf(action.person)}</span>
-                    <Status tone={actionTone(action.status)}>{action.status}</Status>
+                    <ActionState status={action.status} />
                   </li>
                 ))}
               </ul>
@@ -716,11 +720,13 @@ export function ProvisionRunDetailPage() {
                     <span className="text-muted">
                       {String(finding.detail.reason ?? '')}
                     </span>
-                    <Status
-                      tone={finding.status === 'open' ? 'warning' : 'neutral'}
-                    >
-                      {finding.status}
-                    </Status>
+                    {finding.status === 'open' ? (
+                      <StateBadge state="attention">Open</StateBadge>
+                    ) : (
+                      <StateBadge state="inactive">
+                        {finding.status.charAt(0).toUpperCase() + finding.status.slice(1)}
+                      </StateBadge>
+                    )}
                     {finding.status === 'open' && (
                       <Button size="sm" onClick={() => acknowledge(finding.id)}>
                         Acknowledge

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Select } from '@syntra/ui';
 
 /**
  * The two "where from" conditions, as controls rather than as text fields.
@@ -110,25 +111,21 @@ export function CountryPicker({
 
   return (
     <div>
-      <label htmlFor="policy-country" className="mb-1.5 block font-medium text-ink">
-        Countries
-      </label>
-      <select
-        id="policy-country"
+      {/* `Select` with a fixed empty value: choosing a country adds a chip
+          rather than holding a selection, so the control always reads "Any
+          country" or the prompt to add another. */}
+      <Select
+        name="countries"
+        label="Countries"
         value=""
-        onChange={(e) => {
-          const code = e.target.value;
+        onChange={(code) => {
           if (code && !value.includes(code)) onChange([...value, code]);
         }}
-        className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
-      >
-        <option value="">Any country</option>
-        {options.map((option) => (
-          <option key={option.code} value={option.code}>
-            {option.name}
-          </option>
-        ))}
-      </select>
+        options={[
+          { value: '', label: value.length === 0 ? 'Any country' : 'Add another country' },
+          ...options.map((option) => ({ value: option.code, label: option.name })),
+        ]}
+      />
       {value.length > 0 && (
         <ul className="mt-2 flex flex-wrap gap-2">
           {value.map((code) => (

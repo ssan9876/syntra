@@ -55,7 +55,9 @@ async function signInAndLand(page: Page, login: string, password: string) {
 async function launch(context: BrowserContext, page: Page, name: string) {
   const [opened] = await Promise.all([
     context.waitForEvent('page'),
-    page.getByRole('button', { name: new RegExp(name, 'i') }).click(),
+    // Anchored: each tile has a sibling "Pin <name>" button, and the launch
+    // button is the one whose name STARTS with the application's.
+    page.getByRole('button', { name: new RegExp(`^${name}`, 'i') }).click(),
   ]);
   return opened;
 }
@@ -135,7 +137,7 @@ test.describe.serial('a rule scoped to the application', () => {
       // nothing until somebody tries to enter that application.
       await signInAndLand(user, 'jdoe', USER!);
 
-      await user.getByRole('button', { name: /CRM/i }).click();
+      await user.getByRole('button', { name: /^CRM/i }).click();
 
       // Whether this is a step-up or a forced enrolment depends on whether
       // this user already holds a factor, and both are the same claim: the

@@ -96,7 +96,7 @@ describe('GroupsPage', () => {
 
     expect(await screen.findByText(/No group matches/)).toBeVisible();
     expect(
-      screen.getByRole('button', { name: /clear the search/i }),
+      screen.getByRole('button', { name: /reset filters/i }),
     ).toBeVisible();
   });
 

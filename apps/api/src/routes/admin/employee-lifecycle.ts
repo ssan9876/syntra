@@ -12,55 +12,98 @@ import { pageQuery } from './list-query.js';
 export const endRequest = z.object({ reason: z.string().trim().min(1).max(1000), revision: z.string().length(64), urgent: z.boolean().default(false) }).strict();
 const readPermissions = [PERMISSIONS.IDENTITY_READ, PERMISSIONS.DIRECTORY_READ, PERMISSIONS.PROVISION_READ];
 const writePermissions = [...readPermissions, PERMISSIONS.IDENTITY_WRITE, PERMISSIONS.DIRECTORY_WRITE, PERMISSIONS.PROVISION_MANAGE];
+export const employeeWorkLanes = ['action', 'waiting', 'blocked', 'overdue'] as const;
 export const employeeWorkQuery = pageQuery.extend({
   kind: z.enum(['onboarding', 'offboarding', 'failed']).optional(),
+  /**
+   * What the operator has to DO about an item, as opposed to `kind`, which is
+   * what the item is ABOUT. Each item sits in exactly one lane, by precedence:
+   * overdue, then blocked, then needs action, then waiting. A failed hire that
+   * has also breached its deadline is one overdue item, not two.
+   */
+  lane: z.enum(employeeWorkLanes).optional(),
 });
 
 type EmployeeWorkRow = {
   id: string; kind: 'onboarding' | 'offboarding' | 'failed'; lifecycleKind: string | null;
   personId: string | null; personName: string; status: string; priority: string | null;
   overdue: boolean; overdueReason: string | null; approvalRequired: boolean; summary: string; updatedAt: Date;
+  targetName: string | null; ownerName: string | null; lane: (typeof employeeWorkLanes)[number];
   onboarding: bigint; offboarding: bigint; failed: bigint; total: bigint; filteredTotal: bigint;
+  laneAction: bigint; laneWaiting: bigint; laneBlocked: bigint; laneOverdue: bigint;
 };
 
 /** The cross-source work queue is paged in PostgreSQL, not after an in-memory merge. */
 async function listEmployeeWork(tx: TenantClient, query: z.infer<typeof employeeWorkQuery>) {
   const needle = query.q ? `%${query.q.toLocaleLowerCase()}%` : null;
   const kind = query.kind ?? null;
-  const rows = await tx.$queryRaw<EmployeeWorkRow[]>(Prisma.sql`
+  const lane = query.lane ?? null;
+  // `now() AT TIME ZONE 'UTC'`, not `now()`. Prisma writes every DateTime as
+  // UTC into a column WITHOUT a time zone, and comparing one of those to
+  // `now()` reinterprets it in the SERVER's zone. On a server set to
+  // America/Phoenix that shifted every deadline seven hours into the future,
+  // so work that had just breached its service level was reported as on
+  // time. `rate-limit-store.ts` settled the same question the same way.
+  const queue = Prisma.sql`
     WITH items AS (
       SELECT 'lifecycle:' || o.id AS id,
         CASE WHEN o.status = 'failed' THEN 'failed' WHEN o.kind = 'offboard' THEN 'offboarding' ELSE 'onboarding' END AS kind,
         o.kind AS "lifecycleKind", o."personId", COALESCE(p."givenName" || ' ' || p."familyName", 'No employee assigned') AS "personName",
-        o.status, o.priority, (o."dueAt" < now() AND o."acknowledgedAt" IS NULL) OR o."sloDeadlineAt" < now() AS overdue,
+        o.status, o.priority, (o."dueAt" < (now() AT TIME ZONE 'UTC') AND o."acknowledgedAt" IS NULL) OR o."sloDeadlineAt" < (now() AT TIME ZONE 'UTC') AS overdue,
         CASE
-          WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL AND o."sloDeadlineAt" < now()
+          WHEN o."dueAt" < (now() AT TIME ZONE 'UTC') AND o."acknowledgedAt" IS NULL AND o."sloDeadlineAt" < (now() AT TIME ZONE 'UTC')
             THEN 'Work is overdue; service-level deadline breached'
-          WHEN o."dueAt" < now() AND o."acknowledgedAt" IS NULL THEN 'Work is overdue'
-          WHEN o."sloDeadlineAt" < now() THEN 'Service-level deadline breached'
+          WHEN o."dueAt" < (now() AT TIME ZONE 'UTC') AND o."acknowledgedAt" IS NULL THEN 'Work is overdue'
+          WHEN o."sloDeadlineAt" < (now() AT TIME ZONE 'UTC') THEN 'Service-level deadline breached'
           ELSE NULL
         END AS "overdueReason",
         o."approvalRequired" AND o."approvedAt" IS NULL AND o."rejectedAt" IS NULL AS "approvalRequired",
         CASE WHEN o.status = 'awaiting_approval' THEN o.kind || ' operation is waiting for a second person to approve it' ELSE o.kind || ' operation is ' || o.status END AS summary,
-        o."updatedAt"
+        o."updatedAt", NULL::text AS "targetName", owner."displayName" AS "ownerName"
       FROM "LifecycleOperation" o LEFT JOIN "Person" p ON p.id = o."personId"
+      LEFT JOIN "User" owner ON owner.id = o."ownerUserId"
       WHERE o.status NOT IN ('completed', 'cancelled')
       UNION ALL
       SELECT 'provision:' || r.id, CASE WHEN r.status = 'failed' THEN 'failed' ELSE 'onboarding' END, NULL, r."personId",
         COALESCE(p."givenName" || ' ' || p."familyName", 'Unknown employee'), r.status, NULL, false, NULL, false,
-        r."targetName" || ': ' || COALESCE(r.message, r.status), r."updatedAt"
+        r."targetName" || ': ' || COALESCE(r.message, r.status), r."updatedAt", r."targetName", NULL
       FROM (SELECT DISTINCT ON ("personId", "targetSystemId") * FROM "PersonProvisionReceipt" ORDER BY "personId", "targetSystemId", "updatedAt" DESC, id DESC) r
       LEFT JOIN "Person" p ON p.id = r."personId"
       WHERE r.status NOT IN ('applied', 'no_match') AND NOT EXISTS (SELECT 1 FROM "LifecycleOperation" o WHERE o.id = r."requestKey" AND o.status NOT IN ('completed', 'cancelled'))
       UNION ALL
       SELECT 'departure:' || p.id, 'offboarding', NULL, p.id, p."givenName" || ' ' || p."familyName", 'incomplete', NULL, false, NULL, false,
-        (SELECT count(*) FROM "User" u WHERE u."personId" = p.id AND u.status = 'active') || ' active sign-ins and ' || (SELECT count(*) FROM "TargetAccount" a WHERE a."personId" = p.id AND a.status IN ('active','pending','conflict')) || ' unfinished target accounts', p."updatedAt"
+        (SELECT count(*) FROM "User" u WHERE u."personId" = p.id AND u.status = 'active') || ' active sign-ins and ' || (SELECT count(*) FROM "TargetAccount" a WHERE a."personId" = p.id AND a.status IN ('active','pending','conflict')) || ' unfinished target accounts', p."updatedAt", NULL, NULL
       FROM "Person" p WHERE p.status = 'inactive' AND (EXISTS (SELECT 1 FROM "User" u WHERE u."personId" = p.id AND u.status = 'active') OR EXISTS (SELECT 1 FROM "TargetAccount" a WHERE a."personId" = p.id AND a.status IN ('active','pending','conflict')))
-    ), counted AS (SELECT *, count(*) FILTER (WHERE kind = 'onboarding') OVER () AS onboarding, count(*) FILTER (WHERE kind = 'offboarding') OVER () AS offboarding, count(*) FILTER (WHERE kind = 'failed') OVER () AS failed, count(*) OVER () AS total FROM items)
-    SELECT *, count(*) OVER () AS "filteredTotal" FROM counted WHERE (${kind}::text IS NULL OR kind = ${kind}) AND (${needle}::text IS NULL OR lower("personName" || ' ' || summary || ' ' || status || ' ' || kind || ' ' || COALESCE("lifecycleKind",'')) LIKE ${needle})
-    ORDER BY "updatedAt" ASC, id ASC OFFSET ${(query.page - 1) * query.pageSize} LIMIT ${query.pageSize}`);
-  const first = rows[0];
-  return { items: rows.map(({ onboarding, offboarding, failed, total, filteredTotal, ...item }) => item), counts: { onboarding: Number(first?.onboarding ?? 0), offboarding: Number(first?.offboarding ?? 0), failed: Number(first?.failed ?? 0), total: Number(first?.total ?? 0) }, total: rows.length ? Number(first!.filteredTotal) : 0, page: query.page, pageSize: query.pageSize };
+    ), laned AS (
+      SELECT *, CASE
+          WHEN overdue THEN 'overdue'
+          WHEN kind = 'failed' OR status IN ('failed', 'blocked', 'conflict', 'rejected') THEN 'blocked'
+          -- Somebody has to do something: approve it, or finish a departure
+          -- whose access is still live. Everything else is waiting on a
+          -- target, a read-back or a schedule, and acting on it early is how
+          -- work gets done twice.
+          WHEN status IN ('incomplete', 'awaiting_approval') OR "approvalRequired" THEN 'action'
+          ELSE 'waiting'
+        END AS lane
+      FROM items
+    ), counted AS (SELECT *, count(*) FILTER (WHERE kind = 'onboarding') OVER () AS onboarding, count(*) FILTER (WHERE kind = 'offboarding') OVER () AS offboarding, count(*) FILTER (WHERE kind = 'failed') OVER () AS failed, count(*) OVER () AS total,
+        count(*) FILTER (WHERE lane = 'action') OVER () AS "laneAction", count(*) FILTER (WHERE lane = 'waiting') OVER () AS "laneWaiting", count(*) FILTER (WHERE lane = 'blocked') OVER () AS "laneBlocked", count(*) FILTER (WHERE lane = 'overdue') OVER () AS "laneOverdue"
+      FROM laned)`;
+  const rows = await tx.$queryRaw<EmployeeWorkRow[]>(Prisma.sql`
+    ${queue}
+    SELECT *, count(*) OVER () AS "filteredTotal" FROM counted WHERE (${kind}::text IS NULL OR kind = ${kind}) AND (${lane}::text IS NULL OR lane = ${lane}) AND (${needle}::text IS NULL OR lower("personName" || ' ' || summary || ' ' || status || ' ' || kind || ' ' || COALESCE("lifecycleKind",'') || ' ' || COALESCE("targetName",'')) LIKE ${needle})
+    ORDER BY CASE lane WHEN 'overdue' THEN 0 WHEN 'blocked' THEN 1 WHEN 'action' THEN 2 ELSE 3 END, "updatedAt" ASC, id ASC OFFSET ${(query.page - 1) * query.pageSize} LIMIT ${query.pageSize}`);
+  // The counts are window totals over the WHOLE queue, so they ride on every
+  // row -- and an empty lane, or a page past the end, has no row to carry
+  // them. Without asking again, choosing a lane with nothing in it reported
+  // every other lane as empty too.
+  const first = rows[0] ?? (await tx.$queryRaw<EmployeeWorkRow[]>(Prisma.sql`${queue} SELECT * FROM counted LIMIT 1`))[0];
+  return {
+    items: rows.map(({ onboarding, offboarding, failed, total, filteredTotal, laneAction, laneWaiting, laneBlocked, laneOverdue, ...item }) => item),
+    counts: { onboarding: Number(first?.onboarding ?? 0), offboarding: Number(first?.offboarding ?? 0), failed: Number(first?.failed ?? 0), total: Number(first?.total ?? 0) },
+    lanes: { action: Number(first?.laneAction ?? 0), waiting: Number(first?.laneWaiting ?? 0), blocked: Number(first?.laneBlocked ?? 0), overdue: Number(first?.laneOverdue ?? 0) },
+    total: rows.length ? Number(first!.filteredTotal) : 0, page: query.page, pageSize: query.pageSize,
+  };
 }
 
 async function snapshot(tx: TenantClient, id: string) {

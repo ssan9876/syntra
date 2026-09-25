@@ -1,14 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
   Check,
+  ErrorSummary,
   Field,
+  FormActions,
+  FormSection,
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
@@ -21,6 +26,7 @@ import { TargetHealthPanel } from './TargetHealthPanel.js';
 import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
 import { TargetMaintenancePanel } from './TargetMaintenancePanel.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
+import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
 import {
   BLANK,
   OWNED_CONFIG_KEYS,
@@ -35,6 +41,54 @@ import {
   type TargetType,
   type TlsMode,
 } from './target-form.js';
+
+/**
+ * What each field is called on screen, keyed by the name the API reports a
+ * problem under (the last path segment — see `fieldErrors`). The error summary
+ * says "Accounts created: must be between 0 and 100", not
+ * "createAccountThresholdPercent", and links to the box that says it.
+ */
+const LABELS: Record<string, string> = {
+  name: 'Name',
+  type: 'Type',
+  url: 'URL',
+  tlsMode: 'Transport',
+  bindDn: 'Bind DN',
+  bindPassword: 'Credential',
+  baseDn: 'Base DN',
+  entitlementSearchBase: 'Entitlement search base',
+  archiveContainer: 'Archive container',
+  baseUrl: 'Base URL',
+  tenantId: 'Directory (tenant) ID',
+  clientId: 'Application (client) ID',
+  correlationField: 'Correlation field',
+  document: 'Connector document',
+  schedule: 'Schedule',
+  enforcementMode: 'Enforcement mode',
+  maxAttempts: 'Maximum attempts per action',
+  preHireDays: 'Pre-hire days',
+  entitlementRevocationDelayDays: 'Entitlement revocation delay (days)',
+  disableGraceDays: 'Disable grace (days)',
+  archiveAfterDays: 'Archive after (days)',
+  reenableWithoutConfirmationDays: 'Re-enable without confirmation (days)',
+  ...Object.fromEntries(THRESHOLDS),
+};
+
+const CONNECTION_FIELDS = new Set([
+  'name', 'type', 'url', 'tlsMode', 'bindDn', 'bindPassword', 'baseDn',
+  'entitlementSearchBase', 'archiveContainer', 'baseUrl', 'tenantId', 'clientId',
+  'correlationField', 'document',
+]);
+const ENFORCEMENT_FIELDS = new Set(['schedule', 'enforcementMode', 'maxAttempts']);
+const LADDER_FIELDS = new Set([
+  'preHireDays', 'entitlementRevocationDelayDays', 'disableGraceDays',
+  'archiveAfterDays', 'reenableWithoutConfirmationDays',
+]);
+const THRESHOLD_FIELDS = new Set<string>(THRESHOLDS.map(([key]) => key));
+
+/** What a connection test sends, and so what its result describes. */
+const testedDraft = (form: Form, extraConfig: Record<string, unknown>) =>
+  draftKey({ type: form.type, config: configFromForm(form, extraConfig), secret: form.bindPassword });
 
 /**
  * What stops this target provisioning anybody, read from the endpoints the
@@ -79,6 +133,7 @@ function useConfigurationGaps(targetId: string | null): {
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
 
   /**
    * The target this form is editing when the URL does not yet name one.
@@ -106,6 +161,9 @@ export function TargetDetailPage() {
   );
 
   const [form, setForm] = useState<Form>(BLANK);
+  // What the form held when it last matched the server, so "Unsaved changes"
+  // is a comparison rather than a flag some handler forgot to set.
+  const [baseline, setBaseline] = useState<Form>(BLANK);
   const [extraConfig, setExtraConfig] = useState<Record<string, unknown>>({});
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
@@ -113,10 +171,14 @@ export function TargetDetailPage() {
   const [busy, setBusy] = useState<null | 'save' | 'test'>(null);
   const [result, setResult] = useState<TestResult | null>(null);
   const gaps = useConfigurationGaps(isNew ? null : targetId);
+  // The draft the result above was produced from. See `testStale`.
+  const [resultFor, setResultFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (!data) return;
-    setForm(formFrom(data));
+    const loaded = formFrom(data);
+    setForm(loaded);
+    setBaseline(loaded);
     setExtraConfig(
       Object.fromEntries(
         Object.entries(data.config ?? {}).filter(
@@ -131,6 +193,15 @@ export function TargetDetailPage() {
 
   const mark = (field: string): { error?: string } =>
     invalid[field] ? { error: invalid[field] } : {};
+
+  /**
+   * The test report describes the connection that was TESTED. The moment the
+   * URL, the bind account or the secret differ from that, it describes some
+   * other target, and is labelled so rather than left looking current. A
+   * threshold edit does not touch it: nothing it reports depends on one.
+   */
+  const testStale = result !== null && resultFor !== testedDraft(form, extraConfig);
+  const dirty = draftKey(form) !== draftKey(baseline);
 
   function fail(cause: unknown, fallback: string) {
     const marked = fieldErrors(cause);
@@ -149,21 +220,25 @@ export function TargetDetailPage() {
     setInvalid({});
     setProblem(null);
     setResult(null);
+    const sentFor = testedDraft(form, extraConfig);
     try {
-      setResult(
-        await api<TestResult>('/api/admin/targets/test', {
-          method: 'POST',
-          body: JSON.stringify({
-            type: form.type,
-            config: configFromForm(form, extraConfig),
-            // Sent only when it was typed. Otherwise the saved target is
-            // named and the server reads its own vault entry: the browser is
-            // never handed the stored password to send back.
-            ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
-            ...(targetId === null ? {} : { borrowFromTargetId: targetId }),
-          }),
+      const answer = await api<TestResult>('/api/admin/targets/test', {
+        method: 'POST',
+        body: JSON.stringify({
+          type: form.type,
+          config: configFromForm(form, extraConfig),
+          // Sent only when it was typed. Otherwise the saved target is
+          // named and the server reads its own vault entry: the browser is
+          // never handed the stored password to send back.
+          ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
+          ...(targetId === null ? {} : { borrowFromTargetId: targetId }),
         }),
-      );
+      });
+      // Bound to what was SENT, not to what is on screen when the answer
+      // lands: an edit made while the test was in flight leaves the result
+      // arriving already out of date, and it says so.
+      setResult(answer);
+      setResultFor(sentFor);
     } catch (cause) {
       fail(cause, 'The connection could not be tested.');
     } finally {
@@ -171,7 +246,8 @@ export function TargetDetailPage() {
     }
   }
 
-  async function onSave() {
+  async function onSave(event?: FormEvent) {
+    event?.preventDefault();
     setBusy('save');
     setInvalid({});
     setProblem(null);
@@ -225,6 +301,7 @@ export function TargetDetailPage() {
               ),
             }),
           });
+          toast({ tone: 'success', title: 'Target created' });
           navigate(`/admin/targets/${created.id}`, { replace: true });
         } catch (cause) {
           // No navigate. Said whether or not the refusal named fields: "the
@@ -265,8 +342,10 @@ export function TargetDetailPage() {
           thresholds: Object.fromEntries(THRESHOLDS.map(([key]) => [key, n[key]])),
         }),
       });
-      setForm((current) => ({ ...current, bindPassword: '' }));
-      setNotice('Saved.');
+      const saved = { ...form, bindPassword: '' };
+      setForm(saved);
+      setBaseline(saved);
+      toast({ tone: 'success', title: 'Target saved' });
       // The URL catches up once the target and the form agree. Until then the
       // page deliberately stayed on `/new` so a refetch could not overwrite
       // what had not been stored yet.
@@ -283,7 +362,7 @@ export function TargetDetailPage() {
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (!isNew && loading) {
+  if (!isNew && loading && !data) {
     return (
       <Panel>
         <SkeletonRows rows={8} cols={2} />
@@ -291,37 +370,35 @@ export function TargetDetailPage() {
     );
   }
 
+  /** How many of this stage's fields were refused, as the stage's state. */
+  const refusedIn = (fields: Set<string>) => {
+    const count = Object.keys(invalid).filter((key) => fields.has(key)).length;
+    return count > 0 ? (
+      <StateBadge state="blocked">{count === 1 ? '1 to fix' : `${count} to fix`}</StateBadge>
+    ) : null;
+  };
+
+  const connectionState =
+    refusedIn(CONNECTION_FIELDS) ??
+    (busy === 'test' ? (
+      <StateBadge state="running">Testing</StateBadge>
+    ) : result === null ? (
+      <StateBadge state="setup">Not tested</StateBadge>
+    ) : testStale ? (
+      <StaleBadge />
+    ) : result.ok ? (
+      <StateBadge state="healthy">Tested</StateBadge>
+    ) : (
+      <StateBadge state="blocked">Test failed</StateBadge>
+    ));
+
   return (
     <>
-      <PageHeader
-        title={isNew ? 'New target' : form.name || 'Target system'}
-        actions={
-          <>
-            <Button onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
-              Test connection
-            </Button>
-            <Button
-              variant="primary"
-              onClick={onSave}
-              loading={busy === 'save'}
-              disabled={!!busy}
-            >
-              {isNew ? 'Create target' : 'Save'}
-            </Button>
-          </>
-        }
-      />
+      <PageHeader title={isNew ? 'New target' : form.name || 'Target system'} />
 
       <div className="space-y-6">
         {notice && <Alert tone="info">{notice}</Alert>}
         {problem && <Alert tone="danger">{problem}</Alert>}
-        {Object.keys(invalid).length > 0 && (
-          <Alert tone="danger" title="Some of this was refused">
-            The fields concerned are marked below.
-          </Alert>
-        )}
-
-        {result && <TestReport result={result} />}
 
         {/*
           The skipped-run notice sits above everything somebody came here to
@@ -341,10 +418,7 @@ export function TargetDetailPage() {
             <p className="mt-2">{skipAdvice(data.lastSkipReason)}</p>
             {(data.lastSkipReason ?? '').includes('is awaiting review') && (
               <p className="mt-2">
-                <Link
-                  to={`/admin/targets/${targetId}/runs`}
-                  className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                >
+                <Link to={`/admin/targets/${targetId}/runs`} className="link font-medium">
                   Go to the runs for this target
                 </Link>
               </p>
@@ -352,160 +426,206 @@ export function TargetDetailPage() {
           </Alert>
         )}
 
-        <Panel title="Connection" bodyClassName="grid gap-4 p-4 sm:grid-cols-2">
-          <Field
-            label="Name"
-            value={form.name}
-            onChange={(v) => set('name', v)}
-            {...mark('name')}
-            className="sm:col-span-2"
-          />
-          <Select
-            label="Type"
-            value={form.type}
-            onChange={(v) => set('type', v as TargetType)}
-            // Changing a target's connector type after accounts exist has no
-            // migration story, so the console does not offer it: fixed at
-            // creation, same as the type column itself once a target holds
-            // any accounts.
-            disabled={!isNew}
-            {...mark('type')}
-            options={[
-              { value: 'activeDirectory', label: 'Active Directory' },
-              { value: 'entraId', label: 'Microsoft Entra ID (native)' },
-              { value: 'scim2', label: 'SCIM 2.0' },
-              { value: 'httpJson', label: 'REST API' },
-            ]}
-            className="sm:col-span-2"
-          />
-          {form.type === 'httpJson' ? (
-            <HttpConnectorFields
-              isNew={isNew}
-              documentKey={form.documentKey}
-              documentJson={form.documentJson}
-              credential={form.bindPassword}
-              entraTenantId={form.entraTenantId}
-              entraClientId={form.entraClientId}
-              onPick={(key, document) => {
-                setForm((current) => ({
-                  ...current,
-                  documentKey: key,
-                  documentJson: JSON.stringify(document, null, 2),
-                  // The document names the target. Taking the name from it
-                  // saves the one keystroke everybody would spend typing what
-                  // they just picked.
-                  name: current.name === '' ? String(document.name ?? '') : current.name,
-                }));
-              }}
-              onDocumentChange={(v) => set('documentJson', v)}
-              onCredentialChange={(v) => set('bindPassword', v)}
-              onEntraTenantIdChange={(v) => set('entraTenantId', v)}
-              onEntraClientIdChange={(v) => set('entraClientId', v)}
-            />
-          ) : form.type === 'entraId' ? (
-            <EntraConnectorFields
-              isNew={isNew}
-              tenantId={form.entraTenantId}
-              clientId={form.entraClientId}
-              credential={form.bindPassword}
-              correlationField={form.entraCorrelationField}
-              userPrincipalDomain={form.entraUserPrincipalDomain}
-              onUserPrincipalDomainChange={(v) => set('entraUserPrincipalDomain', v)}
-              onTenantIdChange={(v) => set('entraTenantId', v)}
-              onClientIdChange={(v) => set('entraClientId', v)}
-              onCredentialChange={(v) => set('bindPassword', v)}
-              onCorrelationFieldChange={(v) => set('entraCorrelationField', v)}
-              mark={mark}
-            />
-          ) : form.type === 'activeDirectory' ? (
-            <>
-              <Field
-                label="URL"
-                value={form.url}
-                onChange={(v) => set('url', v)}
-                {...mark('url')}
-              />
-              <Select
-                label="Transport"
-                value={form.tlsMode}
-                onChange={(v) => set('tlsMode', v as TlsMode)}
-                {...mark('tlsMode')}
-                options={[
-                  { value: 'ldaps', label: 'LDAPS' },
-                  { value: 'starttls', label: 'StartTLS' },
-                ]}
-              />
-              <Check
-                className="sm:col-span-2"
-                checked={form.rejectUnauthorized}
-                onChange={(v) => set('rejectUnauthorized', v)}
-                label="Verify the directory server's TLS certificate"
-              />
-              <Field
-                label="Bind DN"
-                value={form.bindDn}
-                onChange={(v) => set('bindDn', v)}
-                {...mark('bindDn')}
-              />
-              <Field
-                label="Bind password"
-                type="password"
-                autoComplete="new-password"
-                value={form.bindPassword}
-                onChange={(v) => set('bindPassword', v)}
-                {...mark('bindPassword')}
-              />
-              <Field
-                label="Base DN"
-                value={form.baseDn}
-                onChange={(v) => set('baseDn', v)}
-                {...mark('baseDn')}
-              />
-              <Field
-                label="Entitlement search base"
-                value={form.entitlementSearchBase}
-                onChange={(v) => set('entitlementSearchBase', v)}
-                {...mark('entitlementSearchBase')}
-              />
-              <Field
-                label="Archive container"
-                value={form.archiveContainer}
-                onChange={(v) => set('archiveContainer', v)}
-                {...mark('archiveContainer')}
-                className="sm:col-span-2"
-              />
-            </>
-          ) : (
-            <>
-              <Field
-                label="Base URL"
-                value={form.baseUrl}
-                onChange={(v) => set('baseUrl', v)}
-                {...mark('baseUrl')}
-                className="sm:col-span-2"
-              />
-              <Field
-                label="Bearer token"
-                type="password"
-                autoComplete="new-password"
-                value={form.bindPassword}
-                onChange={(v) => set('bindPassword', v)}
-                {...mark('bindPassword')}
-                className="sm:col-span-2"
-              />
-            </>
-          )}
-        </Panel>
-
         {/*
-          These three links are the only route into the rest of the target's
-          configuration. Without them the sub-pages exist and are reachable
-          only by typing a URL, which is the same as not existing.
+          One form, in stages, essentials first. It used to be four panels
+          with the save four screens above the last of them; the thresholds
+          somebody opens this page to correct were below the bind password
+          they did not come to touch. The stages are in the order a first
+          target is set up — connect, decide how it is enforced, then the
+          timings and guards most targets never change — and the completion
+          controls travel with the form rather than sitting at the top of it.
+
+          Not a Panel: `overflow-hidden` on a panel would pin the sticky bar
+          to the panel's own box, so it would never stick.
         */}
-        {!isNew && (
-          <Panel title="Configuration">
-            {(gaps.noProfile || gaps.noAccountRule) && (
-              <div className="space-y-2 px-4 pt-4">
+        <form
+          onSubmit={(event) => void onSave(event)}
+          noValidate
+          aria-label={isNew ? 'New target' : 'Target settings'}
+          className="space-y-6 rounded-panel border border-border-subtle bg-bg px-4 pt-4"
+        >
+          <ErrorSummary errors={summaryOf(invalid, LABELS)} />
+
+          <FormSection title="Connection" status={connectionState}>
+            <Field
+              label="Name"
+              name="name"
+              value={form.name}
+              onChange={(v) => set('name', v)}
+              {...mark('name')}
+              className="sm:col-span-2"
+            />
+            <Select
+              label="Type"
+              name="type"
+              value={form.type}
+              onChange={(v) => set('type', v as TargetType)}
+              // Changing a target's connector type after accounts exist has no
+              // migration story, so the console does not offer it: fixed at
+              // creation, same as the type column itself once a target holds
+              // any accounts.
+              disabled={!isNew}
+              {...mark('type')}
+              options={[
+                { value: 'activeDirectory', label: 'Active Directory' },
+                { value: 'entraId', label: 'Microsoft Entra ID (native)' },
+                { value: 'scim2', label: 'SCIM 2.0' },
+                { value: 'httpJson', label: 'REST API' },
+              ]}
+              className="sm:col-span-2"
+            />
+            {form.type === 'httpJson' ? (
+              <HttpConnectorFields
+                isNew={isNew}
+                documentKey={form.documentKey}
+                documentJson={form.documentJson}
+                credential={form.bindPassword}
+                entraTenantId={form.entraTenantId}
+                entraClientId={form.entraClientId}
+                onPick={(key, document) => {
+                  setForm((current) => ({
+                    ...current,
+                    documentKey: key,
+                    documentJson: JSON.stringify(document, null, 2),
+                    // The document names the target. Taking the name from it
+                    // saves the one keystroke everybody would spend typing what
+                    // they just picked.
+                    name: current.name === '' ? String(document.name ?? '') : current.name,
+                  }));
+                }}
+                onDocumentChange={(v) => set('documentJson', v)}
+                onCredentialChange={(v) => set('bindPassword', v)}
+                onEntraTenantIdChange={(v) => set('entraTenantId', v)}
+                onEntraClientIdChange={(v) => set('entraClientId', v)}
+              />
+            ) : form.type === 'entraId' ? (
+              <EntraConnectorFields
+                isNew={isNew}
+                tenantId={form.entraTenantId}
+                clientId={form.entraClientId}
+                credential={form.bindPassword}
+                correlationField={form.entraCorrelationField}
+                userPrincipalDomain={form.entraUserPrincipalDomain}
+                onUserPrincipalDomainChange={(v) => set('entraUserPrincipalDomain', v)}
+                onTenantIdChange={(v) => set('entraTenantId', v)}
+                onClientIdChange={(v) => set('entraClientId', v)}
+                onCredentialChange={(v) => set('bindPassword', v)}
+                onCorrelationFieldChange={(v) => set('entraCorrelationField', v)}
+                mark={mark}
+              />
+            ) : form.type === 'activeDirectory' ? (
+              <>
+                <Field
+                  label="URL"
+                  name="url"
+                  value={form.url}
+                  onChange={(v) => set('url', v)}
+                  {...mark('url')}
+                />
+                <Select
+                  label="Transport"
+                  name="tlsMode"
+                  value={form.tlsMode}
+                  onChange={(v) => set('tlsMode', v as TlsMode)}
+                  {...mark('tlsMode')}
+                  options={[
+                    { value: 'ldaps', label: 'LDAPS' },
+                    { value: 'starttls', label: 'StartTLS' },
+                  ]}
+                />
+                <Check
+                  className="sm:col-span-2"
+                  checked={form.rejectUnauthorized}
+                  onChange={(v) => set('rejectUnauthorized', v)}
+                  label="Verify the directory server's TLS certificate"
+                  warning={
+                    form.rejectUnauthorized
+                      ? undefined
+                      : 'Any certificate is accepted, including an impostor’s.'
+                  }
+                />
+                <Field
+                  label="Bind DN"
+                  name="bindDn"
+                  value={form.bindDn}
+                  onChange={(v) => set('bindDn', v)}
+                  {...mark('bindDn')}
+                />
+                <Field
+                  label="Bind password"
+                  name="bindPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.bindPassword}
+                  onChange={(v) => set('bindPassword', v)}
+                  placeholder={isNew ? undefined : 'Leave blank to keep the stored password'}
+                  {...mark('bindPassword')}
+                />
+                <Field
+                  label="Base DN"
+                  name="baseDn"
+                  value={form.baseDn}
+                  onChange={(v) => set('baseDn', v)}
+                  {...mark('baseDn')}
+                />
+                <Field
+                  label="Entitlement search base"
+                  name="entitlementSearchBase"
+                  value={form.entitlementSearchBase}
+                  onChange={(v) => set('entitlementSearchBase', v)}
+                  {...mark('entitlementSearchBase')}
+                />
+                <Field
+                  label="Archive container"
+                  name="archiveContainer"
+                  value={form.archiveContainer}
+                  onChange={(v) => set('archiveContainer', v)}
+                  {...mark('archiveContainer')}
+                  className="sm:col-span-2"
+                />
+              </>
+            ) : (
+              <>
+                <Field
+                  label="Base URL"
+                  name="baseUrl"
+                  value={form.baseUrl}
+                  onChange={(v) => set('baseUrl', v)}
+                  {...mark('baseUrl')}
+                  className="sm:col-span-2"
+                />
+                <Field
+                  label="Bearer token"
+                  name="bindPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.bindPassword}
+                  onChange={(v) => set('bindPassword', v)}
+                  placeholder={isNew ? undefined : 'Leave blank to keep the stored token'}
+                  {...mark('bindPassword')}
+                  className="sm:col-span-2"
+                />
+              </>
+            )}
+            {/* The result sits in the stage it is about, directly under the
+                fields it was run against, so an edit and the badge that says
+                the result no longer applies are in one glance. */}
+            {result && <TestReport result={result} stale={testStale} />}
+          </FormSection>
+
+          {/*
+            These three links are the only route into the rest of the target's
+            configuration. Without them the sub-pages exist and are reachable
+            only by typing a URL, which is the same as not existing.
+
+            Directly under Connection, as a section of its own: what stops a
+            saved target provisioning anybody -- no account profile, no rule
+            that grants an account -- is the next thing to know once it
+            connects, and at the foot of a four-section form it went unseen.
+          */}
+          {!isNew && (
+            <FormSection title="Configuration">
+              <div className="space-y-3 sm:col-span-2">
                 {gaps.noProfile && (
                   <Alert tone="warning">
                     This target has no account profile, so it cannot create accounts.
@@ -516,42 +636,162 @@ export function TargetDetailPage() {
                     No business rule grants an account on this target, so no one will be provisioned.
                   </Alert>
                 )}
+                <ul className="flex flex-wrap gap-x-6 gap-y-2">
+                  <li>
+                    <Link className="link font-medium" to={`/admin/targets/${targetId}/profile`}>
+                      Account profile
+                    </Link>
+                  </li>
+                  <li>
+                    <Link className="link font-medium" to={`/admin/targets/${targetId}/rules`}>
+                      Business rules
+                    </Link>
+                  </li>
+                  <li>
+                    <Link className="link font-medium" to={`/admin/targets/${targetId}/runs`}>
+                      Runs
+                    </Link>
+                  </li>
+                </ul>
               </div>
-            )}
-            <ul className="space-y-3 p-4">
-              <li>
-                <Link
-                  className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${targetId}/profile`}
-                >
-                  Account profile
-                </Link>
-              </li>
-              <li>
-                <Link
-                  className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${targetId}/rules`}
-                >
-                  Business rules
-                </Link>
-                <span className="ml-2 text-muted">
-                  Who gets an account here, and which entitlements come with it.
-                </span>
-              </li>
-              <li>
-                <Link
-                  className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                  to={`/admin/targets/${targetId}/runs`}
-                >
-                  Runs
-                </Link>
-                <span className="ml-2 text-muted">
-                  What each run proposed, what was applied, and what drifted.
-                </span>
-              </li>
-            </ul>
-          </Panel>
-        )}
+            </FormSection>
+          )}
+
+          <FormSection title="Schedule and enforcement" status={refusedIn(ENFORCEMENT_FIELDS)}>
+            <Select
+              label="Enforcement mode"
+              name="enforcementMode"
+              value={form.enforcementMode}
+              onChange={(v) => set('enforcementMode', v as EnforcementMode)}
+              {...mark('enforcementMode')}
+              // Ruling P2, on the target's own screen. Drift is reported under
+              // both modes; what changes is whether Provision acts on it.
+              options={[
+                { value: 'additive', label: 'Additive — only grants and takes back its own' },
+                { value: 'authoritative', label: 'Authoritative — removes what rules do not grant' },
+              ]}
+            />
+            <Field
+              label="Schedule"
+              name="schedule"
+              value={form.schedule}
+              onChange={(v) => set('schedule', v)}
+              placeholder="0 3 * * *"
+              {...mark('schedule')}
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.enabled}
+              onChange={(v) => set('enabled', v)}
+              label="Enabled"
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.autoApply}
+              onChange={(v) => set('autoApply', v)}
+              label="Apply scheduled runs automatically"
+            />
+            <Field
+              label="Maximum attempts per action"
+              name="maxAttempts"
+              value={form.maxAttempts}
+              onChange={(v) => set('maxAttempts', v)}
+              inputMode="numeric"
+              {...mark('maxAttempts')}
+            />
+          </FormSection>
+
+          <FormSection title="Lifecycle timings" status={refusedIn(LADDER_FIELDS)}>
+            <Field
+              label="Pre-hire days"
+              name="preHireDays"
+              value={form.preHireDays}
+              onChange={(v) => set('preHireDays', v)}
+              inputMode="numeric"
+              {...mark('preHireDays')}
+            />
+            <Field
+              label="Entitlement revocation delay (days)"
+              name="entitlementRevocationDelayDays"
+              value={form.entitlementRevocationDelayDays}
+              onChange={(v) => set('entitlementRevocationDelayDays', v)}
+              inputMode="numeric"
+              {...mark('entitlementRevocationDelayDays')}
+            />
+            <Field
+              label="Disable grace (days)"
+              name="disableGraceDays"
+              value={form.disableGraceDays}
+              onChange={(v) => set('disableGraceDays', v)}
+              inputMode="numeric"
+              {...mark('disableGraceDays')}
+            />
+            <Field
+              label="Archive after (days)"
+              name="archiveAfterDays"
+              value={form.archiveAfterDays}
+              onChange={(v) => set('archiveAfterDays', v)}
+              inputMode="numeric"
+              placeholder="Never"
+              {...mark('archiveAfterDays')}
+            />
+            <Field
+              label="Re-enable without confirmation (days)"
+              name="reenableWithoutConfirmationDays"
+              value={form.reenableWithoutConfirmationDays}
+              onChange={(v) => set('reenableWithoutConfirmationDays', v)}
+              inputMode="numeric"
+              {...mark('reenableWithoutConfirmationDays')}
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.renameEnabled}
+              onChange={(v) => set('renameEnabled', v)}
+              label="Rename an account when the person's name changes"
+            />
+          </FormSection>
+
+          <FormSection
+            title="Safety thresholds"
+            // A percent to confirm past, not the guard's other refusal.
+            // `guard.ts` also withholds confirmation when it cannot compute a
+            // number at all — no persons on an active contract, a collapsed
+            // population, a target with no accounts, a missing denominator —
+            // and that kind is never a number typed here, so it is never a
+            // field in this stage. The badge names which kind these seven are;
+            // the run's own screen is where the other kind, and why, is shown.
+            status={
+              refusedIn(THRESHOLD_FIELDS) ?? <Status tone="neutral">Confirmable by number</Status>
+            }
+          >
+            {THRESHOLDS.map(([key, label]) => (
+              <Field
+                key={key}
+                label={label}
+                name={key}
+                value={form[key]}
+                onChange={(v) => set(key, v)}
+                inputMode="numeric"
+                {...mark(key)}
+              />
+            ))}
+          </FormSection>
+
+          <FormActions
+            sticky
+            status={draftStatus({
+              dirty,
+              stale: testStale ? 'Test result is out of date' : null,
+            })}
+          >
+            <Button type="button" onClick={onTest} loading={busy === 'test'} disabled={!!busy}>
+              Test connection
+            </Button>
+            <Button type="submit" variant="primary" loading={busy === 'save'} disabled={!!busy}>
+              {isNew ? 'Create target' : 'Save'}
+            </Button>
+          </FormActions>
+        </form>
 
         {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
         {!isNew && targetId !== null && <TargetAdapterPanel targetId={targetId} />}
@@ -561,121 +801,6 @@ export function TargetDetailPage() {
         {!isNew && targetId !== null && data?.type === 'httpJson' && (
           <TargetMigrationPanel targetId={targetId} onApplied={reload} />
         )}
-
-        <Panel
-          title="Schedule and enforcement"
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
-        >
-          <Field
-            label="Schedule"
-            value={form.schedule}
-            onChange={(v) => set('schedule', v)}
-            placeholder="0 3 * * *"
-            {...mark('schedule')}
-          />
-          <Select
-            label="Enforcement mode"
-            value={form.enforcementMode}
-            onChange={(v) => set('enforcementMode', v as EnforcementMode)}
-            {...mark('enforcementMode')}
-            // Ruling P2, on the target's own screen. Drift is reported under
-            // both modes; what changes is whether Provision acts on it.
-            options={[
-              { value: 'additive', label: 'Additive' },
-              { value: 'authoritative', label: 'Authoritative' },
-            ]}
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.enabled}
-            onChange={(v) => set('enabled', v)}
-            label="Enabled"
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.autoApply}
-            onChange={(v) => set('autoApply', v)}
-            label="Apply scheduled runs automatically"
-          />
-          <Field
-            label="Maximum attempts per action"
-            value={form.maxAttempts}
-            onChange={(v) => set('maxAttempts', v)}
-            inputMode="numeric"
-            {...mark('maxAttempts')}
-          />
-        </Panel>
-
-        <Panel
-          title="Deprovisioning ladder"
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
-        >
-          <Field
-            label="Pre-hire days"
-            value={form.preHireDays}
-            onChange={(v) => set('preHireDays', v)}
-            inputMode="numeric"
-            {...mark('preHireDays')}
-          />
-          <Field
-            label="Entitlement revocation delay (days)"
-            value={form.entitlementRevocationDelayDays}
-            onChange={(v) => set('entitlementRevocationDelayDays', v)}
-            inputMode="numeric"
-            {...mark('entitlementRevocationDelayDays')}
-          />
-          <Field
-            label="Disable grace (days)"
-            value={form.disableGraceDays}
-            onChange={(v) => set('disableGraceDays', v)}
-            inputMode="numeric"
-            {...mark('disableGraceDays')}
-          />
-          <Field
-            label="Archive after (days)"
-            value={form.archiveAfterDays}
-            onChange={(v) => set('archiveAfterDays', v)}
-            inputMode="numeric"
-            {...mark('archiveAfterDays')}
-          />
-          <Field
-            label="Re-enable without confirmation (days)"
-            value={form.reenableWithoutConfirmationDays}
-            onChange={(v) => set('reenableWithoutConfirmationDays', v)}
-            inputMode="numeric"
-            {...mark('reenableWithoutConfirmationDays')}
-          />
-          <Check
-            className="sm:col-span-2"
-            checked={form.renameEnabled}
-            onChange={(v) => set('renameEnabled', v)}
-            label="Rename an account when the person's name changes"
-          />
-        </Panel>
-
-        <Panel
-          title="Safety thresholds"
-          // A percent to confirm past, not the guard's other refusal.
-          // `guard.ts` also withholds confirmation when it cannot compute a
-          // number at all — no persons on an active contract, a collapsed
-          // population, a target with no accounts, a missing denominator —
-          // and that kind is never a number typed here, so it is never a
-          // field on this panel. The badge names which kind these seven are;
-          // the run's own screen is where the other kind, and why, is shown.
-          actions={<Status tone="neutral">Confirmable by number</Status>}
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
-        >
-          {THRESHOLDS.map(([key, label]) => (
-            <Field
-              key={key}
-              label={label}
-              value={form[key]}
-              onChange={(v) => set(key, v)}
-              inputMode="numeric"
-              {...mark(key)}
-            />
-          ))}
-        </Panel>
       </div>
     </>
   );

@@ -472,4 +472,51 @@ describe('BusinessRulesPage', () => {
     expect(screen.getByLabelText(/Finance/)).toBeChecked();
     expect(screen.getByLabelText(/^Enabled/)).not.toBeChecked();
   });
+
+  it('says the impact is out of date after an edit, beside the Save it gates', async () => {
+    mockFetch({ rules: [RULE] });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    // Why Save is disabled, said beside it.
+    expect(screen.getByText('Preview required before saving')).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
+    await screen.findByText(/This rule matches/);
+    expect(screen.getByText('Matches this draft')).toBeVisible();
+
+    await userEvent.type(screen.getByLabelText('Value'), 'x');
+    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.getByText('Out of date — run again')).toBeVisible();
+    expect(screen.getByText('Preview is out of date')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
+  });
+
+  it('puts a refused rule name in a summary that links to the field', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const path = String(input);
+      if (init?.method === 'PUT')
+        return Promise.resolve(
+          json(
+            {
+              title: 'Validation failed',
+              status: 400,
+              errors: [{ path: 'name', message: 'is already used by another rule' }],
+            },
+            400,
+          ),
+        );
+      if (path.endsWith('/entitlements')) return Promise.resolve(json({ entitlements: [ENTITLEMENT] }));
+      if (path.endsWith('/rules')) return Promise.resolve(json({ rules: [] }));
+      return Promise.resolve(json({ enforcementMode: 'additive' }));
+    });
+    renderPage();
+    await screen.findByText('Finance');
+    await userEvent.type(screen.getByLabelText('Name'), 'Finance staff');
+    await userEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Name: is already used by another rule' }),
+    );
+    expect(screen.getByLabelText('Name')).toHaveFocus();
+  });
 });

@@ -1,7 +1,22 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  Panel,
+  Select,
+  SkeletonRows,
+  StateBadge,
+  Status,
+  useToast,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
 import { CountryPicker, DEVICE_OPTIONS, DevicePicker, countryName } from './policy-conditions.js';
 // The CONTRACT, not a local restatement. The API builds this response by hand
@@ -52,6 +67,18 @@ const OUTCOME_TONE: Record<Rule['outcome'], 'active' | 'warning' | 'danger'> = {
   deny: 'danger',
 };
 
+/** What each draft key is called on screen, for the error summary. */
+const FIELD_LABELS: Record<string, string> = {
+  name: 'Name',
+  outcome: 'Outcome',
+  factorType: 'Which factor',
+  ipRanges: 'Source addresses',
+  devicePlatforms: 'Devices',
+  countries: 'Countries',
+  contractField: 'Contract field',
+  contractValues: 'Contract values',
+};
+
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const clock = (minute: number) =>
@@ -92,9 +119,27 @@ function conditions(rule: Rule): string[] {
   return parts.length > 0 ? parts : ['every sign-in'];
 }
 
+/** How many "applies when" conditions a draft sets, for its section's status. */
+function conditionCount(
+  ipRanges: string,
+  devices: string[],
+  countries: string[],
+  contractField: string,
+): number {
+  return (
+    (ipRanges.trim() ? 1 : 0) +
+    (devices.length > 0 ? 1 : 0) +
+    (countries.length > 0 ? 1 : 0) +
+    (contractField.trim() ? 1 : 0)
+  );
+}
+
 export function PoliciesPage() {
   const { data: policy, error, loading, reload } = useApiResource<Policy>('/api/admin/policy');
+  const toast = useToast();
   const [formError, setFormError] = useState<string | null>(null);
+  /** The server's per-field refusals, against the controls that caused them. */
+  const [formFields, setFormFields] = useState<Record<string, string>>({});
   /**
    * Refusals from the LIST controls, rendered at page level.
    *
@@ -118,6 +163,17 @@ export function PoliciesPage() {
   const [contractField, setContractField] = useState('');
   const [contractValues, setContractValues] = useState('');
   const [impact, setImpact] = useState<RuleImpactResponse | null>(null);
+  /**
+   * The draft the impact figure was computed FOR.
+   *
+   * The count sits beside the fields it depends on, so an edit made after
+   * checking leaves a number on screen describing a rule that no longer
+   * exists — and "matches 12 of 40" read after widening the address range is
+   * a figure somebody will act on. It is labelled out of date the moment the
+   * draft moves away from it, not cleared: the old number is still a useful
+   * bound while they decide whether to check again.
+   */
+  const [impactFor, setImpactFor] = useState<string | null>(null);
 
   const list = (value: string) =>
     value
@@ -146,22 +202,47 @@ export function PoliciesPage() {
    * enrolment on their next sign-in, and an administrator is entitled to know
    * how many people that is first.
    */
+  const draftKey = JSON.stringify(draft());
+  const impactStale = impact !== null && impactFor !== draftKey;
+  // Against an empty rule, because this form only ever creates one.
+  const dirty =
+    name !== '' ||
+    outcome !== 'require_mfa' ||
+    ipRanges !== '' ||
+    devicePlatforms.length > 0 ||
+    countries.length > 0 ||
+    contractField !== '' ||
+    contractValues !== '';
+  const conditionTotal = conditionCount(ipRanges, devicePlatforms, countries, contractField);
+
+  /** One refusal, split into what belongs against a field and what does not. */
+  function refuse(cause: unknown, fallback: string) {
+    const marked = formFieldErrors(cause);
+    setFormFields(marked);
+    setFormError(
+      Object.keys(marked).length > 0
+        ? null
+        : cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : fallback,
+    );
+  }
+
   async function checkImpact() {
     setBusy(true);
     setFormError(null);
+    setFormFields({});
+    const basis = draftKey;
     try {
       setImpact(
         await api<RuleImpactResponse>('/api/admin/policy/rules/impact', {
           method: 'POST',
-          body: JSON.stringify(draft()),
+          body: basis,
         }),
       );
+      setImpactFor(basis);
     } catch (cause) {
-      setFormError(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That rule could not be checked.',
-      );
+      refuse(cause, 'That rule could not be checked.');
     } finally {
       setBusy(false);
     }
@@ -170,6 +251,7 @@ export function PoliciesPage() {
   async function addRule() {
     setBusy(true);
     setFormError(null);
+    setFormFields({});
     try {
       await api('/api/admin/policy/rules', {
         method: 'POST',
@@ -182,7 +264,10 @@ export function PoliciesPage() {
       setCountries([]);
       setContractField('');
       setContractValues('');
+      setOutcome('require_mfa');
       setImpact(null);
+      setImpactFor(null);
+      toast({ tone: 'success', title: 'Rule saved' });
       reload();
     } catch (cause) {
       // The failing detail is attached rather than replaced with a generic
@@ -192,11 +277,7 @@ export function PoliciesPage() {
       // domain — the message names exactly that, and it renders right here,
       // inside the same panel as the outcome and factor controls that caused
       // it, not as a page-wide banner divorced from the field in question.
-      setFormError(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That rule could not be saved.',
-      );
+      refuse(cause, 'That rule could not be saved.');
     } finally {
       setBusy(false);
     }
@@ -275,115 +356,163 @@ export function PoliciesPage() {
 
       {adding && (
         <Panel title="New rule">
-          <div className="space-y-4 p-4">
-            <Field label="Name" value={name} onChange={setName} required />
+          {/* A real form, so Enter in any box saves and the error summary can
+              find the controls it links to. Three stages, in the order a rule
+              is thought about: what it does, when it applies, and who that
+              turns out to be. */}
+          <form
+            noValidate
+            className="space-y-6 p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void addRule();
+            }}
+          >
+            <ErrorSummary
+              errors={summaryErrors(formFields, FIELD_LABELS, formError)}
+              {...(Object.keys(formFields).length === 0 ? { title: 'Not saved' } : {})}
+            />
 
-            <div>
-              <label htmlFor="policy-outcome" className="mb-1.5 block font-medium text-ink">
-                Outcome
-              </label>
-              <select
-                id="policy-outcome"
+            <FormSection title="Rule">
+              <Field
+                name="name"
+                label="Name"
+                value={name}
+                onChange={setName}
+                required
+                error={formFields.name}
+              />
+              <Select
+                name="outcome"
+                label="Outcome"
                 value={outcome}
-                onChange={(e) => setOutcome(e.target.value as Rule['outcome'])}
-                className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
-              >
-                {(Object.keys(OUTCOME_LABEL) as Rule['outcome'][]).map((value) => (
-                  <option key={value} value={value}>
-                    {OUTCOME_LABEL[value]}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {outcome === 'require_factor' && (
-              <div>
-                <label htmlFor="policy-factor" className="mb-1.5 block font-medium text-ink">
-                  Which factor
-                </label>
-                <select
-                  id="policy-factor"
+                onChange={(value) => setOutcome(value as Rule['outcome'])}
+                options={(Object.keys(OUTCOME_LABEL) as Rule['outcome'][]).map((value) => ({
+                  value,
+                  label: OUTCOME_LABEL[value],
+                }))}
+                error={formFields.outcome}
+              />
+              {outcome === 'require_factor' && (
+                <Select
+                  name="factorType"
+                  label="Which factor"
                   value={factorType}
-                  onChange={(e) =>
-                    setFactorType(e.target.value as 'totp' | 'webauthn' | 'email_otp')
+                  onChange={(value) =>
+                    setFactorType(value as 'totp' | 'webauthn' | 'email_otp')
                   }
-                  className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
-                >
-                  <option value="webauthn">Security key or passkey</option>
-                  <option value="totp">Authenticator app</option>
-                  <option value="email_otp">Emailed code</option>
-                </select>
-                {factorType === 'webauthn' && (
-                  <p className="mt-1.5 text-sm text-muted">
-                    Needs a primary domain set for this tenant — a security key is
-                    registered against it, and a rule requiring one is refused
-                    until it exists.
-                  </p>
-                )}
+                  options={[
+                    { value: 'webauthn', label: 'Security key or passkey' },
+                    { value: 'totp', label: 'Authenticator app' },
+                    { value: 'email_otp', label: 'Emailed code' },
+                  ]}
+                  // A consequence of THIS choice, shown only while it is the
+                  // choice: a key is registered against the primary domain,
+                  // and a rule requiring one is refused until it exists.
+                  warning={
+                    factorType === 'webauthn'
+                      ? 'Needs a primary domain set for this tenant. A rule requiring a security key is refused until one exists.'
+                      : undefined
+                  }
+                  error={formFields.factorType}
+                />
+              )}
+            </FormSection>
+
+            <FormSection
+              title="Applies when"
+              status={
+                <span className="text-muted">
+                  {conditionTotal === 0
+                    ? 'Every sign-in'
+                    : `${conditionTotal} condition${conditionTotal === 1 ? '' : 's'}`}
+                </span>
+              }
+            >
+              <Field
+                name="ipRanges"
+                label="Source addresses"
+                value={ipRanges}
+                onChange={setIpRanges}
+                placeholder="203.0.113.0/24, 198.51.100.7"
+                error={formFields.ipRanges}
+              />
+              <CountryPicker value={countries} onChange={setCountries} />
+              <Field
+                name="contractField"
+                label="Contract field"
+                value={contractField}
+                onChange={setContractField}
+                error={formFields.contractField}
+              />
+              <Field
+                name="contractValues"
+                label="Contract values"
+                value={contractValues}
+                onChange={setContractValues}
+                error={formFields.contractValues}
+              />
+              <div className="sm:col-span-2">
+                <DevicePicker value={devicePlatforms} onChange={setDevicePlatforms} />
               </div>
-            )}
+              {outcome === 'deny' && devicePlatforms.length > 0 && (
+                <div className="sm:col-span-2">
+                  <Alert tone="warning" title="A device is what the browser claims to be">
+                    <p>
+                      Anyone can change it. This will stop an ordinary user on that
+                      device and will not stop someone who wants through.
+                    </p>
+                  </Alert>
+                </div>
+              )}
+            </FormSection>
 
-            <Field
-              label="Source addresses"
-              value={ipRanges}
-              onChange={setIpRanges}
-            />
-            <DevicePicker value={devicePlatforms} onChange={setDevicePlatforms} />
-            {outcome === 'deny' && devicePlatforms.length > 0 && (
-              <Alert tone="warning" title="A device is what the browser claims to be">
-                <p>
-                  Anyone can change it. This will stop an ordinary user on that
-                  device and will not stop someone who wants through.
-                </p>
-              </Alert>
-            )}
-            <CountryPicker value={countries} onChange={setCountries} />
-
-            <Field
-              label="Contract field"
-              value={contractField}
-              onChange={setContractField}
-            />
-            <Field
-              label="Contract values"
-              value={contractValues}
-              onChange={setContractValues}
-            />
-
-            {impact && (
-              <Alert
-                tone={impact.usersNeedingEnrolment > 0 ? 'warning' : 'info'}
-                title={`Matches ${impact.matchedUsers} of ${impact.totalActiveUsers} active users`}
-              >
-                <p>
-                  {impact.usersNeedingEnrolment === 0
-                    ? 'Everyone it matches already holds a factor that satisfies it.'
-                    : `${impact.usersNeedingEnrolment} of them hold no factor that satisfies this rule, and will be asked to set one up the next time they sign in.`}
-                </p>
-                {impact.unevaluatedConditions.length > 0 && (
-                  <p className="mt-1 text-sm text-muted">
-                    Counted without {impact.unevaluatedConditions.join(' or ')}, which
-                    only a real sign-in can supply. The true number is at most this.
-                  </p>
+            <FormSection
+              title="Who this affects"
+              status={
+                impact === null ? (
+                  <StateBadge state="setup">Not checked</StateBadge>
+                ) : impactStale ? (
+                  <StateBadge state="attention">Out of date</StateBadge>
+                ) : null
+              }
+            >
+              <div className="space-y-3 sm:col-span-2">
+                {impact && (
+                  <Alert
+                    tone={impact.usersNeedingEnrolment > 0 ? 'warning' : 'info'}
+                    title={`Matches ${impact.matchedUsers} of ${impact.totalActiveUsers} active users`}
+                  >
+                    <p>
+                      {impact.usersNeedingEnrolment === 0
+                        ? 'Everyone it matches already holds a factor that satisfies it.'
+                        : `${impact.usersNeedingEnrolment} of them hold no factor that satisfies this rule, and will be asked to set one up the next time they sign in.`}
+                    </p>
+                    {impact.unevaluatedConditions.length > 0 && (
+                      <p className="mt-1 text-sm text-muted">
+                        Counted without {impact.unevaluatedConditions.join(' or ')}, which
+                        only a real sign-in can supply. The true number is at most this.
+                      </p>
+                    )}
+                  </Alert>
                 )}
-              </Alert>
-            )}
+                <Button type="button" loading={busy} onClick={checkImpact}>
+                  {impactStale ? 'Check again' : 'Check who this affects'}
+                </Button>
+              </div>
+            </FormSection>
 
-            {formError && (
-              <Alert tone="danger">
-                <span>{formError}</span>
-              </Alert>
-            )}
-
-            <div className="flex flex-wrap gap-2">
-              <Button loading={busy} onClick={checkImpact}>
-                Check who this affects
+            <FormActions
+              status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
+            >
+              <Button type="button" variant="secondary" onClick={() => setAdding(false)}>
+                Cancel
               </Button>
-              <Button variant="primary" loading={busy} onClick={addRule}>
+              <Button type="submit" variant="primary" loading={busy}>
                 Save rule
               </Button>
-            </div>
-          </div>
+            </FormActions>
+          </form>
         </Panel>
       )}
 
@@ -439,7 +568,10 @@ export function PoliciesPage() {
                       Move down
                     </Button>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => remove(rule.id)}>
+                  {/* `danger-quiet`: removing a rule changes who is let in, and
+                      in a row of move controls it should not look like one
+                      more of them. */}
+                  <Button size="sm" variant="danger-quiet" onClick={() => remove(rule.id)}>
                     Remove
                   </Button>
                 </div>

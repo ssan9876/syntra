@@ -1,4 +1,4 @@
-import { Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Panel, SkeletonRows, StateBadge, Status, Table, type State } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
 /**
@@ -45,11 +45,33 @@ interface CapabilitiesResponse {
   };
 }
 
-const STATUS_TONE = {
-  available: 'active',
-  unsupported: 'warning',
-  never: 'danger',
-} as const;
+// The console's agreed states rather than a tone chosen here: "never" is a
+// refusal nobody can lift, "not supported" is a gap somebody should know about.
+const STATUS_STATE: Record<MatrixEntry['status'], State> = {
+  available: 'healthy',
+  unsupported: 'attention',
+  never: 'blocked',
+};
+
+const SUPPORT_STATE: Record<CapabilitiesResponse['metadata']['supportState'], State> = {
+  supported: 'healthy',
+  preview: 'attention',
+  deprecated: 'attention',
+  unavailable: 'blocked',
+};
+
+const ROLLOUT_STATE: Record<CapabilitiesResponse['metadata']['rollout'], State> = {
+  general: 'healthy',
+  controlled: 'attention',
+  disabled: 'blocked',
+};
+
+const CERTIFICATION_STATE: Record<CapabilitiesResponse['metadata']['certification']['status'], State> = {
+  passed: 'healthy',
+  partial: 'attention',
+  'not-run': 'setup',
+  failed: 'blocked',
+};
 
 const STATUS_LABEL = {
   available: 'available',
@@ -109,29 +131,29 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
           <div>
             <dt className="text-muted">Support</dt>
             <dd className="mt-1">
-              <Status tone={data.metadata.supportState === 'supported' ? 'active' : data.metadata.supportState === 'unavailable' ? 'danger' : 'warning'}>
+              <StateBadge state={SUPPORT_STATE[data.metadata.supportState] ?? 'attention'}>
                 {data.metadata.supportState}
-              </Status>
+              </StateBadge>
             </dd>
           </div>
           <div>
             <dt className="text-muted">Rollout</dt>
             <dd className="mt-1">
-              <Status tone={data.metadata.rollout === 'general' ? 'active' : data.metadata.rollout === 'disabled' ? 'danger' : 'warning'}>
+              <StateBadge state={ROLLOUT_STATE[data.metadata.rollout] ?? 'attention'}>
                 {data.metadata.rollout}
-              </Status>
+              </StateBadge>
             </dd>
           </div>
           <div>
             <dt className="text-muted">Certification</dt>
             <dd className="mt-1">
-              <Status tone={data.metadata.certification.status === 'passed' ? 'active' : data.metadata.certification.status === 'failed' ? 'danger' : 'warning'}>
+              <StateBadge state={CERTIFICATION_STATE[data.metadata.certification.status] ?? 'attention'}>
                 {data.metadata.certification.status}
-              </Status>
+              </StateBadge>
             </dd>
           </div>
         </dl>
-        <p className="text-sm text-ink-muted">
+        <p className="text-sm text-muted">
           {data.metadata.certification.evidence}
           {data.metadata.certification.verifiedAt
             ? ` · verified ${data.metadata.certification.verifiedAt}`
@@ -141,64 +163,65 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
             : ''}
         </p>
         {!data.capabilities.available && (
-          <p className="text-sm text-danger">
-            This connector type is not available. Nothing here will be applied.
+          <p className="flex flex-wrap items-center gap-2 text-sm text-danger">
+            <StateBadge state="blocked">Unavailable</StateBadge>
+            Nothing here will be applied.
           </p>
         )}
         <ul className="grid gap-2 sm:grid-cols-2">
           {SUMMARY_LABELS.map(([key, label]) => (
             <li key={key} className="flex items-center justify-between gap-3 text-sm">
               <span>{label}</span>
-              <Status tone={data.capabilities[key] ? 'active' : 'inactive'}>
+              <StateBadge state={data.capabilities[key] ? 'healthy' : 'inactive'}>
                 {data.capabilities[key] ? 'yes' : 'no'}
-              </Status>
+              </StateBadge>
             </li>
           ))}
         </ul>
 
         {data.matrix && (
           <>
-            <p className="text-sm text-ink-muted">
+            <p className="text-sm text-muted">
               {needsEvidence > 0
                 ? `${needsEvidence} of these are verified against the fake Graph only and still require evidence from a disposable tenant (pnpm entra:validate --write) before they count as proven.`
                 : 'Every advertised capability has recorded tenant evidence.'}
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-muted">
-                    <th className="py-1 pr-3 font-medium">Capability</th>
-                    <th className="py-1 pr-3 font-medium">Status</th>
-                    <th className="py-1 pr-3 font-medium">Validation</th>
-                    <th className="py-1 pr-3 font-medium">Graph application permissions</th>
-                    <th className="py-1 font-medium">Note</th>
+            <Table tight label="Capability matrix">
+              <thead>
+                <tr>
+                  <th scope="col">Capability</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Validation</th>
+                  <th scope="col">Graph application permissions</th>
+                  <th scope="col">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(data.matrix.entries).map(([name, entry]) => (
+                  <tr key={name} className="align-top">
+                    <td className="font-mono">{name}</td>
+                    <td>
+                      <StateBadge state={STATUS_STATE[entry.status] ?? 'attention'}>
+                        {STATUS_LABEL[entry.status]}
+                      </StateBadge>
+                    </td>
+                    <td>
+                      {entry.validation === 'automated+tenant-evidence-required' ? (
+                        <StateBadge state="attention">tenant evidence required</StateBadge>
+                      ) : (
+                        <Status tone="neutral">automated</Status>
+                      )}
+                    </td>
+                    <td className="font-mono text-xs text-muted">
+                      {entry.requiredPermissions.length > 0
+                        ? entry.requiredPermissions.join(', ')
+                        : 'none'}
+                    </td>
+                    <td className="text-muted">{entry.note}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(data.matrix.entries).map(([name, entry]) => (
-                    <tr key={name} className="border-t border-border align-top">
-                      <td className="py-2 pr-3 font-mono">{name}</td>
-                      <td className="py-2 pr-3">
-                        <Status tone={STATUS_TONE[entry.status]}>{STATUS_LABEL[entry.status]}</Status>
-                      </td>
-                      <td className="py-2 pr-3">
-                        {entry.validation === 'automated+tenant-evidence-required' ? (
-                          <Status tone="warning">tenant evidence required</Status>
-                        ) : (
-                          <Status tone="neutral">automated</Status>
-                        )}
-                      </td>
-                      <td className="py-2 pr-3 font-mono text-xs text-ink-muted">
-                        {entry.requiredPermissions.length > 0
-                          ? entry.requiredPermissions.join(', ')
-                          : 'none'}
-                      </td>
-                      <td className="py-2 text-ink-muted">{entry.note}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </Table>
           </>
         )}
       </div>

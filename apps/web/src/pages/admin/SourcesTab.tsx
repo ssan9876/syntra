@@ -4,6 +4,7 @@ import {
   Empty,
   Panel,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
   buttonClasses,
@@ -85,9 +86,9 @@ export function SourcesTab() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={5} />}
+          {!data && loading && <SkeletonRows rows={4} cols={5} />}
 
-          {!loading && sources.length === 0 && (
+          {data && sources.length === 0 && (
             <div className="p-6">
               <Empty
                 title="No directory sources yet"
@@ -105,7 +106,7 @@ export function SourcesTab() {
             </div>
           )}
 
-          {!loading && sources.length > 0 && (
+          {sources.length > 0 && (
             <Table>
               <thead>
                 <tr>
@@ -150,7 +151,10 @@ export function SourcesTab() {
                       {source.schedule ?? 'Manual only'}
                     </td>
                     <td>
-                      <Status tone={transport(source).tone}>
+                      <Status
+                        tone={transport(source).tone}
+                        glyph={transport(source).tone === 'danger' ? 'alert' : 'check'}
+                      >
                         {transport(source).label}
                       </Status>
                       {source.config?.rejectUnauthorized === false && (
@@ -168,9 +172,11 @@ export function SourcesTab() {
                       {when(source.lastRunAt)}
                     </td>
                     <td>
-                      <Status tone={source.enabled ? 'active' : 'inactive'}>
-                        {source.enabled ? 'Enabled' : 'Disabled'}
-                      </Status>
+                      {source.enabled ? (
+                        <StateBadge state="healthy">Enabled</StateBadge>
+                      ) : (
+                        <StateBadge state="inactive">Disabled</StateBadge>
+                      )}
                     </td>
                   </tr>
                 ))}

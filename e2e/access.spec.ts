@@ -115,7 +115,7 @@ test('a partial CSV import names every rejected line', async ({ page }) => {
   await elevateTo(page, '/admin/users?tab=import', ADMIN!);
 
   const stamp = Date.now();
-  await page.locator('#csv').fill(
+  await page.getByRole('textbox', { name: 'Rows' }).fill(
     'externalId,givenName,familyName,businessEmail,sequence,isPrimary,startDate,endDate,jobTitle,department\n' +
       `E2E-${stamp}-a,Ada,Good,a@acme.localhost,1,true,2026-04-01,,Physiotherapist,Care\n` +
       `E2E-${stamp}-b,Bad,Sequence,b@acme.localhost,x,false,2026-04-01,,Porter,Facilities\n` +

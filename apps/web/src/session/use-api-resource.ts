@@ -5,6 +5,12 @@ export interface Resource<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  /**
+   * When `data` last arrived. A reload keeps the previous data on screen
+   * while it runs, so a list can say how old its rows are instead of
+   * dropping back to a skeleton every time somebody presses Refresh.
+   */
+  updatedAt: Date | null;
   reload(): void;
 }
 
@@ -46,6 +52,7 @@ export function useApiResource<T>(path: string | null): Resource<T> {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +69,9 @@ export function useApiResource<T>(path: string | null): Resource<T> {
 
     api<T>(path)
       .then((value) => {
-        if (!cancelled) setData(value);
+        if (cancelled) return;
+        setData(value);
+        setUpdatedAt(new Date());
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
@@ -86,5 +95,5 @@ export function useApiResource<T>(path: string | null): Resource<T> {
   }, [path, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  return { data, error, loading, reload };
+  return { data, error, loading, updatedAt, reload };
 }

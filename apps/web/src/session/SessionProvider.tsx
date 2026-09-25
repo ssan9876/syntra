@@ -180,3 +180,13 @@ export function useCan(): (permission: string) => boolean {
   const value = useContext(SessionContext);
   return value?.can ?? (() => false);
 }
+
+/**
+ * The signed-in session where there is one, and null where there is no
+ * provider. For a component that only wants to KEY something by who is
+ * reading — a saved view, a pinned tile — and should keep working, unkeyed,
+ * when rendered on its own.
+ */
+export function useOptionalSession(): SessionResponse | null {
+  return useContext(SessionContext)?.session ?? null;
+}

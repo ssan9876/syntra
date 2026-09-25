@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Field, Panel, Status } from '@syntra/ui';
+import { Alert, Button, Field, Identifier, Panel, StateBadge } from '@syntra/ui';
 import { AppShell } from '../components/AppShell.js';
 import { ApiError, api, isRateLimited } from '../session/api.js';
 import { startWebAuthnRegistration } from '../mfa/webauthn.js';
@@ -214,7 +214,7 @@ export function Security() {
           actions={
             status?.totp.enrolled ? (
               <span className="flex items-center gap-2">
-                <Status tone="active">Set up</Status>
+                <StateBadge state="healthy">Set up</StateBadge>
                 <Button size="sm" variant="ghost" loading={busy} onClick={removeTotp}>
                   Remove
                 </Button>
@@ -238,7 +238,7 @@ export function Security() {
               />
               <p className="text-sm text-muted">
                 Cannot scan? Enter this key instead:{' '}
-                <code className="font-mono text-ink">{enrolment.secret}</code>
+                <Identifier value={enrolment.secret} />
               </p>
               <Field
                 label="Code from your app"

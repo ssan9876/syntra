@@ -297,6 +297,12 @@ const RAW = {
     brandLogo: 'none',
     brandPrimary: 'none',
     brandAccent: 'none',
+    // The organisation's help desk -- a URL or a shared mailbox the tenant
+    // chose to publish on its sign-in page. Configuration, like the rest of
+    // the brand; a tenant that puts a person's own address here has
+    // published it deliberately.
+    brandSupportUrl: 'none',
+    brandSupportLabel: 'none',
     oidcConfigGeneration: 'none',
     privilegedChangeClasses: 'none',
     breakGlassActivationDelayMinutes: 'none',
@@ -706,6 +712,13 @@ const RAW = {
     slug: 'none',
     description: 'none',
     iconUrl: 'none',
+    // An application's logo: a built-in key or an uploaded image of the
+    // application, never of a person.
+    iconKey: 'none',
+    iconImage: 'none',
+    iconType: 'none',
+    iconSize: 'none',
+    iconHash: 'none',
     launchUrl: 'none',
     type: 'none',
     category: 'none',

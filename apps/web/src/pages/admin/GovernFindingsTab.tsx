@@ -1,5 +1,17 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Link } from 'react-router-dom';
+import {
+  Alert,
+  Button,
+  buttonClasses,
+  Empty,
+  Panel,
+  Segmented,
+  SkeletonRows,
+  Status,
+  Table,
+  useToast,
+} from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -98,6 +110,7 @@ export function GovernFindingsTab() {
     `/api/admin/govern/findings?status=${status}`,
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   const sorted = [...(data?.findings ?? [])].sort((a, b) => {
     const byKind = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
@@ -111,18 +124,16 @@ export function GovernFindingsTab() {
           several tabs would need a word saying which tab its button
           applied to. */}
       <div className="mb-4 flex justify-end">
-        <div className="flex gap-2">
-            {(['open', 'accepted', 'resolved'] as const).map((s) => (
-              <Button
-                key={s}
-                variant={status === s ? 'primary' : 'secondary'}
-                size="sm"
-                onClick={() => setStatus(s)}
-              >
-                {s === 'open' ? 'Open' : s === 'accepted' ? 'Accepted' : 'Resolved'}
-              </Button>
-            ))}
-          </div>
+        <Segmented
+          label="Finding status"
+          value={status}
+          onChange={(value) => setStatus(value as typeof status)}
+          options={[
+            { value: 'open', label: 'Open' },
+            { value: 'accepted', label: 'Accepted' },
+            { value: 'resolved', label: 'Resolved' },
+          ]}
+        />
       </div>
 
       {error && <Alert tone="danger">{error}</Alert>}
@@ -130,11 +141,34 @@ export function GovernFindingsTab() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={8} cols={5} />}
+          {!data && loading && <SkeletonRows rows={8} cols={5} />}
 
-          {!loading && sorted.length === 0 && (
+          {/* Accepted and Resolved are filters over the same findings, so an
+              empty one is not an empty queue -- it says so and offers the
+              way back. */}
+          {data && sorted.length === 0 && status !== 'open' && (
             <div className="p-6">
-              <Empty title="Nothing to look at here yet">
+              <Empty
+                title={`No ${status} findings`}
+                action={
+                  <Button variant="secondary" onClick={() => setStatus('open')}>
+                    Show open findings
+                  </Button>
+                }
+              />
+            </div>
+          )}
+
+          {data && sorted.length === 0 && status === 'open' && (
+            <div className="p-6">
+              <Empty
+                title="Nothing to look at here yet"
+                action={
+                  <Link to="/admin/govern?tab=snapshots" className={buttonClasses('secondary')}>
+                    Build a snapshot
+                  </Link>
+                }
+              >
                 Build a snapshot and the standing findings appear on their own — access nobody
                 can explain, access held by people with no contract, orphan accounts, and
                 sources nobody has read.
@@ -142,15 +176,17 @@ export function GovernFindingsTab() {
             </div>
           )}
 
-          {!loading && sorted.length > 0 && (
-            <Table>
+          {sorted.length > 0 && (
+            <Table stickyHeader label="Findings">
               <thead>
                 <tr>
-                  <th>What</th>
-                  <th>Which</th>
-                  <th>Severity</th>
-                  <th>First seen</th>
-                  <th />
+                  <th scope="col">What</th>
+                  <th scope="col">Which</th>
+                  <th scope="col">Severity</th>
+                  <th scope="col">First seen</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -184,6 +220,7 @@ export function GovernFindingsTab() {
                             })
                               .then(() => {
                                 setActionError(null);
+                                toast({ title: 'Finding accepted', body: `Until ${until}` });
                                 reload();
                               })
                               .catch((cause: unknown) =>

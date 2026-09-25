@@ -68,7 +68,7 @@ describe('PeopleTab, finding somebody', () => {
 
     expect(await screen.findByText(/Nobody matches/)).toBeVisible();
     expect(
-      screen.getByRole('button', { name: /clear the search/i }),
+      screen.getByRole('button', { name: /reset filters/i }),
     ).toBeVisible();
   });
 

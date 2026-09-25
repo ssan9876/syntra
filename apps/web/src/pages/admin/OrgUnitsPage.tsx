@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Empty, Field, Panel, Select, SkeletonRows, StateBadge } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
@@ -67,6 +67,7 @@ export function OrgUnitsPage() {
             <Field
               label="Name"
               value={v.name ?? ''}
+              name="name"
               onChange={(x) => set('name', x)}
               error={errs.name}
               placeholder="Finance"
@@ -74,6 +75,7 @@ export function OrgUnitsPage() {
             <Select
               label="Parent"
               value={v.parentId ?? ''}
+              name="parentId"
               onChange={(x) => set('parentId', x)}
               error={errs.parentId}
               options={[
@@ -87,9 +89,9 @@ export function OrgUnitsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={2} />}
+          {!data && loading && <SkeletonRows rows={4} cols={2} />}
 
-          {!loading && data?.orgUnits.length === 0 && (
+          {data && (data.orgUnits ?? []).length === 0 && (
             <div className="p-6">
               <Empty title="No org units yet">
                 Add a unit such as a department or site to scope administrative
@@ -98,7 +100,7 @@ export function OrgUnitsPage() {
             </div>
           )}
 
-          {!loading && roots.length > 0 && (
+          {roots.length > 0 && (
             <ul className="p-2">
               {roots.map((unit) => (
                 <li key={unit.id}>
@@ -148,9 +150,9 @@ function Row({ unit, className = '' }: { unit: OrgUnitRow; className?: string })
         // LABELLED, not hidden. A deactivated unit keeps its name, its place
         // in the tree and the users sitting in it — an administrator needs to
         // see that it is still there and why it grants nothing.
-        <Status tone="inactive">
-          {unit.statusReason ? `inactive — ${unit.statusReason}` : 'inactive'}
-        </Status>
+        <StateBadge state="inactive">
+          {unit.statusReason ? `Inactive — ${unit.statusReason}` : 'Inactive'}
+        </StateBadge>
       )}
     </div>
   );

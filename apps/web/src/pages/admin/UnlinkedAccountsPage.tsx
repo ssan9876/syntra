@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Table } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Table, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -56,6 +56,7 @@ export function UnlinkedAccountsPage() {
   );
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const toast = useToast();
 
   const rows = data?.accounts ?? [];
   const confidentRows = rows.filter(confident);
@@ -66,11 +67,12 @@ export function UnlinkedAccountsPage() {
       body: JSON.stringify({ userId }),
     });
 
-  async function run(work: () => Promise<void>) {
+  async function run(work: () => Promise<void>, done: string) {
     setBusy(true);
     setProblem(null);
     try {
       await work();
+      toast({ title: done });
       reload();
     } catch (cause) {
       setProblem(
@@ -103,7 +105,7 @@ export function UnlinkedAccountsPage() {
                 for (const row of confidentRows) {
                   await link(row.id, row.topCandidate!.personId);
                 }
-              })
+              }, `Linked ${confidentRows.length} account${confidentRows.length === 1 ? '' : 's'}`)
             }
           >
             Link all {confidentRows.length} confident
@@ -118,9 +120,9 @@ export function UnlinkedAccountsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={5} cols={4} />}
+          {!data && loading && <SkeletonRows rows={5} cols={4} />}
 
-          {!loading && rows.length === 0 && (
+          {data && rows.length === 0 && (
             <div className="p-6">
               <Empty title="Every account has a person">
                 Accounts appear here when they are created without one. A
@@ -129,8 +131,8 @@ export function UnlinkedAccountsPage() {
             </div>
           )}
 
-          {!loading && rows.length > 0 && (
-            <Table>
+          {rows.length > 0 && (
+            <Table stickyHeader label="Accounts with no person">
               <thead>
                 <tr>
                   <th scope="col">Account</th>
@@ -186,10 +188,12 @@ export function UnlinkedAccountsPage() {
                           variant="secondary"
                           loading={busy}
                           onClick={() =>
-                            void run(() =>
-                              link(row.id, row.topCandidate!.personId).then(
-                                () => undefined,
-                              ),
+                            void run(
+                              () =>
+                                link(row.id, row.topCandidate!.personId).then(
+                                  () => undefined,
+                                ),
+                              `Linked ${row.login} to ${row.topCandidate!.givenName} ${row.topCandidate!.familyName}`,
                             )
                           }
                         >

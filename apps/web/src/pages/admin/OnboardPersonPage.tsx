@@ -1,11 +1,32 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  Select,
+  StateBadge,
+  useToast,
+  type State,
+  type SummaryError,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
-import { provisionForPerson } from './provision-on-create.js';
+import { provisionForPerson, type PersonProvisionReceipt } from './provision-on-create.js';
 import { useContainerHints } from './use-container-hint.js';
 import { PageHeader } from './PageHeader.js';
+import { usePersonReceipts } from './use-person-receipts.js';
+import {
+  OnboardingReceipt,
+  REQUIRED,
+  receiptEvidence,
+  receiptState,
+  type ReceiptRow,
+} from './onboarding-receipt.js';
 
 /**
  * Onboarding somebody, in one pass.
@@ -20,13 +41,21 @@ import { PageHeader } from './PageHeader.js';
  * One page rather than a stepped wizard. The point is to show what a joiner
  * actually needs all at once, and a wizard puts half the answer behind a Next
  * button — which is how the contract came to be forgotten in the first place.
+ * What made one page hard to use was not its length but that nothing on it
+ * said which of sixteen fields were needed, and the button was below the
+ * fold: so the sections are named, the three required fields are marked, and
+ * the actions stay in reach while the form scrolls.
+ *
+ * It ends on a receipt rather than on the person's page. "Saved" was the
+ * whole answer the old flow gave, and the review's low point was exactly
+ * that — a hire saved without knowing whether they can work. The receipt
+ * keeps polling the target receipts until each is observed or needs a person.
  *
  * `RecordPanel` is not reused here because it posts to exactly one path, and
  * this is a sequence: the contract is addressed by an id that does not exist
  * until the person has been written.
  */
 
-/** What has actually been written, so a failure halfway can say so precisely. */
 /** Somebody the server thinks this person might already be. */
 interface DuplicateCandidate {
   id: string;
@@ -35,6 +64,7 @@ interface DuplicateCandidate {
   businessEmail: string | null;
 }
 
+/** What has actually been written, so a failure halfway can say so precisely. */
 interface Progress {
   personId: string | null;
   personName: string;
@@ -55,6 +85,9 @@ export function OnboardPersonPage() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
   const [wantsLogin, setWantsLogin] = useState(false);
+  /** Everything written, once the whole sequence has run. */
+  const [created, setCreated] = useState<Created | null>(null);
+  const toast = useToast();
   /** People who look like the one being created. Null until asked about. */
   const [duplicates, setDuplicates] = useState<DuplicateCandidate[] | null>(null);
   // Tolerated failure: a caller who may write people but not read the
@@ -110,7 +143,29 @@ export function OnboardPersonPage() {
    * call with one more field, and the sequence that follows -- contract, then
    * login, then provisioning -- is not duplicated for the confirmed path.
    */
+  /**
+   * The fields the server would refuse, caught before anything is written.
+   * Checked here rather than left to the API because the API refuses them one
+   * request at a time — person first, then contract — and a refusal on the
+   * contract arrives after the person already exists.
+   */
+  function missing(): Record<string, string> {
+    const found: Record<string, string> = {};
+    if (!v.givenName?.trim()) found.givenName = 'Enter a given name';
+    if (!v.familyName?.trim()) found.familyName = 'Enter a family name';
+    if (!v.startDate) found.startDate = 'Enter a start date';
+    if (wantsLogin && !v.login?.trim()) found.login = 'Enter a login';
+    if (wantsLogin && !v.loginEmail?.trim()) found.email = 'Enter the login email';
+    return found;
+  }
+
   async function submit(allowDuplicate = false) {
+    const invalid = missing();
+    if (Object.keys(invalid).length > 0) {
+      setProblem(null);
+      setErrors(invalid);
+      return;
+    }
     setBusy(true);
     setProblem(null);
     setErrors({});
@@ -227,9 +282,11 @@ export function OnboardPersonPage() {
 
     // A disabled target is skipped deliberately: a new person should not be
     // the thing that quietly reactivates a target somebody switched off.
+    const receipts: PersonProvisionReceipt[] = [];
     for (const target of (targetsData?.targets ?? []).filter((t) => t.enabled)) {
       try {
-        await provisionForPerson(target.id, done.personId!);
+        const written = await provisionForPerson(target.id, done.personId!);
+        receipts.push(...written.map((receipt) => ({ ...receipt, targetName: receipt.targetName ?? target.name })));
       } catch (cause) {
         // The person, their contract and their login are already written. A
         // provisioning failure is reported and undoes none of them — the run
@@ -242,14 +299,33 @@ export function OnboardPersonPage() {
     }
 
     setBusy(false);
-    navigate(`/admin/people/${done.personId}`);
+    setCreated({ ...done, personId: done.personId!, receipts });
+    toast({ tone: 'success', title: `${personName} added` });
   }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    void submit();
+  }
+
+  const summary: SummaryError[] = [
+    ...Object.entries(errors).map(([field, message]) => ({
+      // The login's address comes back from the API as `email`, which is
+      // also the name its control carries here.
+      field,
+      message,
+    })),
+    ...(problem && !duplicates ? [{ message: problem }] : []),
+  ];
+
+  if (created) {
+    return <CreatedReceipt created={created} wantsLogin={wantsLogin} startDate={v.startDate ?? ''} />;
+  }
+
 
   return (
     <>
-      <PageHeader
-        title="Add someone"
-      />
+      <PageHeader title="Add someone" />
 
       {/* Named rather than counted, and only for what was actually written.
           An administrator whose contract was refused needs to know the person
@@ -295,10 +371,7 @@ export function OnboardPersonPage() {
               <ul className="space-y-1">
                 {duplicates.map((candidate) => (
                   <li key={candidate.id}>
-                    <Link
-                      to={`/admin/people/${candidate.id}`}
-                      className="text-ink underline-offset-2 hover:text-primary hover:underline"
-                    >
+                    <Link to={`/admin/people/${candidate.id}`} className="link">
                       {candidate.givenName} {candidate.familyName}
                     </Link>
                     {candidate.businessEmail && (
@@ -308,11 +381,7 @@ export function OnboardPersonPage() {
                 ))}
               </ul>
               <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  loading={busy}
-                  onClick={() => void submit(true)}
-                >
+                <Button size="sm" loading={busy} onClick={() => void submit(true)}>
                   Create anyway
                 </Button>
                 <Button
@@ -331,122 +400,147 @@ export function OnboardPersonPage() {
         </div>
       )}
 
-      {problem && !duplicates && (
-        <div className="mb-4">
-          <Alert tone="danger">{problem}</Alert>
-        </div>
-      )}
+      <form noValidate onSubmit={onSubmit} className="space-y-6">
+        <ErrorSummary
+          errors={summary}
+          title={progress?.personId ? 'Onboarding stopped' : 'Fix these before adding'}
+        />
 
-      <div className="space-y-4">
-        <Panel title="Who they are">
-          <div className="grid gap-4 p-4 sm:grid-cols-2">
-            <Field
-              label="Given name"
-              value={v.givenName ?? ''}
-              onChange={(x) => set('givenName', x)}
-              error={errors.givenName}
-              placeholder="Maya"
-            />
-            <Field
-              label="Family name"
-              value={v.familyName ?? ''}
-              onChange={(x) => set('familyName', x)}
-              error={errors.familyName}
-              placeholder="Okafor"
-            />
-            <Field
-              label="Business email"
-              type="email"
-              value={v.businessEmail ?? ''}
-              onChange={(x) => set('businessEmail', x)}
-              error={errors.businessEmail}
-              placeholder="maya.okafor@acme.localhost"
-            />
-            <Field
-              label="Personal email"
-              type="email"
-              value={v.personalEmail ?? ''}
-              onChange={(x) => set('personalEmail', x)}
-              error={errors.personalEmail}
-            />
-            <Field
-              label="External id"
-              value={v.externalId ?? ''}
-              onChange={(x) => set('externalId', x)}
-              error={errors.externalId}
-              placeholder="E1042"
-            />
-          </div>
-        </Panel>
+        <FormSection title="Identity">
+          <Field
+            className={REQUIRED}
+            required
+            name="givenName"
+            label="Given name"
+            value={v.givenName ?? ''}
+            onChange={(x) => set('givenName', x)}
+            error={errors.givenName}
+            placeholder="Maya"
+          />
+          <Field
+            className={REQUIRED}
+            required
+            name="familyName"
+            label="Family name"
+            value={v.familyName ?? ''}
+            onChange={(x) => set('familyName', x)}
+            error={errors.familyName}
+            placeholder="Okafor"
+          />
+          <Field
+            name="businessEmail"
+            label="Business email"
+            type="email"
+            value={v.businessEmail ?? ''}
+            onChange={(x) => set('businessEmail', x)}
+            error={errors.businessEmail}
+            placeholder="maya.okafor@acme.localhost"
+          />
+          <Field
+            name="personalEmail"
+            label="Personal email"
+            type="email"
+            value={v.personalEmail ?? ''}
+            onChange={(x) => set('personalEmail', x)}
+            error={errors.personalEmail}
+          />
+          <Field
+            name="externalId"
+            label="External id"
+            value={v.externalId ?? ''}
+            onChange={(x) => set('externalId', x)}
+            error={errors.externalId}
+            placeholder="E1042"
+          />
+          {/* On the person as well as the login: through the placement
+              ladder it decides where the provisioned account lands, so it
+              belongs with who they are rather than behind the login box. */}
+          <Select
+            name="orgUnitId"
+            label="Org unit"
+            value={v.orgUnitId ?? ''}
+            onChange={(x) => set('orgUnitId', x)}
+            error={errors.orgUnitId}
+            options={[
+              { value: '', label: 'None' },
+              ...(unitsData?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
+            ]}
+          />
+        </FormSection>
 
-        <Panel
-          title="What they do"
-        >
-          <div className="grid gap-4 p-4 sm:grid-cols-2">
-            <Field
-              label="Job title"
-              value={v.jobTitle ?? ''}
-              onChange={(x) => set('jobTitle', x)}
-              error={errors.jobTitle}
-              placeholder="Staff Nurse"
-            />
-            <Field
-              label="Department"
-              value={v.department ?? ''}
-              onChange={(x) => set('department', x)}
-              error={errors.department}
-              placeholder="Nursing"
-            />
-            <Field
-              label="Start date"
-              type="date"
-              value={v.startDate ?? ''}
-              onChange={(x) => set('startDate', x)}
-              error={errors.startDate}
-            />
-            <Field
-              label="End date"
-              type="date"
-              value={v.endDate ?? ''}
-              onChange={(x) => set('endDate', x)}
-              error={errors.endDate}
-            />
-            <Field
-              label="Cost centre"
-              value={v.costCentre ?? ''}
-              onChange={(x) => set('costCentre', x)}
-              error={errors.costCentre}
-            />
-            <Field
-              label="Employer"
-              value={v.employer ?? ''}
-              onChange={(x) => set('employer', x)}
-              error={errors.employer}
-            />
-            <Field
-              label="Location"
-              value={v.location ?? ''}
-              onChange={(x) => set('location', x)}
-              error={errors.location}
-            />
-            <Field
-              label="FTE"
-              value={v.fte ?? ''}
-              onChange={(x) => set('fte', x)}
-              error={errors.fte}
-              placeholder="1.0"
-            />
-          </div>
+        <FormSection title="Contract">
+          <Field
+            className={REQUIRED}
+            required
+            name="startDate"
+            label="Start date"
+            type="date"
+            value={v.startDate ?? ''}
+            onChange={(x) => set('startDate', x)}
+            error={errors.startDate}
+          />
+          <Field
+            name="endDate"
+            label="End date"
+            type="date"
+            value={v.endDate ?? ''}
+            onChange={(x) => set('endDate', x)}
+            error={errors.endDate}
+          />
+          <Field
+            name="jobTitle"
+            label="Job title"
+            value={v.jobTitle ?? ''}
+            onChange={(x) => set('jobTitle', x)}
+            error={errors.jobTitle}
+            placeholder="Staff Nurse"
+          />
+          <Field
+            name="department"
+            label="Department"
+            value={v.department ?? ''}
+            onChange={(x) => set('department', x)}
+            error={errors.department}
+            placeholder="Nursing"
+          />
+          <Field
+            name="costCentre"
+            label="Cost centre"
+            value={v.costCentre ?? ''}
+            onChange={(x) => set('costCentre', x)}
+            error={errors.costCentre}
+          />
+          <Field
+            name="employer"
+            label="Employer"
+            value={v.employer ?? ''}
+            onChange={(x) => set('employer', x)}
+            error={errors.employer}
+          />
+          <Field
+            name="location"
+            label="Location"
+            value={v.location ?? ''}
+            onChange={(x) => set('location', x)}
+            error={errors.location}
+          />
+          <Field
+            name="fte"
+            label="FTE"
+            inputMode="decimal"
+            value={v.fte ?? ''}
+            onChange={(x) => set('fte', x)}
+            error={errors.fte}
+            placeholder="1.0"
+          />
 
           {hints.length > 0 && (
             // Rendered as the distinguished name in full, monospaced, rather
             // than as a summary of it. The whole value of this is that
             // somebody reads the actual string and notices the wrong word in
             // it; a paraphrase would defeat the purpose.
-            <div className="border-t border-border-subtle p-4">
-              <p className="mb-2 font-medium text-ink">
-                Where the account will be created
-              </p>
+            <div className="sm:col-span-2">
+              <p className="mb-2 font-medium text-ink">Where the account will be created</p>
               <ul className="space-y-2">
                 {hints.map((hint) => (
                   <li key={hint.targetId} className="text-sm">
@@ -468,54 +562,48 @@ export function OnboardPersonPage() {
               </ul>
             </div>
           )}
-        </Panel>
+        </FormSection>
 
-        <Panel title="Syntra sign-in">
-          <div className="space-y-4 p-4">
-            {/* Off by default, and the hint says why rather than leaving it to
-                be discovered. In a deployment where Syntra is the front door,
-                provisioning creates the directory account and the sync brings
-                the login back on its own — so ticking this for an ordinary
-                joiner produces a second account nobody needed and which the
-                sync did not create. */}
-            <Check
-              label="Also create a Syntra login"
-              checked={wantsLogin}
-              onChange={setWantsLogin}
-            />
-            {wantsLogin && (
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field
-                  label="Login"
-                  value={v.login ?? ''}
-                  onChange={(x) => set('login', x)}
-                  error={errors.login}
-                  placeholder="mokafor"
-                />
-                <Field
-                  label="Email"
-                  type="email"
-                  value={v.loginEmail ?? ''}
-                  onChange={(x) => set('loginEmail', x)}
-                  error={errors.email}
-                />
-                <Select
-                  label="Org unit"
-                  value={v.orgUnitId ?? ''}
-                  onChange={(x) => set('orgUnitId', x)}
-                  error={errors.orgUnitId}
-                  options={[
-                    { value: '', label: 'None' },
-                    ...(unitsData?.orgUnits ?? []).map((u) => ({
-                      value: u.id,
-                      label: u.name,
-                    })),
-                  ]}
-                />
-              </div>
-            )}
-          </div>
-        </Panel>
+        <FormSection
+          title="Sign-in account"
+          status={<StateBadge state={wantsLogin ? 'pending' : 'inactive'}>{wantsLogin ? 'Will be created' : 'None'}</StateBadge>}
+        >
+          {/* Off by default. In a deployment where Syntra is the front door,
+              provisioning creates the directory account and the sync brings
+              the login back on its own — so ticking this for an ordinary
+              joiner produces a second account nobody needed and which the
+              sync did not create. */}
+          <Check
+            className="sm:col-span-2"
+            label="Also create a Syntra login"
+            checked={wantsLogin}
+            onChange={setWantsLogin}
+          />
+          {wantsLogin && (
+            <>
+              <Field
+                className={REQUIRED}
+                required
+                name="login"
+                label="Login"
+                value={v.login ?? ''}
+                onChange={(x) => set('login', x)}
+                error={errors.login}
+                placeholder="mokafor"
+              />
+              <Field
+                className={REQUIRED}
+                required
+                name="email"
+                label="Email"
+                type="email"
+                value={v.loginEmail ?? ''}
+                onChange={(x) => set('loginEmail', x)}
+                error={errors.email}
+              />
+            </>
+          )}
+        </FormSection>
 
         {unplaced.length > 0 && (
           <Alert tone="warning" title="This account would not be placed">
@@ -529,15 +617,7 @@ export function OnboardPersonPage() {
           </Alert>
         )}
 
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            onClick={() => void submit()}
-            loading={busy}
-            disabled={busy || unplaced.length > 0 || progress?.personId != null}
-          >
-            Add someone
-          </Button>
+        <FormActions sticky>
           <Button
             variant="secondary"
             onClick={() => navigate('/admin/users?tab=people')}
@@ -545,8 +625,89 @@ export function OnboardPersonPage() {
           >
             Cancel
           </Button>
-        </div>
-      </div>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={busy}
+            disabled={busy || unplaced.length > 0 || progress?.personId != null}
+          >
+            Add someone
+          </Button>
+        </FormActions>
+      </form>
     </>
   );
+}
+
+interface Created extends Progress {
+  personId: string;
+  /** What each enabled target answered when asked to provision. */
+  receipts: PersonProvisionReceipt[];
+}
+
+const STATE_ORDER: State[] = ['blocked', 'attention', 'running', 'pending', 'setup', 'inactive', 'healthy'];
+
+/** The worst row decides the headline: one blocked target is a blocked hire. */
+function worstState(rows: { state: State }[]): State {
+  return STATE_ORDER.find((state) => rows.some((row) => row.state === state)) ?? 'healthy';
+}
+
+function CreatedReceipt({ created, wantsLogin, startDate }: { created: Created; wantsLogin: boolean; startDate: string }) {
+  const rows: ReceiptRow[] = [
+    {
+      key: 'person',
+      title: 'Person',
+      state: 'healthy',
+      label: 'Saved',
+      evidence: <Link className="link" to={`/admin/people/${created.personId}`}>{created.personName}</Link>,
+    },
+    { key: 'contract', title: 'Contract', state: 'healthy', label: 'Saved', evidence: startDate ? `Starts ${startDate}` : undefined },
+  ];
+  if (wantsLogin && created.userId) {
+    rows.push({
+      key: 'login',
+      title: 'Sign-in account',
+      state: 'healthy',
+      label: 'Created and linked',
+      evidence: <Link className="link" to={`/admin/users/${created.userId}`}>Open login</Link>,
+    });
+  }
+  return <>
+    {created.receipts.length > 0
+      ? <LiveTargets title={created.personName} personId={created.personId} initial={created.receipts} base={rows} />
+      : <>
+        <PageHeader title={created.personName} status={<StateBadge state="healthy">Saved</StateBadge>} />
+        <OnboardingReceipt rows={[...rows, { key: 'targets', title: 'Target systems', state: 'inactive', label: 'None enabled' }]} />
+      </>}
+    <div className="mt-4 flex flex-wrap gap-4">
+      <Link className="link font-medium" to={`/admin/people/${created.personId}`}>Open person</Link>
+      <Link className="link" to="/admin/users?tab=people">Back to people</Link>
+    </div>
+  </>;
+}
+
+/**
+ * The target rows, kept current. The first answer is the one the provision
+ * request returned; after that the shared receipts hook polls while anything
+ * is still moving, so "Planned" becomes "Observed" on this screen rather than
+ * on one the administrator has to go and find.
+ */
+function LiveTargets({ title, personId, initial, base }: { title: string; personId: string; initial: PersonProvisionReceipt[]; base: ReceiptRow[] }) {
+  const live = usePersonReceipts(personId);
+  const receipts = live.receipts && live.receipts.length > 0 ? live.receipts : initial;
+  const names = new Map(initial.map((receipt) => [receipt.targetSystemId, receipt.targetName]));
+  const rows: ReceiptRow[] = [
+    ...base,
+    ...receipts.map((receipt) => ({
+      key: receipt.id,
+      title: receipt.targetName ?? names.get(receipt.targetSystemId) ?? 'Target',
+      ...receiptState(receipt),
+      evidence: receiptEvidence(receipt),
+    })),
+  ];
+  return <>
+    <PageHeader title={title} status={<StateBadge state={worstState(rows)} />} />
+    {live.problem && <div className="mb-4"><Alert tone="warning">{live.problem}</Alert></div>}
+    <OnboardingReceipt rows={rows} />
+  </>;
 }

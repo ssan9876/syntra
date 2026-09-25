@@ -35,6 +35,8 @@ export const en = {
   'login.forgot': 'Forgotten your password?',
   'login.lead': 'Use the account your organization issued you.',
   'login.help': 'Trouble signing in? Contact your IT administrator.',
+  'login.trouble': 'Trouble signing in?',
+  'common.get_help': 'Get help',
   'login.failed': 'That login and password do not match an account.',
 
   'forgot.title': 'Reset your password',
@@ -114,6 +116,16 @@ export const en = {
   'portal.empty_body':
     'When your administrator assigns applications to you, they appear here and open with a single click.',
   'portal.other_group': 'Everything else',
+  'portal.pinned': 'Pinned',
+  'portal.recent': 'Recently used',
+  'portal.all_group': 'All applications',
+  'portal.pin': 'Pin',
+  'portal.unpin': 'Unpin',
+  'portal.pin_label': 'Pin {name}',
+  'portal.unpin_label': 'Unpin {name}',
+  'portal.filter': 'Filter applications',
+  'portal.no_match': 'No applications match “{query}”',
+  'portal.clear_filter': 'Clear filter',
   'shell.administration': 'Administration',
   'shell.security': 'Security',
 
@@ -161,6 +173,8 @@ export const nl: Catalog = {
   'login.forgot': 'Wachtwoord vergeten?',
   'login.lead': 'Gebruik het account dat je organisatie je heeft gegeven.',
   'login.help': 'Lukt aanmelden niet? Neem contact op met je IT-beheerder.',
+  'login.trouble': 'Lukt aanmelden niet?',
+  'common.get_help': 'Hulp krijgen',
   'login.failed': 'Deze gebruikersnaam en dit wachtwoord horen niet bij een account.',
 
   'forgot.title': 'Wachtwoord opnieuw instellen',
@@ -237,6 +251,16 @@ export const nl: Catalog = {
   'portal.empty_body':
     'Zodra je beheerder applicaties aan je toewijst, verschijnen ze hier en open je ze met één klik.',
   'portal.other_group': 'Al het overige',
+  'portal.pinned': 'Vastgezet',
+  'portal.recent': 'Recent gebruikt',
+  'portal.all_group': 'Alle applicaties',
+  'portal.pin': 'Vastzetten',
+  'portal.unpin': 'Losmaken',
+  'portal.pin_label': '{name} vastzetten',
+  'portal.unpin_label': '{name} losmaken',
+  'portal.filter': 'Applicaties filteren',
+  'portal.no_match': 'Geen applicaties gevonden voor “{query}”',
+  'portal.clear_filter': 'Filter wissen',
   'shell.administration': 'Beheer',
   'shell.security': 'Beveiliging',
 
@@ -272,6 +296,8 @@ export const de: Catalog = {
   'login.forgot': 'Passwort vergessen?',
   'login.lead': 'Verwenden Sie das Konto, das Ihre Organisation Ihnen ausgestellt hat.',
   'login.help': 'Probleme bei der Anmeldung? Wenden Sie sich an Ihre IT-Administration.',
+  'login.trouble': 'Probleme bei der Anmeldung?',
+  'common.get_help': 'Hilfe erhalten',
   'login.failed': 'Benutzername und Passwort gehören zu keinem Konto.',
 
   'forgot.title': 'Passwort zurücksetzen',
@@ -349,6 +375,16 @@ export const de: Catalog = {
   'portal.empty_body':
     'Sobald Ihre Administration Ihnen Anwendungen zuweist, erscheinen sie hier und öffnen sich mit einem Klick.',
   'portal.other_group': 'Alles Übrige',
+  'portal.pinned': 'Angeheftet',
+  'portal.recent': 'Zuletzt verwendet',
+  'portal.all_group': 'Alle Anwendungen',
+  'portal.pin': 'Anheften',
+  'portal.unpin': 'Lösen',
+  'portal.pin_label': '{name} anheften',
+  'portal.unpin_label': '{name} lösen',
+  'portal.filter': 'Anwendungen filtern',
+  'portal.no_match': 'Keine Anwendungen passen zu „{query}“',
+  'portal.clear_filter': 'Filter löschen',
   'shell.administration': 'Verwaltung',
   'shell.security': 'Sicherheit',
 

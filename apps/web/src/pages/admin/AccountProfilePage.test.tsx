@@ -317,7 +317,7 @@ describe('AccountProfilePage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
 
-    expect(screen.getByText('Some of this was refused')).toBeVisible();
+    expect(screen.getByText('Fix these before saving')).toBeVisible();
     expect(
       screen.getByText('a whole number between 1 and 200'),
     ).toBeVisible();
@@ -410,5 +410,55 @@ describe('AccountProfilePage', () => {
 
     await screen.findByDisplayValue('OU=Unplaced,DC=acme,DC=test');
     expect(screen.getByRole('button', { name: 'Preview' })).toBeDisabled();
+  });
+
+  it('says the preview is out of date after an edit, rather than leaving an empty space', async () => {
+    // Withdrawing the stale values is half of it. The other half is saying
+    // so: an empty space where a preview was reads as "the templates resolved
+    // to nothing", which is a different and alarming answer.
+    mockFetch();
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('Matches this draft')).toBeVisible();
+    expect(screen.queryByText('Preview is out of date')).toBeNull();
+
+    await userEvent.type(screen.getByLabelText('Container template'), 'x');
+
+    expect(screen.queryByText('anna.novak')).toBeNull();
+    expect(screen.getByText('Out of date — run again')).toBeVisible();
+    expect(screen.getByText('Preview is out of date')).toBeVisible();
+    expect(screen.getByText('Unsaved changes')).toBeVisible();
+
+    // A fresh preview is current again.
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('anna.novak')).toBeVisible();
+    expect(screen.queryByText('Preview is out of date')).toBeNull();
+  });
+
+  it('never calls a preview that has not been run out of date', async () => {
+    mockFetch();
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    await userEvent.type(screen.getByLabelText('Container template'), 'x');
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+  });
+
+  it('links each refused field in the summary to its control', async () => {
+    mockFetch();
+    renderPage();
+
+    const attempts = await screen.findByLabelText('Maximum uniqueness attempts');
+    await userEvent.clear(attempts);
+    await userEvent.type(attempts, '0');
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'Maximum uniqueness attempts: a whole number between 1 and 200',
+      }),
+    );
+    expect(attempts).toHaveFocus();
   });
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Select, Status } from '@syntra/ui';
+import { Alert, Button, Field, Select, StateBadge, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -40,6 +40,7 @@ export function Placement({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const toast = useToast();
 
   const containers = useApiResource<{ containers: string[] }>(
     open ? `/api/admin/targets/${targetSystemId}/containers` : null,
@@ -60,6 +61,7 @@ export function Placement({
       // decision is recorded and the next run retries it. Saying so is more
       // useful than an error the administrator reads as "nothing happened".
       setNote(result.moved ? null : result.message);
+      if (result.moved) toast({ tone: 'success', title: `Moved in ${targetName}` });
       reload();
     } catch (cause) {
       setProblem(
@@ -81,6 +83,12 @@ export function Placement({
       // proposes the move, in a plan somebody reviews.
       setNote(`${targetName} will move this account back to where the rule puts it on its next run.`);
       reload();
+    } catch (cause) {
+      setProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That could not be saved.',
+      );
     } finally {
       setBusy(false);
     }
@@ -97,7 +105,7 @@ export function Placement({
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          <Status tone="warning">Moved by hand</Status>
+          <StateBadge state="attention">Moved by hand</StateBadge>
           <span className="font-mono text-sm text-ink">{placement.container}</span>
           <span className="text-sm text-muted">{placement.reason}</span>
           <Button variant="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
@@ -128,7 +136,7 @@ export function Placement({
               ...(containers.data?.containers ?? []).map((dn) => ({ value: dn, label: dn })),
             ]}
           />
-          <Field label="Why" value={reason} onChange={setReason} required />
+          <Field label="Why" value={reason} onChange={setReason} required placeholder="Seconded to the platform team" />
           {problem && <Alert tone="danger">{problem}</Alert>}
           <div className="flex gap-2">
             <Button

@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Check, Field, Panel } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  Panel,
+  Select,
+  SkeletonRows,
+  useToast,
+  type SummaryError,
+} from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 
 interface Policy {
   requireApprovalForAccountCreation: boolean;
@@ -30,65 +44,157 @@ interface Policy {
 
 interface UserRow { id: string; login: string; displayName: string }
 
+/**
+ * Every whole-number setting, with its label and the range the form accepts.
+ *
+ * One table rather than a bound per call site, because three things read it:
+ * the field, the check that runs before anything is sent, and the error
+ * summary that has to name the field in the same words the field uses.
+ */
+const NUMBERS = {
+  bulkRequeueThreshold: { label: 'Operations in one requeue that need approval', min: 1, max: 10000 },
+  urgentLeaverSloMinutes: { label: 'Urgent departure (high or critical priority): minutes to remove access', min: 1, max: 1440 },
+  offboardSloHours: { label: 'Standard departure: hours', min: 1, max: 2160 },
+  onboardSloHours: { label: 'Hire: hours to verified access', min: 1, max: 2160 },
+  moveSloHours: { label: 'Change: hours to verified access', min: 1, max: 2160 },
+  maxConcurrentTargetOperations: { label: 'Target operations in flight at once', min: 1, max: 256 },
+  receiptRetentionDays: { label: 'Resolved provisioning receipts: days', min: 1, max: 3650 },
+  observationRetentionDays: { label: 'Target observations on resolved work: days', min: 1, max: 3650 },
+  notificationRetentionDays: { label: 'Delivered notification records: days', min: 1, max: 3650 },
+  simulationRetentionDays: { label: 'Simulations: days', min: 1, max: 3650 },
+  lifecycleOperationRetentionDays: { label: 'Resolved operations and idempotency keys: days', min: 1, max: 3650 },
+  // The one that may be blank, which means never.
+  auditRetentionDays: { label: 'Audit events: days', min: 90, max: 3650 },
+} as const;
+
+type NumberKey = keyof typeof NUMBERS;
+
+const LABELS: Record<string, string> = {
+  ...Object.fromEntries(Object.entries(NUMBERS).map(([key, spec]) => [key, spec.label])),
+  privilegedGroupPatterns: 'Privileged group name patterns',
+  escalationOwnerUserId: 'Escalate overdue and unowned failed work to',
+};
+
 function whole(value: string, min: number, max: number): number | null {
   const number = Number(value.trim());
   return value.trim() !== '' && Number.isInteger(number) && number >= min && number <= max ? number : null;
 }
 
+/** The number fields as the strings being typed, from a stored policy. */
+function numbersOf(policy: Policy): Record<NumberKey, string> {
+  const out = {} as Record<NumberKey, string>;
+  for (const key of Object.keys(NUMBERS) as NumberKey[]) {
+    const value = policy[key];
+    out[key] = value === null ? '' : String(value);
+  }
+  return out;
+}
+
+const patternsOf = (policy: Policy) => policy.privilegedGroupPatterns.join(', ');
+const patternList = (text: string) => text.split(',').map((item) => item.trim()).filter(Boolean);
+
+/** A number that is not in range, or '' where blank is allowed. */
+function numberProblem(key: NumberKey, value: string): string | undefined {
+  const spec = NUMBERS[key];
+  if (key === 'auditRetentionDays' && value.trim() === '') return undefined;
+  return whole(value, spec.min, spec.max) === null
+    ? `A whole number between ${spec.min} and ${spec.max}`
+    : undefined;
+}
+
+/**
+ * How lifecycle work is governed: who must approve it, how fast it must
+ * finish, who is told, and how long its evidence is kept.
+ *
+ * One form in four stages, in that order — approvals first because they are
+ * the setting that changes what happens to a request today; retention last
+ * because it is set once and read at audit time. The explanatory paragraphs
+ * each panel used to carry are gone; what they said that a reader needed is in
+ * the labels, and the rest restated them.
+ */
 export function LifecyclePolicyPage() {
+  const toast = useToast();
   const resource = useApiResource<Policy>('/api/admin/lifecycle-policy');
   const users = useApiResource<{ items?: UserRow[]; users?: UserRow[] }>('/api/admin/users?pageSize=100');
+  /** What the server last said the policy is, for "Unsaved changes". */
+  const [baseline, setBaseline] = useState<Policy | null>(null);
   const [form, setForm] = useState<Policy | null>(null);
   const [numbers, setNumbers] = useState<Record<string, string>>({});
   const [patterns, setPatterns] = useState('');
-  const [notice, setNotice] = useState('');
-  const [problem, setProblem] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+
+  const adopt = (policy: Policy) => {
+    setBaseline(policy);
+    setForm(policy);
+    setPatterns(patternsOf(policy));
+    setNumbers(numbersOf(policy));
+  };
+
   useEffect(() => {
-    if (!resource.data) return;
-    setForm(resource.data);
-    setPatterns(resource.data.privilegedGroupPatterns.join(', '));
-    setNumbers({
-      bulkRequeueThreshold: String(resource.data.bulkRequeueThreshold),
-      maxConcurrentTargetOperations: String(resource.data.maxConcurrentTargetOperations),
-      urgentLeaverSloMinutes: String(resource.data.urgentLeaverSloMinutes),
-      onboardSloHours: String(resource.data.onboardSloHours),
-      moveSloHours: String(resource.data.moveSloHours),
-      offboardSloHours: String(resource.data.offboardSloHours),
-      receiptRetentionDays: String(resource.data.receiptRetentionDays),
-      observationRetentionDays: String(resource.data.observationRetentionDays),
-      notificationRetentionDays: String(resource.data.notificationRetentionDays),
-      simulationRetentionDays: String(resource.data.simulationRetentionDays),
-      lifecycleOperationRetentionDays: String(resource.data.lifecycleOperationRetentionDays),
-      auditRetentionDays: resource.data.auditRetentionDays === null ? '' : String(resource.data.auditRetentionDays),
-    });
+    if (resource.data) adopt(resource.data);
   }, [resource.data]);
+
   if (resource.error) return <Alert tone="danger">{resource.error}</Alert>;
-  if (!form) return <Panel><div className="p-4" /></Panel>;
+  if (!form || !baseline) {
+    return (
+      <>
+        <PageHeader title="Lifecycle policy" />
+        <Panel><SkeletonRows rows={4} cols={2} /></Panel>
+      </>
+    );
+  }
+
   const userList = users.data?.items ?? users.data?.users ?? [];
   const set = (patch: Partial<Policy>) => setForm((current) => (current ? { ...current, ...patch } : current));
-  const number = (key: string, label: string, min: number, max: number, note?: string) => (
+
+  const baseNumbers = numbersOf(baseline);
+  const dirty =
+    (Object.keys(baseline) as (keyof Policy)[]).some(
+      (key) => !(key in NUMBERS) && key !== 'privilegedGroupPatterns' && form[key] !== baseline[key],
+    ) ||
+    (Object.keys(NUMBERS) as NumberKey[]).some((key) => (numbers[key] ?? '').trim() !== baseNumbers[key]) ||
+    patternList(patterns).join(',') !== baseline.privilegedGroupPatterns.join(',');
+
+  const number = (key: NumberKey, className?: string) => (
     <Field
-      label={label}
+      name={key}
+      label={NUMBERS[key].label}
       value={numbers[key] ?? ''}
       onChange={(value) => setNumbers((current) => ({ ...current, [key]: value }))}
-      error={numbers[key] !== undefined && numbers[key] !== '' && whole(numbers[key]!, min, max) === null ? `a whole number between ${min} and ${max}` : undefined}
-      warning={note}
+      inputMode="numeric"
+      // Live, once something has been typed: silent while it is right,
+      // stated while it is wrong. A server refusal for the same field wins.
+      error={
+        errors[key] ??
+        (numbers[key] !== undefined && numbers[key] !== '' ? numberProblem(key, numbers[key]!) : undefined)
+      }
+      className={className}
+      {...(key === 'auditRetentionDays' ? { placeholder: 'Never' } : {})}
     />
   );
+
   const save = async () => {
-    setBusy(true); setProblem(''); setNotice('');
-    const bad = Object.entries(numbers).find(([key, value]) => key !== 'auditRetentionDays' && whole(value, 1, 1_000_000) === null);
-    if (bad) { setProblem(`Check the number for ${bad[0]}.`); setBusy(false); return; }
+    setBusy(true); setProblem(null); setErrors({});
+    // Checked before anything is sent, and reported the same way a server
+    // refusal is: every bad number at once, each a link to its box. This used
+    // to report the first one only, by its API key — "Check the number for
+    // bulkRequeueThreshold" — which is a field no reader can find by that name.
+    const local: Record<string, string> = {};
+    for (const key of Object.keys(NUMBERS) as NumberKey[]) {
+      const bad = numberProblem(key, numbers[key] ?? '');
+      if (bad) local[key] = bad;
+    }
+    if (Object.keys(local).length > 0) { setErrors(local); setBusy(false); return; }
     const audit = numbers.auditRetentionDays?.trim() ? whole(numbers.auditRetentionDays, 90, 3650) : null;
-    if (numbers.auditRetentionDays?.trim() && audit === null) { setProblem('Audit retention must be blank (never) or between 90 and 3650 days.'); setBusy(false); return; }
     try {
       const saved = await api<Policy>('/api/admin/lifecycle-policy', {
         method: 'PATCH',
         body: JSON.stringify({
           requireApprovalForAccountCreation: form.requireApprovalForAccountCreation,
           requireApprovalForPrivilegedGroups: form.requireApprovalForPrivilegedGroups,
-          privilegedGroupPatterns: patterns.split(',').map((item) => item.trim()).filter(Boolean),
+          privilegedGroupPatterns: patternList(patterns),
           requireApprovalForUrgentDeparture: form.requireApprovalForUrgentDeparture,
           requireApprovalForBulkRequeue: form.requireApprovalForBulkRequeue,
           bulkRequeueThreshold: Number(numbers.bulkRequeueThreshold),
@@ -109,59 +215,90 @@ export function LifecyclePolicyPage() {
           auditRetentionDays: audit,
         }),
       });
-      setForm(saved);
-      setNotice('Policy saved. Deadlines already set on open work are unchanged.');
+      adopt(saved);
+      // The consequence rides with the confirmation: it is the thing somebody
+      // who has just shortened a deadline would otherwise assume.
+      toast({ tone: 'success', title: 'Policy saved', body: 'Deadlines already set on open work are unchanged.' });
     } catch (error) {
-      setProblem(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : 'The policy could not be saved.');
+      const marked = formFieldErrors(error);
+      setErrors(marked);
+      setProblem(
+        Object.keys(marked).length > 0
+          ? null
+          : error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : 'The policy could not be saved.',
+      );
     } finally { setBusy(false); }
   };
+
+  const summary: SummaryError[] = summaryErrors(errors, LABELS, problem);
+
   return <>
     <PageHeader title="Lifecycle policy" />
-    <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <Panel title="Approvals"><div className="space-y-3 p-4">
-        <p className="text-sm text-muted">A second person must approve before a target is changed. The requester can never approve their own request. Local records (the employee, the contract, a blocked sign-in) are saved regardless; only target writes wait.</p>
-        <Check label="Creating a target account" checked={form.requireApprovalForAccountCreation} onChange={(value) => set({ requireApprovalForAccountCreation: value })} />
-        <Check label="Changing membership of a privileged group" checked={form.requireApprovalForPrivilegedGroups} onChange={(value) => set({ requireApprovalForPrivilegedGroups: value })} />
-        <Field label="Privileged group name patterns (comma separated, matched case-insensitively)" value={patterns} onChange={setPatterns} />
-        <Check label="Target work for an urgent departure" checked={form.requireApprovalForUrgentDeparture} onChange={(value) => set({ requireApprovalForUrgentDeparture: value })} />
-        <Check label="Requeueing many operations at once" checked={form.requireApprovalForBulkRequeue} onChange={(value) => set({ requireApprovalForBulkRequeue: value })} />
-        {number('bulkRequeueThreshold', 'Operations in one requeue that need approval', 1, 10000)}
-      </div></Panel>
-      <Panel title="Service levels"><div className="grid gap-4 p-4 sm:grid-cols-2">
-        {number('urgentLeaverSloMinutes', 'Urgent departure: minutes to remove access', 1, 1440, 'Applies to high and critical priority departures.')}
-        {number('offboardSloHours', 'Standard departure: hours', 1, 2160)}
-        {number('onboardSloHours', 'Hire: hours to verified access', 1, 2160)}
-        {number('moveSloHours', 'Change: hours to verified access', 1, 2160)}
-        {number('maxConcurrentTargetOperations', 'Target operations in flight at once', 1, 256, 'Beyond this, work is deferred visibly and retried every 30 seconds.')}
-        <div className="sm:col-span-2">
-          <label className="block">
-            <span className="font-medium text-ink">Escalation owner</span>
-            <select className="mt-1 block w-full rounded-control border border-border-control bg-bg p-2" value={form.escalationOwnerUserId ?? ''} onChange={(event) => set({ escalationOwnerUserId: event.target.value || null })}>
-              <option value="">Nobody (no escalation)</option>
-              {userList.map((user) => <option key={user.id} value={user.id}>{user.displayName} ({user.login})</option>)}
-            </select>
-          </label>
-          <p className="mt-1 text-sm text-muted">Overdue and breached work is escalated to this person once, and failed work with no owner is sent here.</p>
-        </div>
-      </div></Panel>
-      <Panel title="Notifications"><div className="space-y-3 p-4">
-        <Check label="Tell the owner when an operation fails" checked={form.notifyOnFailure} onChange={(value) => set({ notifyOnFailure: value })} />
-        <Check label="Tell the owner when work passes its due time unacknowledged" checked={form.notifyOnOverdue} onChange={(value) => set({ notifyOnOverdue: value })} />
-        <Check label="Tell the owner when target access is blocked by a guard" checked={form.notifyOnAccessBlocked} onChange={(value) => set({ notifyOnAccessBlocked: value })} />
-        <p className="text-sm text-muted">Every message is written to the delivery record before it is sent; the operation page shows whether it went out.</p>
-      </div></Panel>
-      <Panel title="Retention"><div className="grid gap-4 p-4 sm:grid-cols-2">
-        {number('receiptRetentionDays', 'Resolved provisioning receipts: days', 1, 3650)}
-        {number('observationRetentionDays', 'Target observations on resolved work: days', 1, 3650)}
-        {number('notificationRetentionDays', 'Delivered notification records: days', 1, 3650)}
-        {number('simulationRetentionDays', 'Simulations: days', 1, 3650)}
-        {number('lifecycleOperationRetentionDays', 'Resolved operations and idempotency keys: days', 1, 3650, 'Open operations are never removed. Expiry permits the same key to be used again only after this period.')}
-        <div className="sm:col-span-2">{number('auditRetentionDays', 'Audit events: days (blank means never)', 90, 3650, 'Only events at or before a verified audit checkpoint are ever removed, so the chain still verifies.')}</div>
-        <p className="text-sm text-muted sm:col-span-2">The nightly retention pass records an audit event with every count it removed.</p>
-      </div></Panel>
-      {problem ? <Alert tone="danger">{problem}</Alert> : null}
-      {notice ? <Alert tone="success">{notice}</Alert> : null}
-      <Button type="submit" variant="primary" loading={busy}>Save policy</Button>
+    {/* The form wraps the panel so the save bar can be sticky: `Panel` clips
+        its overflow, and a sticky bar inside it would stick to the panel. */}
+    <form noValidate onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <Panel bodyClassName="space-y-8 p-4">
+        <ErrorSummary errors={summary} {...(Object.keys(errors).length === 0 ? { title: 'Not saved' } : {})} />
+
+        <FormSection title="Second approval before a target changes" number={1}>
+          <Check className="sm:col-span-2" label="Creating a target account" checked={form.requireApprovalForAccountCreation} onChange={(value) => set({ requireApprovalForAccountCreation: value })} />
+          <Check className="sm:col-span-2" label="Changing membership of a privileged group" checked={form.requireApprovalForPrivilegedGroups} onChange={(value) => set({ requireApprovalForPrivilegedGroups: value })} />
+          <Field
+            name="privilegedGroupPatterns"
+            label="Privileged group name patterns, comma separated"
+            value={patterns}
+            onChange={setPatterns}
+            placeholder="Domain Admins, *-admins"
+            className="sm:col-span-2"
+            error={errors.privilegedGroupPatterns}
+            // A state, not a caption: the box does nothing while the approval
+            // it feeds is switched off.
+            warning={!form.requireApprovalForPrivilegedGroups && patterns.trim() ? 'Not used while privileged-group approval is off.' : undefined}
+          />
+          <Check className="sm:col-span-2" label="Target work for an urgent departure" checked={form.requireApprovalForUrgentDeparture} onChange={(value) => set({ requireApprovalForUrgentDeparture: value })} />
+          <Check className="sm:col-span-2" label="Requeueing many operations at once" checked={form.requireApprovalForBulkRequeue} onChange={(value) => set({ requireApprovalForBulkRequeue: value })} />
+          {number('bulkRequeueThreshold')}
+        </FormSection>
+
+        <FormSection title="Service levels" number={2}>
+          {number('urgentLeaverSloMinutes', 'sm:col-span-2')}
+          {number('offboardSloHours')}
+          {number('onboardSloHours')}
+          {number('moveSloHours')}
+          {number('maxConcurrentTargetOperations')}
+          <Select
+            name="escalationOwnerUserId"
+            label={LABELS.escalationOwnerUserId!}
+            value={form.escalationOwnerUserId ?? ''}
+            onChange={(value) => set({ escalationOwnerUserId: value || null })}
+            options={[
+              { value: '', label: 'Nobody (no escalation)' },
+              ...userList.map((user) => ({ value: user.id, label: `${user.displayName} (${user.login})` })),
+            ]}
+            error={errors.escalationOwnerUserId}
+            className="sm:col-span-2"
+          />
+        </FormSection>
+
+        <FormSection title="Notifications" number={3}>
+          <Check className="sm:col-span-2" label="Tell the owner when an operation fails" checked={form.notifyOnFailure} onChange={(value) => set({ notifyOnFailure: value })} />
+          <Check className="sm:col-span-2" label="Tell the owner when work passes its due time unacknowledged" checked={form.notifyOnOverdue} onChange={(value) => set({ notifyOnOverdue: value })} />
+          <Check className="sm:col-span-2" label="Tell the owner when target access is blocked by a guard" checked={form.notifyOnAccessBlocked} onChange={(value) => set({ notifyOnAccessBlocked: value })} />
+        </FormSection>
+
+        <FormSection title="Retention" number={4}>
+          {number('receiptRetentionDays')}
+          {number('observationRetentionDays')}
+          {number('notificationRetentionDays')}
+          {number('simulationRetentionDays')}
+          {number('lifecycleOperationRetentionDays')}
+          {number('auditRetentionDays')}
+        </FormSection>
+      </Panel>
+
+      <FormActions sticky status={dirty ? <span className="text-muted">Unsaved changes</span> : null}>
+        <Button type="submit" variant="primary" loading={busy}>Save policy</Button>
+      </FormActions>
     </form>
   </>;
 }

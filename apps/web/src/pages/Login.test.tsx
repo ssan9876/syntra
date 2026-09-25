@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { SessionProvider } from '../session/SessionProvider.js';
+import { BrandProvider } from '../branding/BrandProvider.js';
 import { Login } from './Login.js';
 
 const json = (body: unknown, status = 200) =>
@@ -125,5 +126,53 @@ describe('Login', () => {
       'aria-invalid',
       'true',
     );
+  });
+});
+
+describe('Login help', () => {
+  const renderBranded = (brand: Record<string, unknown>) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+      Promise.resolve(
+        String(input) === '/api/branding'
+          ? json(brand)
+          : problem('unauthenticated', 401),
+      ),
+    );
+    return render(
+      <MemoryRouter>
+        <BrandProvider>
+          <SessionProvider>
+            <Login />
+          </SessionProvider>
+        </BrandProvider>
+      </MemoryRouter>,
+    );
+  };
+
+  it("links to the tenant's help desk when one is set", async () => {
+    // Somebody who cannot sign in is exactly who needs somewhere to go, and
+    // "contact your IT administrator" assumes they know who that is.
+    renderBranded({ supportUrl: 'https://help.acme.test/', supportLabel: 'IT service desk' });
+    const link = await screen.findByRole('link', { name: 'IT service desk' });
+    expect(link).toHaveAttribute('href', 'https://help.acme.test/');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.queryByText(/contact your IT administrator/i)).toBeNull();
+  });
+
+  it('calls a mailto link "Get help" when the tenant gave it no words', async () => {
+    renderBranded({ supportUrl: 'mailto:it@acme.test', supportLabel: null });
+    const link = await screen.findByRole('link', { name: 'Get help' });
+    expect(link).toHaveAttribute('href', 'mailto:it@acme.test');
+    expect(link).not.toHaveAttribute('target');
+  });
+
+  it('never renders a javascript: link, even one that reached storage', async () => {
+    // The API refuses it on the way in; a row can predate the check.
+    renderBranded({ name: 'Acme', supportUrl: 'javascript:alert(1)', supportLabel: 'Help' });
+    // The title is set from the same response, so once it reads "Acme" the
+    // brand has landed and the absence below is a refusal, not a race.
+    await waitFor(() => expect(document.title).toBe('Acme'));
+    expect(screen.queryByRole('link', { name: 'Help' })).toBeNull();
+    expect(screen.getByText(/contact your IT administrator/i)).toBeInTheDocument();
   });
 });

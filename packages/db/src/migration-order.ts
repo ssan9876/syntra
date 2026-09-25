@@ -144,6 +144,8 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261102090000_credential_lifecycle',
   '20261103101500_support_bundle_export_kind',
   '20261104090000_privacy_data_subject_requests',
+  '20261105000000_tenant_support_destination',
+  '20261105010000_application_icons',
 ];
 
 /**

@@ -1,4 +1,5 @@
 import type { TenantClient } from '@syntra/db';
+import { isSupportUrl } from '@syntra/contracts';
 
 /**
  * What a tenant calls itself, and in what colours.
@@ -16,6 +17,10 @@ export interface Brand {
   logo: string | null;
   primary: string | null;
   accent: string | null;
+  /** Where "Get help" goes on the sign-in page and the portal. */
+  supportUrl: string | null;
+  /** The words on that link; null means the page's own "Get help". */
+  supportLabel: string | null;
 }
 
 export class BrandRefusedError extends Error {}
@@ -136,6 +141,22 @@ export interface BrandInput {
   logo?: string | null | undefined;
   primary?: string | null | undefined;
   accent?: string | null | undefined;
+  supportUrl?: string | null | undefined;
+  supportLabel?: string | null | undefined;
+}
+
+/**
+ * The support destination, re-checked here and not only in the request
+ * schema: this is the one brand field whose failure is hostile rather than
+ * ugly -- a `javascript:` link on the unauthenticated sign-in page -- and a
+ * brand can be written by something other than the admin route.
+ */
+export function assertSupportUrlUsable(url: string): void {
+  if (!isSupportUrl(url)) {
+    throw new BrandRefusedError(
+      'A support link must be an https: address or a mailto: email address. It appears on the sign-in page, before anybody has authenticated.',
+    );
+  }
 }
 
 export async function setBrand(tx: TenantClient, input: BrandInput): Promise<Brand> {
@@ -146,6 +167,12 @@ export async function setBrand(tx: TenantClient, input: BrandInput): Promise<Bra
   if (input.logo) assertLogoUsable(input.logo);
   if (input.primary) assertColourUsable('The primary colour', input.primary);
   if (input.accent) assertColourUsable('The accent colour', input.accent);
+  const supportUrl = input.supportUrl?.trim() || null;
+  if (supportUrl !== null) assertSupportUrlUsable(supportUrl);
+  const supportLabel = input.supportLabel?.trim() || null;
+  if (supportLabel !== null && supportLabel.length > 40) {
+    throw new BrandRefusedError('A support link label longer than 40 characters will not fit beside the sign-in form.');
+  }
 
   const tenant = await tx.tenant.findFirstOrThrow();
   const updated = await tx.tenant.update({
@@ -155,6 +182,10 @@ export async function setBrand(tx: TenantClient, input: BrandInput): Promise<Bra
       brandLogo: input.logo ?? null,
       brandPrimary: input.primary?.toLowerCase() ?? null,
       brandAccent: input.accent?.toLowerCase() ?? null,
+      brandSupportUrl: supportUrl,
+      // A label without a destination is words that go nowhere; dropped
+      // rather than refused, so clearing the link clears both.
+      brandSupportLabel: supportUrl === null ? null : supportLabel,
     },
   });
   return toBrand(updated);
@@ -170,11 +201,15 @@ function toBrand(row: {
   brandLogo: string | null;
   brandPrimary: string | null;
   brandAccent: string | null;
+  brandSupportUrl: string | null;
+  brandSupportLabel: string | null;
 }): Brand {
   return {
     name: row.brandName,
     logo: row.brandLogo,
     primary: row.brandPrimary,
     accent: row.brandAccent,
+    supportUrl: row.brandSupportUrl,
+    supportLabel: row.brandSupportLabel,
   };
 }

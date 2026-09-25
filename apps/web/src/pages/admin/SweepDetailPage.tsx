@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Checkbox, Panel, SkeletonRows, Status, useToast } from '@syntra/ui';
 import { PageHeader } from './PageHeader.js';
+import { RunState } from './run-states.js';
 import { useApiResource } from './hooks.js';
 import { ApiError, api } from '../../session/api.js';
 
@@ -32,12 +33,13 @@ interface SweepDetail {
 
 export function SweepDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, loading, reload } = useApiResource<SweepDetail>(
+  const { data, error, reload } = useApiResource<SweepDetail>(
     id === undefined ? null : `/api/admin/automate/sweeps/${id}`,
   );
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     // Every proposed row starts ticked. Reviewing means UNticking the ones you
@@ -59,6 +61,7 @@ export function SweepDetailPage() {
         method: 'POST',
         body: JSON.stringify({ confirm: true, only: [...ticked] }),
       });
+      toast({ title: 'Sweep applied' });
       reload();
     } catch (cause) {
       setProblem(
@@ -80,15 +83,15 @@ export function SweepDetailPage() {
 
   return (
     <>
-      <PageHeader title="Sweep" />
+      <PageHeader title="Sweep" status={data ? <RunState status={data.status} /> : undefined} />
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}
-      {loading && (
+      {!data && !error && (
         <Panel>
           <SkeletonRows rows={5} cols={3} />
         </Panel>
       )}
-      {!loading && data && (
+      {data && (
         <>
           {data.blockedReason && (
             // Leads with why, and the numbers behind it.
@@ -153,9 +156,8 @@ export function SweepDetailPage() {
                     key={action.id}
                     className="flex items-center gap-3 px-4 py-2"
                   >
-                    <input
-                      type="checkbox"
-                      aria-label={`${action.resourceId} for ${action.subjectPersonId}`}
+                    <Checkbox
+                      label={`${action.resourceId} for ${action.subjectPersonId}`}
                       checked={ticked.has(action.id)}
                       disabled={data.status !== 'previewed'}
                       onChange={() => toggle(action.id)}

@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { SessionProvider } from './session/SessionProvider.js';
 import { BrandProvider } from './branding/BrandProvider.js';
 import { LocaleProvider } from './i18n/LocaleProvider.js';
+import { ToastProvider } from '@syntra/ui';
 import { AppRoutes } from './routes.js';
 import './index.css';
 
@@ -15,7 +16,12 @@ createRoot(document.getElementById('root')!).render(
       <BrandProvider>
         <LocaleProvider>
           <SessionProvider>
-            <AppRoutes />
+            {/* Inside the session, outside the routes: a confirmation raised
+                just before a navigation has to survive the page it was
+                raised on. */}
+            <ToastProvider>
+              <AppRoutes />
+            </ToastProvider>
           </SessionProvider>
         </LocaleProvider>
       </BrandProvider>

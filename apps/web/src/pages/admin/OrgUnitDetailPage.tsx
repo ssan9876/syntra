@@ -8,6 +8,7 @@ import {
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
 } from '@syntra/ui';
@@ -51,7 +52,7 @@ export function OrgUnitDetailPage() {
   const { id } = useParams();
   const can = useCan();
   const navigate = useNavigate();
-  const { data, error, loading, reload } = useApiResource<OrgUnitDetail>(
+  const { data, error, reload } = useApiResource<OrgUnitDetail>(
     `/api/admin/org-units/${id}`,
   );
   // Its error state is deliberately ignored, as on the account record: a
@@ -70,7 +71,8 @@ export function OrgUnitDetailPage() {
   }>(editing ? '/api/admin/org-units' : null);
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (loading || !data) {
+  // Skeleton only before the first answer; an edit reloads the record.
+  if (!data) {
     return (
       <Panel>
         <SkeletonRows rows={4} cols={3} />
@@ -87,6 +89,13 @@ export function OrgUnitDetailPage() {
     <>
       <PageHeader
         title={data.name}
+        status={
+          data.status === 'active' ? (
+            <StateBadge state="healthy">Active</StateBadge>
+          ) : (
+            <StateBadge state="inactive">Inactive</StateBadge>
+          )
+        }
         actions={
           // Only for a locally managed unit. The next sync run reads the unit
           // out of the directory and writes its name and place back, so this
@@ -116,22 +125,9 @@ export function OrgUnitDetailPage() {
               <span className="font-normal text-muted">Top level</span>
             ),
           },
-          {
-            label: 'Status',
-            value:
-              data.status === 'active' ? (
-                <Status tone="active">Active</Status>
-              ) : (
-                <span className="flex flex-wrap items-center gap-2">
-                  <Status tone="inactive">Inactive</Status>
-                  {data.statusReason && (
-                    <span className="font-normal text-muted">
-                      {data.statusReason}
-                    </span>
-                  )}
-                </span>
-              ),
-          },
+          ...(data.status !== 'active' && data.statusReason
+            ? [{ label: 'Why inactive', value: data.statusReason }]
+            : []),
           {
             label: 'Managed by',
             value: local ? (
@@ -172,12 +168,14 @@ export function OrgUnitDetailPage() {
                 <Field
                   label="Name"
                   value={v.name ?? ''}
+                  name="name"
                   onChange={(x) => set('name', x)}
                   error={errs.name}
                 />
                 <Select
                   label="Parent"
                   value={v.parentId ?? ''}
+                  name="parentId"
                   onChange={(x) => set('parentId', x)}
                   error={errs.parentId}
                   options={[
@@ -234,9 +232,11 @@ export function OrgUnitDetailPage() {
                           still blocks the delete. Listing only active ones
                           would leave the reader with an empty unit and a 409
                           that disagrees with it. */}
-                      <Status tone={user.status === 'active' ? 'active' : 'inactive'}>
-                        {user.status === 'active' ? 'Active' : 'Inactive'}
-                      </Status>
+                      {user.status === 'active' ? (
+                        <StateBadge state="healthy">Active</StateBadge>
+                      ) : (
+                        <StateBadge state="inactive">Inactive</StateBadge>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -273,11 +273,11 @@ export function OrgUnitDetailPage() {
                       </Link>
                     </td>
                     <td>
-                      <Status
-                        tone={child.status === 'active' ? 'active' : 'inactive'}
-                      >
-                        {child.status === 'active' ? 'Active' : 'Inactive'}
-                      </Status>
+                      {child.status === 'active' ? (
+                        <StateBadge state="healthy">Active</StateBadge>
+                      ) : (
+                        <StateBadge state="inactive">Inactive</StateBadge>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -68,7 +68,7 @@ describe('SubjectLog', () => {
 
     expect(await screen.findByText('user.unlock')).toBeInTheDocument();
     expect(screen.getByText('auth.login')).toBeInTheDocument();
-    expect(screen.getByText('failure')).toBeInTheDocument();
+    expect(screen.getByText('Failure')).toBeInTheDocument();
   });
 
   /**

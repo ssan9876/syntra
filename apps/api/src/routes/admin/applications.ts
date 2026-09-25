@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import {
+  applicationIconRequest,
   assignApplicationRequest,
   assignmentParams,
   catalogCreateRequest,
@@ -9,6 +10,7 @@ import {
   updateApplicationRequest,
 } from '@syntra/contracts';
 import {
+  ApplicationIconRefusedError,
   CatalogVariableMissingError,
   EntityIdTakenError,
   PERMISSIONS,
@@ -24,6 +26,8 @@ import {
   listApplications,
   listAssignments,
   recordEvent,
+  setApplicationIcon,
+  toApplicationView,
   unassignApplication,
   updateApplication,
 } from '@syntra/core';
@@ -69,8 +73,10 @@ export async function registerAdminApplicationRoutes(
   app.get(
     '/applications',
     { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) },
+    // Each row carries `icon` (`ApplicationIconView`) in place of the icon
+    // bookkeeping columns — the console draws the URL and never sees bytes.
     async (request) => ({
-      applications: await request.db((tx) => listApplications(tx)),
+      applications: (await request.db((tx) => listApplications(tx))).map(toApplicationView),
     }),
   );
 
@@ -230,7 +236,7 @@ export async function registerAdminApplicationRoutes(
         return application;
       });
 
-      return reply.status(201).send(created);
+      return reply.status(201).send(toApplicationView(created));
     },
   );
 
@@ -255,7 +261,72 @@ export async function registerAdminApplicationRoutes(
           sourceIp: request.ip,
           payload: { slug: updated.slug, status: updated.status },
         });
-        return updated;
+        return toApplicationView(updated);
+      });
+    },
+  );
+
+  /**
+   * Sets or clears an application's logo.
+   *
+   * Its own route rather than a field on `PUT /applications/:id`: an upload
+   * is a different kind of write (bytes, checked and hashed, not a string
+   * copied into a column), and its refusals are about the FILE — which is a
+   * different conversation from a slug that is taken. The same permission as
+   * editing the application, because it is editing the application.
+   *
+   * A refusal answers 400 with `errors[{ path: 'icon' }]`, the shape a
+   * schema failure has, so the console puts the reason beside the picker
+   * with the code it already has for every other field.
+   */
+  app.put(
+    '/applications/:id/icon',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = applicationIconRequest.parse(request.body);
+
+      return request.db(async (tx) => {
+        let result;
+        try {
+          result = await setApplicationIcon(tx, id, body.icon);
+        } catch (cause) {
+          if (cause instanceof ApplicationIconRefusedError) {
+            throw new ProblemError(400, 'icon-refused', 'That logo cannot be used', cause.message, {
+              errors: [{ path: 'icon', message: cause.message }],
+            });
+          }
+          throw cause;
+        }
+        if (!result) throw new ProblemError(404, 'not-found', 'Application not found');
+
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'application.icon_update',
+          targetType: 'Application',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          // What changed, never the picture: the audit trail is read far more
+          // often than a logo changes, and 64 KB of base64 in every export is
+          // a cost nobody asked for. The hash identifies the exact file if an
+          // investigation ever needs to match one.
+          payload: {
+            slug: result.slug,
+            icon:
+              result.icon === null
+                ? 'none'
+                : result.icon.kind === 'builtin'
+                  ? { kind: 'builtin', key: result.icon.key }
+                  : {
+                      kind: 'image',
+                      contentType: result.icon.contentType,
+                      bytes: result.icon.bytes,
+                      sha256: result.hash,
+                    },
+          },
+        });
+        return { icon: result.icon };
       });
     },
   );

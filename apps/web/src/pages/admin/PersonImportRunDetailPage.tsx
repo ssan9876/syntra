@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Table, useToast } from '@syntra/ui';
 import { api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
+import { ActionState, RunState } from './run-states.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -64,6 +65,7 @@ export function PersonImportRunDetailPage() {
   const [payload, setPayload] = useState<RunPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -109,6 +111,7 @@ export function PersonImportRunDetailPage() {
     await api(`/api/admin/person-import-runs/${id}/changes/${changeId}/skip`, {
       method: 'POST',
     });
+    toast({ title: 'Change skipped' });
     await load();
   }
 
@@ -134,6 +137,7 @@ export function PersonImportRunDetailPage() {
     <>
       <PageHeader
         title="Import run"
+        status={<RunState status={run.status} />}
         actions={
           isCancellable(run, CANCELLABLE) ? (
             <CancelRunButton
@@ -151,8 +155,7 @@ export function PersonImportRunDetailPage() {
 
       <Panel title="What this run read">
         <p>
-          {run.recordsRead} record{run.recordsRead === 1 ? '' : 's'} read.{' '}
-          <Status tone={run.status === 'failed' ? 'danger' : 'neutral'}>{run.status}</Status>
+          {run.recordsRead} record{run.recordsRead === 1 ? '' : 's'} read.
         </p>
 
         {run.error && <Alert tone="danger">{run.error}</Alert>}
@@ -201,13 +204,13 @@ export function PersonImportRunDetailPage() {
           <p className="text-muted">
             {`${departures.length} of ${denominators.activePersonsFromSource} people this source owns`}
           </p>
-          <Table>
+          <Table stickyHeader label="Leavers">
             <thead>
               <tr>
                 <th scope="col">Employee id</th>
                 <th scope="col">Why</th>
                 <th scope="col">State</th>
-                <th scope="col" />
+                <th scope="col"><span className="sr-only">Skip</span></th>
               </tr>
             </thead>
             <tbody>
@@ -216,9 +219,7 @@ export function PersonImportRunDetailPage() {
                   <td>{change.externalId}</td>
                   <td>{change.message ?? 'not in the file'}</td>
                   <td>
-                    <Status tone={change.status === 'skipped' ? 'neutral' : 'warning'}>
-                      {change.status}
-                    </Status>
+                    <ActionState status={change.status} />
                   </td>
                   <td>
                     {change.status === 'proposed' && (
@@ -236,13 +237,13 @@ export function PersonImportRunDetailPage() {
 
       {[...byType.entries()].map(([changeType, group]) => (
         <Panel key={changeType} title={`${LABELS[changeType] ?? changeType} (${group.length})`}>
-          <Table>
+          <Table stickyHeader label={`${LABELS[changeType] ?? changeType} changes`}>
             <thead>
               <tr>
                 <th scope="col">Employee id</th>
                 <th scope="col">Note</th>
                 <th scope="col">State</th>
-                <th scope="col" />
+                <th scope="col"><span className="sr-only">Skip</span></th>
               </tr>
             </thead>
             <tbody>
@@ -251,9 +252,7 @@ export function PersonImportRunDetailPage() {
                   <td>{change.externalId}</td>
                   <td>{change.message ?? ''}</td>
                   <td>
-                    <Status tone={change.status === 'failed' ? 'danger' : 'neutral'}>
-                      {change.status}
-                    </Status>
+                    <ActionState status={change.status} />
                   </td>
                   <td>
                     {change.status === 'proposed' && (

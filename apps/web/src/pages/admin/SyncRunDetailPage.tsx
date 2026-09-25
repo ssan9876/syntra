@@ -1,10 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  Checkbox,
+  Empty,
+  Panel,
+  SkeletonRows,
+  Table,
+  useToast,
+} from '@syntra/ui';
 import type { SyncRunSummary } from '@syntra/contracts';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import { ActionState, RunState } from './run-states.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -62,7 +73,7 @@ const summarise = (value: Record<string, unknown> | null) =>
 
 export function SyncRunDetailPage() {
   const { id } = useParams();
-  const { data, error, loading, reload } = useApiResource<RunDetail>(
+  const { data, error, reload } = useApiResource<RunDetail>(
     `/api/admin/sync-runs/${id}`,
   );
   // Fetched alongside the run rather than joined server-side: the source is
@@ -118,6 +129,7 @@ export function SyncRunDetailPage() {
    */
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [skipping, setSkipping] = useState<string | null>(null);
+  const toast = useToast();
 
   async function onApply(confirm: boolean, only: string[] | null) {
     setApplying(true);
@@ -131,6 +143,9 @@ export function SyncRunDetailPage() {
         }),
       });
       setExcluded(new Set());
+      // The per-change statuses below are the receipt; this only says the
+      // click took.
+      toast({ title: 'Apply finished' });
       reload();
     } catch {
       setApplyError('The run could not be applied.');
@@ -152,6 +167,7 @@ export function SyncRunDetailPage() {
     setApplyError(null);
     try {
       await api(`/api/admin/sync-changes/${changeId}/skip`, { method: 'POST' });
+      toast({ title: 'Change skipped' });
       reload();
     } catch (cause) {
       setApplyError(
@@ -165,7 +181,9 @@ export function SyncRunDetailPage() {
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (loading || !data) {
+  // Skeleton only before the first answer: this page polls while a run is
+  // moving, and a reload keeps the previous run on screen.
+  if (!data) {
     return (
       <Panel>
         <SkeletonRows rows={6} cols={4} />
@@ -208,6 +226,7 @@ export function SyncRunDetailPage() {
     <>
       <PageHeader
         title="Sync run"
+        status={<RunState status={data.status} />}
         actions={
           <div className="flex flex-wrap items-center gap-3">
             {partial && (
@@ -294,17 +313,12 @@ export function SyncRunDetailPage() {
               // A deliberate step, stated in words, before Apply does
               // anything at all. Never window.confirm: a native dialog is
               // dismissed reflexively and shows none of the numbers above.
-              <label className="mt-3 flex items-start gap-2.5">
-                <input
-                  type="checkbox"
-                  checked={confirmed}
-                  onChange={(e) => setConfirmed(e.target.checked)}
-                  className="mt-0.5 size-4 shrink-0 accent-primary"
-                />
-                <span>
-                  I have read these numbers and want to apply this run anyway.
-                </span>
-              </label>
+              <Check
+                className="mt-3"
+                checked={confirmed}
+                onChange={setConfirmed}
+                label="I have read these numbers and want to apply this run anyway."
+              />
             )}
           </Alert>
         )}
@@ -366,7 +380,7 @@ export function SyncRunDetailPage() {
               key={type}
               title={`${LABELS[type] ?? type} (${changes.length})`}
             >
-              <Table>
+              <Table stickyHeader label={`${LABELS[type] ?? type} changes`}>
                 <thead>
                   <tr>
                     <th scope="col" className="w-10">
@@ -391,21 +405,19 @@ export function SyncRunDetailPage() {
                     <tr key={change.id}>
                       <td>
                         {change.status === 'proposed' && (
-                          <input
-                            type="checkbox"
+                          <Checkbox
                             checked={!excluded.has(change.id)}
-                            onChange={(e) =>
+                            onChange={(on) =>
                               setExcluded((current) => {
                                 const next = new Set(current);
-                                if (e.target.checked) next.delete(change.id);
+                                if (on) next.delete(change.id);
                                 else next.add(change.id);
                                 return next;
                               })
                             }
-                            aria-label={`Apply this ${(
+                            label={`Apply this ${(
                               LABELS[change.changeType] ?? change.changeType
                             ).toLowerCase()} change`}
-                            className="size-4 accent-primary"
                           />
                         )}
                       </td>
@@ -416,26 +428,15 @@ export function SyncRunDetailPage() {
                         {summarise(change.after)}
                       </td>
                       <td>
-                        {change.status === 'conflict' ? (
+                        {change.status === 'conflict' || change.status === 'failed' ? (
                           <span className="flex flex-wrap items-center gap-2">
-                            <Status tone="warning">Conflict</Status>
+                            <ActionState status={change.status} />
                             <span className="text-sm text-muted">
                               {change.message}
                             </span>
                           </span>
-                        ) : change.status === 'applied' ? (
-                          <Status tone="active">Applied</Status>
-                        ) : change.status === 'failed' ? (
-                          <span className="flex flex-wrap items-center gap-2">
-                            <Status tone="danger">Failed</Status>
-                            <span className="text-sm text-muted">
-                              {change.message}
-                            </span>
-                          </span>
-                        ) : change.status === 'skipped' ? (
-                          <Status tone="inactive">Skipped</Status>
                         ) : (
-                          <Status tone="neutral">{change.status}</Status>
+                          <ActionState status={change.status} />
                         )}
                       </td>
                       <td className="text-right">

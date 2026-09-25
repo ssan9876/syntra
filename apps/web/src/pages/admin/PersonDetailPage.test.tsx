@@ -527,4 +527,43 @@ describe('PersonDetailPage contract editing', () => {
     await waitFor(() => expect(body).toBeDefined());
     expect(body!.jobTitle).toBeNull();
   });
+
+  /**
+   * The page's one answer. A failed target makes the whole person "Requires
+   * intervention", and the next step is attached: the exact run, not the
+   * newest one, and a retry of that target.
+   */
+  it('leads with the lifecycle verdict and the next action for the failing target', async () => {
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/users/unlinked': () => json({ accounts: [] }),
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/audit?subject=p1&subject=u1': () => json({ events: [], chainValid: true }),
+      '/api/admin/persons/p1/provision-receipts': () => json({ receipts: [
+        { id: 'r1', targetSystemId: 't1', targetName: 'Directory', status: 'applied', runId: 'run1', runIds: ['run1'], message: 'Confirmed.', createdAt: '2026-09-01T09:00:00.000Z' },
+        { id: 'r2', targetSystemId: 't2', targetName: 'Mail', status: 'failed', runId: 'run2', runIds: ['run2'], message: 'Mailbox quota refused.', createdAt: '2026-09-01T09:01:00.000Z' },
+      ] }),
+    });
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Jo Doe' });
+    expect(await within(heading.parentElement!).findByText('Requires intervention')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review the Mail run' })).toHaveAttribute('href', '/admin/targets/t2/runs/run2');
+    expect(screen.getByRole('button', { name: 'Retry Mail' })).toBeInTheDocument();
+  });
+
+  it('says access is ending for a departed person whose sign-in is still live', async () => {
+    mockRoutes({
+      '/api/admin/persons/p1': () => json({ ...person, status: 'inactive' }),
+      '/api/admin/users/unlinked': () => json({ accounts: [] }),
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/audit?subject=p1&subject=u1': () => json({ events: [], chainValid: true }),
+      '/api/admin/persons/p1/provision-receipts': () => json({ receipts: [] }),
+      '/api/admin/persons/p1/offboarding': () => json({ revision: 'a', accounts: [], targets: [{ id: 'ta', status: 'disabled' }], latestAttempt: null }),
+    });
+    renderPage();
+
+    expect(await screen.findByText('Access ending')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review unfinished departures' })).toBeInTheDocument();
+  });
 });

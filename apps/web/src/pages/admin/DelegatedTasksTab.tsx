@@ -7,8 +7,10 @@ import {
   Field,
   Panel,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
@@ -90,6 +92,7 @@ export function DelegatedTasksTab() {
   const [adding, setAdding] = useState(false);
   const [openRuns, setOpenRuns] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const toast = useToast();
 
   const tasks = data?.tasks ?? [];
   const actions = actionData?.actions ?? [];
@@ -113,6 +116,7 @@ export function DelegatedTasksTab() {
           onCancel={() => setAdding(false)}
           onSaved={() => {
             setAdding(false);
+            toast({ title: 'Task created' });
             reload();
           }}
         />
@@ -120,8 +124,8 @@ export function DelegatedTasksTab() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={3} cols={4} />}
-          {!loading && tasks.length === 0 && !adding && (
+          {!data && loading && <SkeletonRows rows={3} cols={4} />}
+          {data && tasks.length === 0 && !adding && (
             <div className="p-6">
               <Empty title="Nothing is delegated yet">
                 A task lets somebody on the service desk do one thing —
@@ -131,7 +135,7 @@ export function DelegatedTasksTab() {
             </div>
           )}
 
-          {!loading && tasks.length > 0 && (
+          {tasks.length > 0 && (
             <Table>
               <thead>
                 <tr>
@@ -143,7 +147,7 @@ export function DelegatedTasksTab() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
+              <tbody>
                 {tasks.map((task) => {
                   const audience = readAudience(task.audienceCondition);
                   return (
@@ -152,7 +156,10 @@ export function DelegatedTasksTab() {
                     <Fragment key={task.id}>
                     <tr>
                       <td>
-                        <div className="font-medium text-ink">{task.name}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-ink">{task.name}</span>
+                          {!task.enabled && <StateBadge state="inactive">Paused</StateBadge>}
+                        </div>
                         {task.description && (
                           <div className="text-sm text-muted">{task.description}</div>
                         )}
@@ -162,7 +169,7 @@ export function DelegatedTasksTab() {
                         {/* A task nobody can run is the state somebody left
                             half-configured, and it is worth saying so loudly
                             rather than showing an empty cell. */}
-                        {audience.kind === 'nobody' && <Status tone="warning">Nobody</Status>}
+                        {audience.kind === 'nobody' && <StateBadge state="attention">Nobody</StateBadge>}
                         {audience.kind === 'everyone' && (
                           <Status tone="neutral">Anyone with a contract</Status>
                         )}
@@ -200,6 +207,7 @@ export function DelegatedTasksTab() {
                                     enabled: !task.enabled,
                                   }),
                                 });
+                                toast({ title: task.enabled ? 'Task paused' : 'Task resumed' });
                                 reload();
                               } finally {
                                 setBusy(null);
@@ -252,7 +260,7 @@ function TaskRuns({ taskId }: { taskId: string }) {
     `/api/admin/automate/tasks/${taskId}/runs`,
   );
 
-  if (loading) return <SkeletonRows rows={2} cols={3} />;
+  if (!data && loading) return <SkeletonRows rows={2} cols={3} />;
   if (error) return <Alert tone="danger">{error}</Alert>;
 
   const runs = data?.runs ?? [];
@@ -270,19 +278,19 @@ function TaskRuns({ taskId }: { taskId: string }) {
             <th scope="col">What happened</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-border-subtle">
+        <tbody>
           {runs.map((run) => (
             <tr key={run.id}>
               <td className="whitespace-nowrap">
                 {new Date(run.createdAt).toLocaleString()}
               </td>
               <td>
-                {run.outcome === 'success' && <Status tone="active">Done</Status>}
-                {run.outcome === 'failure' && <Status tone="danger">Failed</Status>}
+                {run.outcome === 'success' && <StateBadge state="healthy">Done</StateBadge>}
+                {run.outcome === 'failure' && <StateBadge state="blocked">Failed</StateBadge>}
                 {/* Its own tone, not `danger`. A refusal is the rule working,
                     and reading it as a fault sends somebody to fix the wrong
                     thing. */}
-                {run.outcome === 'refused' && <Status tone="warning">Refused</Status>}
+                {run.outcome === 'refused' && <StateBadge state="attention">Refused</StateBadge>}
               </td>
               <td className="text-muted">{run.message}</td>
             </tr>

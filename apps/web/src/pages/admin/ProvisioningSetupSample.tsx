@@ -1,36 +1,69 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, SkeletonRows, Table, type ComboOption } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-interface Person { id: string; givenName: string; familyName: string }
-interface Contract { id: string; startDate: string; endDate: string | null; department: string | null; isPrimary: boolean }
-function SampleDetail({ person }: { person: Person }) {
-  const detail = useApiResource<Person & { contracts: Contract[] }>(`/api/admin/persons/${person.id}`);
-  if (detail.loading) return <SkeletonRows rows={2} cols={1} />;
+import { PersonPicker } from './PickerNote.js';
+import type { SampleLike } from './provisioning-readiness.js';
+
+interface Contract { id: string; startDate: string; endDate: string | null; department: string | null; jobTitle?: string | null; isPrimary: boolean }
+
+function SampleDetail({ person, onInspect }: { person: ComboOption; onInspect(sample: SampleLike | null): void }) {
+  const detail = useApiResource<{ contracts: Contract[] }>(`/api/admin/persons/${person.value}`);
+  const contracts = detail.data?.contracts ?? null;
+  // Reported only once the contracts are READ. A name picked in the box is
+  // not an inspection; the dates on screen are.
+  useEffect(() => {
+    if (contracts) onInspect({ personId: person.value, name: person.label, contracts: contracts.length });
+  }, [contracts, person, onInspect]);
+
+  if (!detail.data && detail.loading) return <SkeletonRows rows={2} cols={4} />;
   if (detail.error) return <Alert tone="danger">{detail.error}</Alert>;
-  return <div className="mt-4">
-    <h3 className="font-medium">{person.givenName} {person.familyName}</h3>
-    {detail.data?.contracts.length ? <ul className="mt-2 space-y-2 text-sm text-muted">{detail.data.contracts.map((contract) => <li key={contract.id}>{contract.isPrimary ? 'Primary contract' : 'Additional contract'}: {contract.department ?? 'No department'} · Starts {contract.startDate.slice(0, 10)} · {contract.endDate ? `Ends ${contract.endDate.slice(0, 10)}` : 'No end date'}</li>)}</ul> : <p className="mt-2 text-sm text-muted">No employment contract saved. Lifecycle dates cannot be checked.</p>}
-    <p className="mt-2 text-sm text-muted">These are saved employment dates. Actual access dates depend on all contracts, matching rules and the target’s lifecycle policy; inspect a fresh target run before applying.</p>
-    <div className="mt-2 flex flex-wrap gap-4 text-sm"><Link className="text-primary underline" to={`/admin/people/${person.id}`}>Review employee and contracts</Link><Link className="text-primary underline" to={`/admin/people/${person.id}/access`}>Inspect recorded access</Link></div>
+  return <div className="mt-4 space-y-3">
+    {contracts && contracts.length > 0 ? (
+      <Table tight>
+        <caption className="sr-only">Contracts of {person.label}</caption>
+        <thead><tr><th scope="col">Contract</th><th scope="col">Department</th><th scope="col">Job title</th><th scope="col">Starts</th><th scope="col">Ends</th></tr></thead>
+        <tbody>{contracts.map((contract) => <tr key={contract.id}>
+          <td>{contract.isPrimary ? 'Primary' : 'Additional'}</td>
+          <td>{contract.department ?? '—'}</td>
+          <td>{contract.jobTitle ?? '—'}</td>
+          <td className="tabular-nums">{contract.startDate.slice(0, 10)}</td>
+          <td className="tabular-nums">{contract.endDate ? contract.endDate.slice(0, 10) : 'Open-ended'}</td>
+        </tr>)}</tbody>
+      </Table>
+    ) : <Alert tone="warning">No employment contract saved. Lifecycle dates cannot be checked for {person.label}.</Alert>}
+    <div className="flex flex-wrap gap-4 text-sm">
+      <Link className="link" to={`/admin/people/${person.value}`}>Review employee and contracts</Link>
+      <Link className="link" to={`/admin/people/${person.value}/access`}>Inspect recorded access</Link>
+    </div>
   </div>;
 }
-function SearchResults({ query }: { query: string }) {
-  const people = useApiResource<{ persons: Person[]; total: number }>(`/api/admin/persons?q=${encodeURIComponent(query)}&pageSize=20`);
-  const [person, setPerson] = useState<Person | null>(null);
-  if (people.loading) return <SkeletonRows rows={2} cols={1} />;
-  if (people.error) return <Alert tone="danger">{people.error}</Alert>;
-  return <>
-    {people.data?.persons.length ? <ul className="mt-3 flex flex-wrap gap-2">{people.data.persons.map((item) => <li key={item.id}><Button size="sm" aria-pressed={person?.id === item.id} onClick={() => setPerson(item)}>{item.givenName} {item.familyName}</Button></li>)}</ul> : <p className="mt-3 text-sm text-muted">No employees match. Import an employee or adjust the search.</p>}
-    {!!people.data && people.data.total > people.data.persons.length && <p className="mt-2 text-sm text-muted">Showing the first 20 results. Refine the search to find another employee.</p>}
-    {person && <SampleDetail key={person.id} person={person} />}
-  </>;
-}
-export function ProvisioningSetupSample() {
-  const [draft, setDraft] = useState('');
-  const [query, setQuery] = useState('');
-  return <Panel><div className="p-5"><h2 className="mb-3 font-semibold text-ink">Inspect a sample employee</h2><p className="mb-3 text-sm text-muted">Search saved employees by name or email, then verify the imported contract dates. Search includes employees from all HR sources.</p>
-    <form className="flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); setQuery(draft.trim()); }}><Field label="Employee name or email" value={draft} onChange={setDraft} /><Button type="submit" disabled={!draft.trim()}>Find employee</Button></form>
-    {query && <SearchResults key={query} query={query} />}
-  </div></Panel>;
+
+/**
+ * Step 3 of setup, in place: pick anybody the HR feed brought in and read
+ * their contract dates.
+ *
+ * The picker asks the server, so the employee somebody means to check is
+ * findable however large the directory is — the old version searched on
+ * submit and then showed twenty buttons.
+ *
+ * Not a `Panel`: a panel clips its overflow, and the picker's list is an
+ * overlay that has to be able to hang below the box.
+ */
+export function ProvisioningSetupSample({ onInspect }: { onInspect(sample: SampleLike | null): void }) {
+  const [person, setPerson] = useState<ComboOption | null>(null);
+  return <section id="sample-employee" aria-labelledby="sample-employee-title" tabIndex={-1} className="rounded-panel border border-border-subtle bg-bg">
+    <header className="rounded-t-panel border-b border-border-subtle bg-surface px-4 py-3">
+      <h2 id="sample-employee-title" className="text-md font-semibold text-ink">Sample employee</h2>
+    </header>
+    <div className="p-4">
+      <PersonPicker
+        label="Employee"
+        value={person}
+        onChange={(next) => { setPerson(next); if (!next) onInspect(null); }}
+        className="max-w-md"
+      />
+      {person && <SampleDetail key={person.value} person={person} onInspect={onInspect} />}
+    </div>
+  </section>;
 }

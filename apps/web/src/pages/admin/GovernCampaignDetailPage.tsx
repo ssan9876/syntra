@@ -9,12 +9,13 @@ import {
   Panel,
   Select,
   SkeletonRows,
-  Status,
   Table,
+  useToast,
 } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { CampaignState } from './GovernCampaignsTab.js';
 
 interface Signal {
   personId: string;
@@ -59,6 +60,7 @@ export function GovernCampaignDetailPage() {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [rebaseTo, setRebaseTo] = useState('');
   const [started, setStarted] = useState<string | null>(null);
+  const toast = useToast();
 
   const { data: snapshotList } = useApiResource<{
     snapshots: { id: string; asOf: string; status: string }[];
@@ -83,12 +85,13 @@ export function GovernCampaignDetailPage() {
     <>
       <PageHeader
         title={data?.campaign.name ?? 'Access review'}
+        status={data ? <CampaignState status={data.campaign.status} /> : undefined}
       />
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
       {actionError !== null && <Alert tone="danger">{actionError}</Alert>}
       {started !== null && <Alert tone="info">{started}</Alert>}
-      {loading && <SkeletonRows rows={6} cols={4} />}
+      {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
       {data !== null && (
         <div className="mt-6 space-y-6">
@@ -233,7 +236,9 @@ export function GovernCampaignDetailPage() {
                 onClick={() => {
                   const when = window.prompt('Extend the due date to (YYYY-MM-DD):');
                   if (when === null || when.trim() === '') return;
-                  act(`/api/admin/govern/campaigns/${data.campaign.id}/extend`, { dueAt: when }, () => {});
+                  act(`/api/admin/govern/campaigns/${data.campaign.id}/extend`, { dueAt: when }, () =>
+                    toast({ title: 'Due date extended' }),
+                  );
                 }}
               >
                 Extend the due date
@@ -308,7 +313,7 @@ export function GovernCampaignDetailPage() {
           </Panel>
 
           <p className="text-muted">
-            <Status tone="neutral">{data.campaign.status.replace(/_/g, ' ')}</Status> due{' '}
+            Due{' '}
             {new Date(data.campaign.dueAt).toLocaleDateString()}
             {data.campaign.dueAt !== data.campaign.originalDueAt &&
               `, extended from ${new Date(data.campaign.originalDueAt).toLocaleDateString()}`}

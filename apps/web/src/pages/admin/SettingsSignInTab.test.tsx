@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { ToastProvider } from '@syntra/ui';
 import { SettingsSignInTab } from './SettingsSignInTab.js';
 
 const settings = {
@@ -34,7 +35,9 @@ const json = (body: unknown, status = 200) =>
 const renderPage = () =>
   render(
     <MemoryRouter>
-      <SettingsSignInTab />
+      <ToastProvider>
+        <SettingsSignInTab />
+      </ToastProvider>
     </MemoryRouter>,
   );
 
@@ -214,7 +217,8 @@ describe('the primary domain, and the passkeys it would break', () => {
       screen.getByRole('button', { name: /Change the domain and invalidate 3 keys/ }),
     );
 
-    await waitFor(() => expect(screen.getByText('Settings saved.')).toBeInTheDocument());
+    // Confirmed by a toast now, not a line at the foot of the form.
+    expect(await screen.findByText('Settings saved')).toBeInTheDocument();
     expect(attempt).toBe(2);
     const sent = JSON.parse(String(calls.filter((c) => c.init?.method === 'PUT').at(-1)!.init!.body));
     expect(sent).toMatchObject({ primaryDomain: 'moved.example.com', ackPasskeys: 3 });

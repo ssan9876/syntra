@@ -184,6 +184,11 @@ export async function registerAdminTenantRoutes(
             primary: brand.primary,
             accent: brand.accent,
             logo: brand.logo === null ? 'none' : 'set',
+            // In full, unlike the logo: it is a short string, and "who pointed
+            // the sign-in page's help link at this address, and when" is
+            // precisely what an investigation of a phishing report asks.
+            supportUrl: brand.supportUrl,
+            supportLabel: brand.supportLabel,
           },
         });
         return brand;

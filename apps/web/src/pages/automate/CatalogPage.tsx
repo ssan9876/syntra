@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Alert,
+  Button,
   Empty,
   ListControls,
   Panel,
@@ -121,7 +122,7 @@ export function CatalogPage() {
               />
             </div>
 
-            {loading && (
+            {!data && loading && (
               <div className="mt-6">
                 <Panel>
                   <SkeletonRows rows={4} cols={3} />
@@ -129,16 +130,25 @@ export function CatalogPage() {
               </div>
             )}
 
-            {!loading && products.length === 0 && (
+            {/* Two different absences, told apart: a search that matched
+                nothing is undone here, and an empty catalog is not. */}
+            {data && products.length === 0 && query.trim() !== '' && (
+              <div className="mt-6">
+                <Empty
+                  title="Nothing matches that search"
+                  action={<Button onClick={() => setQuery('')}>Clear the search</Button>}
+                />
+              </div>
+            )}
+            {data && products.length === 0 && query.trim() === '' && (
               <div className="mt-6">
                 <Empty title="Nothing to ask for yet">
-                  Either nothing has been published to you, or your search
-                  matched nothing. This is not an error.
+                  Nothing has been published to you. This is not an error.
                 </Empty>
               </div>
             )}
 
-            {!loading &&
+            {data &&
               categories.map((category) => (
                 <div key={category} className="mt-6">
                   <Panel title={category}>

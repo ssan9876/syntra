@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, Status, Table, useToast } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { ActionState, RunState } from './run-states.js';
 
 interface Dispatch {
   id: string;
@@ -60,6 +61,7 @@ export function GovernBatchPage() {
     id === undefined ? null : `/api/admin/govern/batches/${id}`,
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   const rows = data?.dispatches ?? [];
   const dispatchable = rows.filter((d) => DISPATCHABLE.includes(d.route));
@@ -76,11 +78,12 @@ export function GovernBatchPage() {
     <>
       <PageHeader
         title="Revocations"
+        status={data ? <RunState status={data.batch.status} /> : undefined}
       />
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
       {actionError !== null && <Alert tone="danger">{actionError}</Alert>}
-      {loading && <SkeletonRows rows={6} cols={4} />}
+      {data === null && loading && <SkeletonRows rows={6} cols={4} />}
 
       {/* A blocked batch LEADS with why and the numbers — above the rows, the
           same screen shape as Directory Sync's blocked run and Provision's
@@ -127,13 +130,15 @@ export function GovernBatchPage() {
           )}
 
           <Panel title={`${dispatchable.length} removals Govern can dispatch`}>
-            <Table>
+            <Table stickyHeader label="Removals">
               <thead>
                 <tr>
-                  <th>Person</th>
-                  <th>Resource</th>
-                  <th>What happens</th>
-                  <th />
+                  <th scope="col">Person</th>
+                  <th scope="col">Resource</th>
+                  <th scope="col">What happens</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -160,6 +165,7 @@ export function GovernBatchPage() {
                             })
                               .then(() => {
                                 setActionError(null);
+                                toast({ title: 'Row skipped' });
                                 reload();
                               })
                               .catch(() => setActionError('Could not skip that row.'));
@@ -168,7 +174,7 @@ export function GovernBatchPage() {
                           Skip
                         </Button>
                       ) : (
-                        <Status tone="inactive">{d.status}</Status>
+                        <ActionState status={d.status} />
                       )}
                     </td>
                   </tr>
@@ -236,6 +242,7 @@ export function GovernBatchPage() {
                 })
                   .then(() => {
                     setActionError(null);
+                    toast({ title: 'Batch dispatched' });
                     reload();
                   })
                   .catch((cause: unknown) =>

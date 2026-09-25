@@ -75,7 +75,11 @@ export function ListControls({
 
   return (
     <div className="mb-4 flex flex-wrap items-end gap-3">
+      {/* Wide enough for its own placeholder. At the browser's default an
+          input cut "Employee, status or target" off mid-word, and a
+          placeholder that names the searchable fields is only useful whole. */}
       <Field
+        className="w-80 max-w-full"
         label={searchLabel}
         type="search"
         value={draft}

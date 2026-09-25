@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
 import { PageHeader } from './PageHeader.js';
 import { ApplicationSso } from './ApplicationSso.js';
+import { AppLogoPicker } from './AppLogoPicker.js';
+import type { ApplicationIconView } from '@syntra/contracts';
 
 type SubjectType = 'user' | 'group' | 'orgUnit';
 
@@ -47,6 +49,14 @@ export function ApplicationDetailPage() {
     '/api/admin/groups?pageSize=200',
   );
   const { data: orgUnitsData } = useApiResource<{ orgUnits: Named[] }>('/api/admin/org-units');
+  // The application itself, for its name and logo. There is no single-record
+  // read; the list carries both, and a catalog is tens of rows, not
+  // thousands.
+  const { data: applicationsData } = useApiResource<{
+    applications: { id: string; name: string; icon?: ApplicationIconView }[];
+  }>('/api/admin/applications');
+  const application = applicationsData?.applications?.find((row) => row.id === id) ?? null;
+  const [savedIcon, setSavedIcon] = useState<ApplicationIconView | undefined>(undefined);
 
   const users: Named[] = (usersData?.users ?? []).map((row) => ({
     id: row.id,
@@ -119,24 +129,17 @@ export function ApplicationDetailPage() {
 
   const picker = (type: SubjectType, options: Named[]) => (
     <div className="flex flex-wrap items-end gap-2">
-      <div className="min-w-56 flex-1">
-        <label htmlFor={`pick-${type}`} className="mb-1.5 block font-medium text-ink">
-          {LABELS[type]}
-        </label>
-        <select
-          id={`pick-${type}`}
-          value={chosen[type]}
-          onChange={(e) => setChosen((c) => ({ ...c, [type]: e.target.value }))}
-          className="h-9 w-full rounded-control border border-border-control bg-bg px-3 text-ink"
-        >
-          <option value="">Choose one…</option>
-          {options.map((row) => (
-            <option key={row.id} value={row.id}>
-              {row.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Select
+        name={`pick-${type}`}
+        label={LABELS[type]}
+        value={chosen[type]}
+        onChange={(value) => setChosen((c) => ({ ...c, [type]: value }))}
+        options={[
+          { value: '', label: 'Choose one…' },
+          ...options.map((row) => ({ value: row.id, label: row.name })),
+        ]}
+        className="min-w-56 flex-1"
+      />
       <Button onClick={() => assign(type)} disabled={!chosen[type]}>
         Assign
       </Button>
@@ -145,7 +148,18 @@ export function ApplicationDetailPage() {
 
   return (
     <>
-      <PageHeader title="Assignments" />
+      <PageHeader title={application?.name ?? 'Application'} />
+
+      {application && id && (
+        <div className="mb-6">
+          <AppLogoPicker
+            applicationId={id}
+            name={application.name}
+            icon={savedIcon !== undefined ? savedIcon : application.icon ?? null}
+            onSaved={setSavedIcon}
+          />
+        </div>
+      )}
 
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}
@@ -176,7 +190,13 @@ export function ApplicationDetailPage() {
                       <span className="text-sm text-muted">{LABELS[assignment.subjectType]}</span>
                       <span className="ml-2 font-medium text-ink">{nameOf(assignment)}</span>
                     </span>
-                    <Button size="sm" variant="ghost" onClick={() => unassign(assignment.id)}>
+                    {/* `danger-quiet`: this takes the tile away from
+                        everybody the assignment covers. */}
+                    <Button
+                      size="sm"
+                      variant="danger-quiet"
+                      onClick={() => unassign(assignment.id)}
+                    >
                       Remove
                     </Button>
                   </li>

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { RunsTab } from './RunsTab.js';
 
@@ -151,5 +152,28 @@ describe('RunsTab', () => {
     mockFetch({ syncRuns: [], importRuns: [] });
     renderTab();
     expect(await screen.findByText('No runs yet')).toBeVisible();
+  });
+
+  it('says how old the list is, and fetches it again without dropping the rows', async () => {
+    mockFetch();
+    renderTab();
+    await screen.findByText('Corporate LDAP');
+    expect(screen.getByText(/Updated just now/)).toBeInTheDocument();
+
+    const calls = vi.mocked(globalThis.fetch).mock.calls.length;
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() =>
+      expect(vi.mocked(globalThis.fetch).mock.calls.length).toBeGreaterThan(calls),
+    );
+    // The rows stay while the refresh runs: no skeleton flash.
+    expect(screen.getByText('Corporate LDAP')).toBeInTheDocument();
+  });
+
+  it('keeps the column headings in view down a long list', async () => {
+    mockFetch();
+    renderTab();
+    await screen.findByText('Corporate LDAP');
+    expect(screen.getByRole('region', { name: 'Runs' })).toBeInTheDocument();
   });
 });

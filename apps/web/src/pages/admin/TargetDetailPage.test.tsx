@@ -777,4 +777,89 @@ describe('TargetDetailPage', () => {
 
     expect(await screen.findByLabelText(/^type$/i)).toBeDisabled();
   });
+
+  it('labels a connection test out of date the moment the connection it tested changes', async () => {
+    // "Previews can describe a previous draft." The rights below were read
+    // with ONE bind account; a report that went on looking current after the
+    // bind DN was retyped would be answering for an account nobody entered.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      json({
+        ok: true,
+        message: 'Bound',
+        rights: [{ right: 'createUser', status: 'granted', detail: '' }],
+      }),
+    );
+    renderNew();
+
+    await userEvent.type(await screen.findByLabelText(/bind dn/i), 'CN=svc');
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    expect(await screen.findByText('Connected')).toBeVisible();
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+
+    // A threshold is not part of what was tested, so it does not stale it.
+    await userEvent.type(screen.getByLabelText('Accounts created'), '5');
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+
+    await userEvent.type(screen.getByLabelText(/bind dn/i), ',DC=acme');
+    // On the report, on its stage, and beside Save.
+    expect(screen.getAllByText('Out of date — run again').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Test result is out of date')).toBeVisible();
+    // Still shown, never quietly current: the result stays readable and says
+    // what it is.
+    expect(screen.getByText('granted')).toBeVisible();
+
+    // Putting the draft back to what was tested makes it current again.
+    await userEvent.type(screen.getByLabelText(/bind dn/i), '{Backspace>8}');
+    expect(screen.queryByText('Test result is out of date')).toBeNull();
+  });
+
+  it('says there are unsaved changes beside Save, and only while there are', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target()));
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    await userEvent.type(screen.getByLabelText('Accounts created'), '5');
+    expect(screen.getByText('Unsaved changes')).toBeVisible();
+  });
+
+  it('gathers every refused field at the top of the form, each a link to its control', async () => {
+    // The editor is four screens long. A refusal three screens up used to
+    // leave the reader looking at an unchanged button.
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+      if (init?.method === 'PATCH') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              title: 'Validation failed',
+              status: 400,
+              errors: [
+                { path: 'config.bindDn', message: 'is required' },
+                { path: 'thresholds.createAccountThresholdPercent', message: 'must be between 0 and 100' },
+              ],
+            }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          ) as never,
+        );
+      }
+      return Promise.resolve(json(target()));
+    });
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const summary = (await screen.findByText('Fix these before saving')).closest('[role="alert"]');
+    // The summary takes focus, so a keyboard or screen-reader user lands on it.
+    expect(summary).toHaveFocus();
+    // Named as the controls are named, not as the API's paths.
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Accounts created: must be between 0 and 100' }),
+    );
+    expect(screen.getByLabelText('Accounts created')).toHaveFocus();
+    expect(screen.getByLabelText('Accounts created')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Bind DN: is required' })).toBeVisible();
+    // And each stage says how many of its fields need fixing.
+    expect(screen.getAllByText('1 to fix')).toHaveLength(2);
+  });
 });

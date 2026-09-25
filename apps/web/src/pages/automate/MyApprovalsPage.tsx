@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
@@ -28,6 +28,7 @@ export function MyApprovalsPage() {
   const [shorten, setShorten] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const toast = useToast();
 
   const decide = async (approval: Approval, decision: 'approve' | 'reject') => {
     const comment = comments[approval.id] ?? '';
@@ -53,6 +54,7 @@ export function MyApprovalsPage() {
               : Number(shorten[approval.id]),
         }),
       });
+      toast({ title: decision === 'approve' ? 'Request approved' : 'Request refused' });
       reload();
     } catch (cause) {
       setProblem(
@@ -73,18 +75,18 @@ export function MyApprovalsPage() {
         {problem && <Alert tone="warning">{problem}</Alert>}
 
         <div className="mt-6 space-y-6">
-          {loading && (
+          {!data && loading && (
             <Panel>
               <SkeletonRows rows={3} cols={3} />
             </Panel>
           )}
-          {!loading && (data?.approvals ?? []).length === 0 && (
+          {data && (data.approvals ?? []).length === 0 && (
             <Empty title="Nothing is waiting for you">
               Requests routed to you appear here.
             </Empty>
           )}
-          {!loading &&
-            (data?.approvals ?? []).map((approval) => (
+          {data &&
+            (data.approvals ?? []).map((approval) => (
               <Panel
                 key={approval.id}
                 title={approval.request.product?.name ?? 'Requested access'}

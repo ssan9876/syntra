@@ -334,3 +334,31 @@ describe('mapping', () => {
     ).toBeVisible();
   });
 });
+
+describe('a test result beside a draft that has moved on', () => {
+  it('labels the test and the columns out of date when the connection changes', async () => {
+    mockFetch({
+      test: {
+        ok: true,
+        message: 'read 2 rows',
+        columns: ['employeeId'],
+        hostKey: { fingerprint: 'SHA256:abc', status: 'matched' },
+      },
+    });
+    renderEdit();
+    await screen.findByDisplayValue('HR nightly');
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    await screen.findByLabelText(/column for employee id/i);
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+
+    // The schedule is not part of what the test read.
+    await userEvent.type(screen.getByLabelText('Schedule'), ' ');
+    expect(screen.queryByText(/out of date/i)).toBeNull();
+
+    await userEvent.type(screen.getByLabelText('Remote path'), '.old');
+    expect(screen.getByText('Out of date — run again')).toBeVisible();
+    expect(screen.getByText('Columns out of date — test again')).toBeVisible();
+    expect(screen.getByText('Test result is out of date')).toBeVisible();
+    expect(screen.getByText('Unsaved changes')).toBeVisible();
+  });
+});

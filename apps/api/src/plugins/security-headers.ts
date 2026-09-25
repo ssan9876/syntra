@@ -89,7 +89,16 @@ export function registerSecurityHeaders(
     }
 
     if (!isAutoPostPath(request.url)) {
-      reply.header('content-security-policy', CONSOLE_CSP);
+      // A route that set its own policy keeps it. The one that does is the
+      // uploaded application logo (`portal.ts`), which answers with
+      // `default-src 'none'`: those bytes came from an administrator, and if
+      // a browser were ever talked into rendering them as a document, the
+      // policy that should govern it is "nothing at all", not the console's.
+      // This never loosens anything by accident — a route has to opt in by
+      // writing the header, in code, where review sees it.
+      if (!reply.hasHeader('content-security-policy')) {
+        reply.header('content-security-policy', CONSOLE_CSP);
+      }
       // The pre-CSP spelling of `frame-ancestors`, for browsers that do not
       // implement the directive. Both, deliberately: a browser that honours
       // the CSP ignores this one.

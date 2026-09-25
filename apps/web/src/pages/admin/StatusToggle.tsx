@@ -79,7 +79,15 @@ export function StatusToggle({
       // Sized to the space it is given, never wider. Two of the four pages
       // that use this are TABLES, and a fixed width here pushed the last
       // column past the viewport and put a horizontal scrollbar on the page.
-      <div className="flex w-full flex-col items-stretch gap-2 text-left">
+      //
+      // Bounded in the danger colour for the reason `DeleteButton` is: the
+      // step that takes access away is a region of its own, not one more
+      // button in a row of ordinary ones.
+      <div
+        role="group"
+        aria-label={`Deactivate this ${label}`}
+        className="flex w-full flex-col items-stretch gap-2 rounded-panel border border-danger/40 bg-bg p-3 text-left"
+      >
         {problem && <Alert tone="danger">{problem}</Alert>}
         {/* What this press actually does, at the weight of the thing it does.
             This used to be the Reason field's `hint` — grey caption text,
@@ -92,7 +100,7 @@ export function StatusToggle({
           value={reason}
           onChange={setReason}
         />
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end gap-2 border-t border-border-subtle pt-2">
           <Button
             size="sm"
             variant="danger"

@@ -20,7 +20,10 @@ export function fieldErrors(cause: unknown): Record<string, string> {
   if (!(cause instanceof ApiError)) return {};
   const errors: Record<string, string> = {};
   for (const issue of cause.problem.errors ?? []) {
-    const field = issue.path?.split('.').pop();
+    // Numeric segments are list positions, not controls: `acsUrls.1` is the
+    // second line of the ACS box, and keying it as `1` named nothing on
+    // screen.
+    const field = issue.path?.split('.').filter((part) => !/^\d+$/.test(part)).pop();
     if (field && !errors[field]) errors[field] = issue.message;
   }
   return errors;

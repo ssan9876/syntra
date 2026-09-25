@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { useInRouterContext } from 'react-router-dom';
+import { Breadcrumbs, useRememberTitle } from './Breadcrumbs.js';
 
 /**
  * The top of every console page: what this is, and what you can do to it.
@@ -20,17 +22,39 @@ import type { ReactNode } from 'react';
  */
 export function PageHeader({
   title,
+  status,
   actions,
 }: {
   title: string;
+  /**
+   * The record's one-word state, beside its name: a `StateBadge`, never a
+   * sentence. "Ready for work", "Blocked", "Inactive". A record page answers
+   * "is this all right" before anything else is read, and the heading is
+   * where the eye lands first.
+   */
+  status?: ReactNode;
   actions?: ReactNode;
 }) {
+  // Outside a router -- a component test rendering a page bare -- there is no
+  // location to derive a trail from, and the page should still render.
+  const routed = useInRouterContext();
   return (
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-      <h1 className="min-w-0 text-xl font-semibold text-ink">{title}</h1>
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+    <header className="mb-5">
+      {routed && <RoutedTrail title={title} />}
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="min-w-0 text-xl font-semibold text-ink">{title}</h1>
+          {status}
+        </div>
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      </div>
     </header>
   );
+}
+
+function RoutedTrail({ title }: { title: string }) {
+  useRememberTitle(title);
+  return <Breadcrumbs />;
 }
 
 export interface Fact {
@@ -56,7 +80,7 @@ export interface Fact {
 export function PageFacts({ facts }: { facts: Fact[] }) {
   if (facts.length === 0) return null;
   return (
-    <dl className="-mt-2 mb-5 flex flex-wrap gap-x-8 gap-y-2">
+    <dl className="-mt-2 mb-5 flex flex-wrap gap-x-8 gap-y-2 border-b border-border-subtle pb-4">
       {facts.map((fact) => (
         <div key={fact.label}>
           <dt className="text-sm font-medium text-muted">{fact.label}</dt>

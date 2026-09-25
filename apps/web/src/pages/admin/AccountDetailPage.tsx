@@ -7,7 +7,9 @@ import {
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
+  useToast,
 } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { ApiError, api } from '../../session/api.js';
@@ -102,7 +104,7 @@ export function AccountDetailPage() {
   const { id } = useParams();
   const can = useCan();
   const navigate = useNavigate();
-  const { data, error, loading, reload } = useApiResource<AccountDetail>(
+  const { data, error, reload } = useApiResource<AccountDetail>(
     `/api/admin/users/${id}`,
   );
   // Its error state is deliberately ignored, as on the list: a caller who may
@@ -127,6 +129,7 @@ export function AccountDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
   const [problem, setProblem] = useState<string | null>(null);
   /**
    * One at a time and cleared on leaving: a setup link is a credential.
@@ -173,7 +176,9 @@ export function AccountDetailPage() {
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (loading || !data) {
+  // Skeleton only before the first answer: an unlock or a link reloads the
+  // record, and the page should not blank while it does.
+  if (!data) {
     return (
       <Panel>
         <SkeletonRows rows={4} cols={4} />
@@ -195,6 +200,7 @@ export function AccountDetailPage() {
     run(async () => {
       try {
         await api(`/api/admin/users/${data.id}/unlock`, { method: 'POST' });
+        toast({ title: 'Account unlocked' });
         reload();
       } catch (cause) {
         // Surfaced rather than swallowed: an unlock that quietly did nothing
@@ -211,6 +217,7 @@ export function AccountDetailPage() {
           method: 'POST',
           body: JSON.stringify({ userId: data!.id }),
         });
+        toast({ title: `Linked to ${candidate.givenName} ${candidate.familyName}` });
         reload();
       } catch (cause) {
         failed(cause, 'That account could not be linked.');
@@ -257,6 +264,18 @@ export function AccountDetailPage() {
     <>
       <PageHeader
         title={data.displayName}
+        status={
+          // Inactive accounts stay labelled; a locked one is blocked because
+          // it cannot sign in until somebody unlocks it.
+          data.status === 'active' ? (
+            <span className="flex flex-wrap items-center gap-2">
+              <StateBadge state="healthy">Active</StateBadge>
+              {data.locked && <StateBadge state="blocked">Locked out</StateBadge>}
+            </span>
+          ) : (
+            <StateBadge state="inactive">Inactive</StateBadge>
+          )
+        }
         actions={
           // Only for a locally managed account. A directory owns the login,
           // name and email of an account it syncs and rewrites them on every
@@ -273,25 +292,11 @@ export function AccountDetailPage() {
         facts={[
           { label: 'Login', value: data.login },
           { label: 'Email', value: data.email },
-          {
-            label: 'Status',
-            value:
-              data.status === 'active' ? (
-                <span className="flex flex-wrap items-center gap-2">
-                  <Status tone="active">Active</Status>
-                  {data.locked && <Status tone="warning">Locked out</Status>}
-                </span>
-              ) : (
-                <span className="flex flex-wrap items-center gap-2">
-                  <Status tone="inactive">Inactive</Status>
-                  {data.statusReason && (
-                    <span className="font-normal text-muted">
-                      {data.statusReason}
-                    </span>
-                  )}
-                </span>
-              ),
-          },
+          // The state itself is beside the title; why it is inactive is a
+          // value, and stays one.
+          ...(data.status !== 'active' && data.statusReason
+            ? [{ label: 'Why inactive', value: data.statusReason }]
+            : []),
           {
             label: 'Managed by',
             value: local ? (
@@ -382,6 +387,7 @@ export function AccountDetailPage() {
                 <Field
                   label="Display name"
                   value={v.displayName ?? ''}
+                  name="displayName"
                   onChange={(x) => set('displayName', x)}
                   error={errs.displayName}
                 />
@@ -389,12 +395,14 @@ export function AccountDetailPage() {
                   label="Email"
                   type="email"
                   value={v.email ?? ''}
+                  name="email"
                   onChange={(x) => set('email', x)}
                   error={errs.email}
                 />
                 <Select
                   label="Org unit"
                   value={v.orgUnitId ?? ''}
+                  name="orgUnitId"
                   onChange={(x) => set('orgUnitId', x)}
                   error={errs.orgUnitId}
                   options={[

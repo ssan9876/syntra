@@ -1,10 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, Select, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  Panel,
+  Select,
+  SkeletonRows,
+  StateBadge,
+  Status,
+  Table,
+  useToast,
+  type SummaryError,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
 import { PageHeader } from './PageHeader.js';
+import { StaleBadge, draftKey, draftStatus } from './DraftState.js';
 
 interface Preview {
   correlationKey: string | null;
@@ -195,6 +211,17 @@ function bodyOf(
   };
 }
 
+/** On-screen names for the fields `bodyOf` and the server refuse by name. */
+const LABELS: Record<string, string> = {
+  correlationKeyTemplate: 'Account name template',
+  maxUniquenessAttempts: 'Maximum uniqueness attempts',
+  containerTemplate: 'Container template',
+  fallbackContainer: 'Fallback container',
+  sensitiveApprovalReason: 'Purpose for sharing personal email',
+  length: 'Length',
+  initialPasswordDelivery: 'Delivery',
+};
+
 const sensitiveAttributeMappings = (templates: Record<string, string>) =>
   Object.entries(templates)
     .filter(([, template]) => /%person\.personalEmail(?:\.[^%]+)?%/i.test(template))
@@ -216,21 +243,40 @@ export function AccountProfilePage() {
 
 function AccountProfileEditor() {
   const { id } = useParams<{ id: string }>();
+  const toast = useToast();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [profile, setProfile] = useState<Draft>(EMPTY);
+  // The draft as last read or saved; "Unsaved changes" compares with it.
+  const [baseline, setBaseline] = useState<Draft>(EMPTY);
   const [policyExtras, setPolicyExtras] = useState<Record<string, unknown>>({});
   const [personId, setPersonId] = useState('');
   const [preview, setPreview] = useState<Preview | null>(null);
+  /**
+   * A preview was on screen, or on its way, when the draft changed.
+   *
+   * The result itself is withdrawn at once — its values describe a draft that
+   * no longer exists, and a name or container read off it would be wrong —
+   * but its absence is SAID, in its place and beside Save, so a reader who
+   * previewed and then made one more edit does not take the empty space for a
+   * preview that found nothing.
+   */
+  const [previewStale, setPreviewStale] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<null | 'save' | 'preview'>(null);
   const previewSeq = useRef(0);
   useEffect(() => () => { previewSeq.current += 1; }, []);
 
+  // True from the moment a preview is asked for until it fails or the draft
+  // moves on: whether an edit has just made a preview out of date.
+  const previewShown = useRef(false);
+
   function invalidatePreview() {
     previewSeq.current += 1;
+    if (previewShown.current) setPreviewStale(true);
+    previewShown.current = false;
     setPreview(null);
+
     setBusy((current) => current === 'preview' ? null : current);
   }
 
@@ -245,6 +291,7 @@ function AccountProfileEditor() {
       .then((stored) => {
         if (!active) return;
         setProfile(draftFrom(stored));
+        setBaseline(draftFrom(stored));
         setPolicyExtras(policyExtrasFrom(stored));
         setLoad({ state: 'ready', stored: true });
       })
@@ -258,6 +305,7 @@ function AccountProfileEditor() {
         // this page failed to read.
         if (cause instanceof ApiError && cause.problem.status === 404) {
           setProfile(EMPTY);
+          setBaseline(EMPTY);
           setPolicyExtras({});
           setLoad({ state: 'ready', stored: false });
           return;
@@ -323,11 +371,11 @@ function AccountProfileEditor() {
     return built.body;
   }
 
-  async function onSave() {
+  async function onSave(event?: FormEvent) {
+    event?.preventDefault();
     setBusy('save');
     setInvalid({});
     setProblem(null);
-    setNotice(null);
     const payload = body();
     if (payload === null) {
       setBusy(null);
@@ -338,7 +386,10 @@ function AccountProfileEditor() {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
-      setNotice('Saved.');
+      setBaseline(profile);
+      // It is stored now, so the "these are defaults" notice no longer applies.
+      setLoad({ state: 'ready', stored: true });
+      toast({ tone: 'success', title: 'Account profile saved' });
     } catch (cause) {
       fail(cause, 'The account profile could not be saved.');
     } finally {
@@ -352,8 +403,11 @@ function AccountProfileEditor() {
     setInvalid({});
     setProblem(null);
     setPreview(null);
+    setPreviewStale(false);
+    previewShown.current = true;
     const payload = body();
     if (payload === null) {
+      previewShown.current = false;
       setBusy(null);
       return;
     }
@@ -364,37 +418,19 @@ function AccountProfileEditor() {
         });
       if (seq === previewSeq.current) setPreview(result);
     } catch (cause) {
-      if (seq === previewSeq.current) fail(cause, 'That could not be previewed.');
+      if (seq === previewSeq.current) {
+        previewShown.current = false;
+        fail(cause, 'That could not be previewed.');
+      }
     } finally {
       if (seq === previewSeq.current) setBusy(null);
     }
   }
 
-  const header = (
-    <PageHeader
-      title="Account profile"
-      {...(load.state === 'ready'
-        ? {
-            actions: (
-              <Button
-                variant="primary"
-                onClick={onSave}
-                loading={busy === 'save'}
-                disabled={!!busy}
-              >
-                Save profile
-              </Button>
-            ),
-          }
-        : {})}
-    />
-  );
+  const header = <PageHeader title="Account profile" />;
 
   const back = (
-    <Link
-      to={`/admin/targets/${id}`}
-      className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
-    >
+    <Link to={`/admin/targets/${id}`} className="link inline-block">
       Back to the target
     </Link>
   );
@@ -432,27 +468,30 @@ function AccountProfileEditor() {
     );
   }
 
+  /**
+   * The refusals, each named as its control is named. An attribute row is
+   * refused under its attribute NAME (`attributeTemplates.<name>`, of which
+   * `fieldErrors` keeps the last segment), so it is found by that name among
+   * the rows and linked to the row's name box.
+   */
+  const summary: SummaryError[] = Object.entries(invalid).map(([field, message]) => {
+    const row = rows.findIndex(([name]) => name === field);
+    if (row >= 0) {
+      return { field: `attribute-${row + 1}`, message: `Attribute ${row + 1} (${field}): ${message}` };
+    }
+    return LABELS[field]
+      ? { field, message: `${LABELS[field]}: ${message}` }
+      : { message: `${field}: ${message}` };
+  });
+
+  const dirty = draftKey(profile) !== draftKey(baseline);
+
   return (
     <>
       {header}
 
       <div className="space-y-6">
-        {notice && <Alert tone="info">{notice}</Alert>}
         {problem && <Alert tone="danger">{problem}</Alert>}
-        {Object.keys(invalid).length > 0 && (
-          <Alert tone="danger" title="Some of this was refused">
-            {/* The marks below, and what was said about each of them. A red
-                border round a control with the explanation discarded leaves
-                the reader knowing only that something is wrong with it. */}
-            <ul className="list-disc pl-5">
-              {Object.entries(invalid).map(([field, message]) => (
-                <li key={field}>
-                  <code className="font-mono">{field}</code> — {message}
-                </li>
-              ))}
-            </ul>
-          </Alert>
-        )}
         {!load.stored && (
           <Alert tone="info">
             This target has no account profile yet, so these are defaults. They
@@ -460,250 +499,306 @@ function AccountProfileEditor() {
           </Alert>
         )}
 
-        <Panel title="Naming and placement" bodyClassName="grid gap-4 p-4">
-          <Field
-            label="Account name template"
-            value={profile.correlationKeyTemplate}
-            onChange={(v) => set('correlationKeyTemplate', v)}
-            {...mark('correlationKeyTemplate')}
-          />
-          <Field
-            label="Maximum uniqueness attempts"
-            value={profile.maxUniquenessAttempts}
-            onChange={(v) => set('maxUniquenessAttempts', v)}
-            inputMode="numeric"
-            {...mark('maxUniquenessAttempts')}
-          />
-          <Field
-            label="Container template"
-            value={profile.containerTemplate}
-            onChange={(v) => set('containerTemplate', v)}
-            {...mark('containerTemplate')}
-          />
-          <Field
-            label="Fallback container"
-            value={profile.fallbackContainer}
-            onChange={(v) => set('fallbackContainer', v)}
-            {...mark('fallbackContainer')}
-          />
-          <p className="-mt-2 text-sm text-ink-muted">
-            Containers are where Active Directory places an account (and an HTTP
-            target whose document describes containers). Entra ID and SCIM keep
-            accounts in one flat directory, so both container settings are
-            ignored for them; they are still required, and <code>/</code> is the
-            conventional value.
-          </p>
-        </Panel>
-
-        <Panel
-          title="Attributes"
-          actions={
-            <Button size="sm" onClick={() => setRows([...rows, ['', '']])}>
-              Add attribute
-            </Button>
-          }
+        {/* Not a Panel: its `overflow-hidden` would stop the completion bar
+            from sticking, and the preview at the bottom is exactly where
+            somebody is when they decide to save. */}
+        <form
+          onSubmit={(event) => void onSave(event)}
+          noValidate
+          aria-label="Account profile"
+          className="space-y-6 rounded-panel border border-border-subtle bg-bg px-4 pt-4"
         >
-          <div className="space-y-3 p-4">
-            {rows.length === 0 && (
-              <p className="text-muted">
-                No attributes are written beyond the name and the container.
-              </p>
-            )}
-            {rows.map(([name, template], index) => (
-              <div key={index} className="grid gap-3 sm:grid-cols-[1fr_2fr_auto]">
-                {/* Marked, which is what the banner above has always
-                    promised and these two rows never delivered.
-                    `attributeTemplatesSchema` reports both the name it refuses
-                    (`userAccountControl`, `member`, `distinguishedName`, or
-                    anything that is not an RFC 4512 `descr`) and the template
-                    it refuses under the path `attributeTemplates.<name>`, and
-                    `fieldErrors` keeps the last segment. */}
-                <Field
-                  label={`Attribute ${index + 1}`}
-                  value={name}
-                  onChange={(v) =>
-                    setRows(
-                      rows.map((row, i) =>
-                        i === index ? [v, row[1]] : row,
-                      ) as [string, string][],
-                    )
-                  }
-                  {...mark(name)}
-                />
-                <Field
-                  label={`Template ${index + 1}`}
-                  value={template}
-                  onChange={(v) =>
-                    setRows(
-                      rows.map((row, i) =>
-                        i === index ? [row[0], v] : row,
-                      ) as [string, string][],
-                    )
-                  }
-                  invalid={Boolean(invalid[name])}
-                />
-                <div className="flex items-end">
-                  <Button
-                    onClick={() => setRows(rows.filter((_, i) => i !== index))}
-                  >
-                    Remove
-                  </Button>
+          <ErrorSummary errors={summary} />
+
+          <FormSection title="Naming and placement">
+            <Field
+              label="Account name template"
+              name="correlationKeyTemplate"
+              value={profile.correlationKeyTemplate}
+              onChange={(v) => set('correlationKeyTemplate', v)}
+              {...mark('correlationKeyTemplate')}
+            />
+            <Field
+              label="Maximum uniqueness attempts"
+              name="maxUniquenessAttempts"
+              value={profile.maxUniquenessAttempts}
+              onChange={(v) => set('maxUniquenessAttempts', v)}
+              inputMode="numeric"
+              {...mark('maxUniquenessAttempts')}
+            />
+            <Field
+              label="Container template"
+              name="containerTemplate"
+              value={profile.containerTemplate}
+              onChange={(v) => set('containerTemplate', v)}
+              {...mark('containerTemplate')}
+            />
+            <Field
+              label="Fallback container"
+              name="fallbackContainer"
+              value={profile.fallbackContainer}
+              onChange={(v) => set('fallbackContainer', v)}
+              {...mark('fallbackContainer')}
+            />
+            <p className="text-sm text-muted sm:col-span-2">
+              Containers are where Active Directory places an account (and an HTTP
+              target whose document describes containers). Entra ID and SCIM keep
+              accounts in one flat directory, so both container settings are
+              ignored for them; they are still required, and <code>/</code> is the
+              conventional value.
+            </p>
+          </FormSection>
+
+          <FormSection
+            title="Attributes"
+            status={
+              sensitiveAttributes.length > 0 ? (
+                <StateBadge state="attention">Sensitive data</StateBadge>
+              ) : null
+            }
+          >
+            <div className="space-y-3 sm:col-span-2">
+              {rows.length === 0 && (
+                <p className="text-muted">
+                  No attributes are written beyond the name and the container.
+                </p>
+              )}
+              {rows.map(([name, template], index) => (
+                <div key={index} className="grid gap-3 sm:grid-cols-[1fr_2fr_auto]">
+                  {/* Marked, which is what the summary above has always
+                      promised and these two rows never delivered.
+                      `attributeTemplatesSchema` reports both the name it refuses
+                      (`userAccountControl`, `member`, `distinguishedName`, or
+                      anything that is not an RFC 4512 `descr`) and the template
+                      it refuses under the path `attributeTemplates.<name>`, and
+                      `fieldErrors` keeps the last segment. */}
+                  <Field
+                    label={`Attribute ${index + 1}`}
+                    name={`attribute-${index + 1}`}
+                    value={name}
+                    onChange={(v) =>
+                      setRows(
+                        rows.map((row, i) =>
+                          i === index ? [v, row[1]] : row,
+                        ) as [string, string][],
+                      )
+                    }
+                    {...mark(name)}
+                  />
+                  <Field
+                    label={`Template ${index + 1}`}
+                    name={`template-${index + 1}`}
+                    value={template}
+                    onChange={(v) =>
+                      setRows(
+                        rows.map((row, i) =>
+                          i === index ? [row[0], v] : row,
+                        ) as [string, string][],
+                      )
+                    }
+                    invalid={Boolean(invalid[name])}
+                  />
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      aria-label={`Remove attribute ${index + 1}`}
+                      onClick={() => setRows(rows.filter((_, i) => i !== index))}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
-            {sensitiveAttributes.length > 0 && (
-              <div className="space-y-3" aria-live="polite">
-                <Alert tone="warning" title="Sensitive data needs approval">
-                  Personal email will be sent to {sensitiveAttributes.length} target attribute{sensitiveAttributes.length === 1 ? '' : 's'}.
-                </Alert>
-                <Table tight>
-                  <thead><tr><th scope="col">Target attribute</th><th scope="col">Source field</th><th scope="col">Classification</th></tr></thead>
-                  <tbody>
-                    {sensitiveAttributes.map((attribute) => (
-                      <tr key={attribute}>
-                        <th scope="row" className="font-mono">{attribute}</th>
-                        <td className="font-mono">person.personalEmail</td>
-                        <td><Status tone="warning">Sensitive</Status></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-                <Field
-                  label="Purpose for sharing personal email"
-                  value={profile.sensitiveApprovalReason}
-                  onChange={(value) => set('sensitiveApprovalReason', value)}
-                  maxLength={1000}
-                  {...mark('sensitiveApprovalReason')}
-                />
-                {profile.sensitiveApprovedAt && (
-                  <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                    <div>
-                      <dt className="text-muted">Approval</dt>
-                      <dd><Status tone="active">Recorded</Status></dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted">Recorded at</dt>
-                      <dd className="tabular-nums text-ink">{new Date(profile.sensitiveApprovedAt).toLocaleString()}</dd>
-                    </div>
-                  </dl>
-                )}
-              </div>
-            )}
-          </div>
-        </Panel>
-
-        <Panel
-          title="Initial password"
-          bodyClassName="grid gap-4 p-4 sm:grid-cols-2"
-        >
-          <Field
-            label="Length"
-            value={profile.passwordLength}
-            onChange={(v) => set('passwordLength', v)}
-            inputMode="numeric"
-            {...mark('length')}
-          />
-          <Select
-            label="Delivery"
-            value={profile.initialPasswordDelivery}
-            onChange={(v) => set('initialPasswordDelivery', v as Delivery)}
-            {...mark('initialPasswordDelivery')}
-            options={[
-              { value: 'vaultOnly', label: 'Vault only — nobody is sent it' },
-              { value: 'manager', label: "The person's manager" },
-              { value: 'personalEmail', label: "The person's personal email" },
-            ]}
-          />
-        </Panel>
-
-        <Panel
-          title="Live preview"
-        >
-          <div className="space-y-4 p-4">
-            <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-              <Select
-                label="Person"
-                value={personId}
-                onChange={(value) => { invalidatePreview(); setPersonId(value); }}
-                options={[
-                  { value: '', label: 'Pick a person…' },
-                  ...(persons?.persons ?? []).map((person) => ({
-                    value: person.id,
-                    label: nameOf(person),
-                  })),
-                ]}
-              />
-              <PickerNote
-                shown={persons?.persons?.length ?? 0}
-                total={persons?.total ?? 0}
-                to="/admin/users?tab=people"
-                label="People"
-              />
-              <Button
-                onClick={onPreview}
-                loading={busy === 'preview'}
-                disabled={personId === '' || !!busy}
-              >
-                Preview
+              ))}
+              <Button type="button" size="sm" onClick={() => setRows([...rows, ['', '']])}>
+                Add attribute
               </Button>
-            </div>
-
-            {preview && (
-              <dl className="rounded-panel border border-border-subtle p-4">
-                <dt className="font-medium text-ink">Account name</dt>
-                <dd className="font-mono text-ink">
-                  {preview.correlationKey ?? '—'}{' '}
-                  {preview.taken && (
-                    <span className="font-sans text-warning">
-                      (the base name is already taken; this is the next free
-                      one)
-                    </span>
+              {sensitiveAttributes.length > 0 && (
+                <div className="space-y-3" aria-live="polite">
+                  <Alert tone="warning" title="Sensitive data needs approval">
+                    Personal email will be sent to {sensitiveAttributes.length} target attribute{sensitiveAttributes.length === 1 ? '' : 's'}.
+                  </Alert>
+                  <Table tight>
+                    <thead><tr><th scope="col">Target attribute</th><th scope="col">Source field</th><th scope="col">Classification</th></tr></thead>
+                    <tbody>
+                      {sensitiveAttributes.map((attribute) => (
+                        <tr key={attribute}>
+                          <th scope="row" className="font-mono">{attribute}</th>
+                          <td className="font-mono">person.personalEmail</td>
+                          <td><Status tone="warning" glyph="alert">Sensitive</Status></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                  <Field
+                    label="Purpose for sharing personal email"
+                    name="sensitiveApprovalReason"
+                    value={profile.sensitiveApprovalReason}
+                    onChange={(value) => set('sensitiveApprovalReason', value)}
+                    maxLength={1000}
+                    {...mark('sensitiveApprovalReason')}
+                  />
+                  {profile.sensitiveApprovedAt && (
+                    <dl className="grid gap-2 text-sm sm:grid-cols-2">
+                      <div>
+                        <dt className="text-muted">Approval</dt>
+                        <dd><StateBadge state="healthy">Recorded</StateBadge></dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted">Recorded at</dt>
+                        <dd className="tabular-nums text-ink">{new Date(profile.sensitiveApprovedAt).toLocaleString()}</dd>
+                      </div>
+                    </dl>
                   )}
-                </dd>
-                {preview.userPrincipalName && (
-                  <>
-                    <dt className="mt-3 font-medium text-ink">User principal name</dt>
-                    <dd className="font-mono text-ink">{preview.userPrincipalName}</dd>
-                  </>
-                )}
-                <dt className="mt-3 font-medium text-ink">Container</dt>
-                {preview.placesAccountsInContainers === false ? (
-                  <dd className="text-muted">Not used: this target has no containers.</dd>
-                ) : (
-                  <dd className="font-mono text-ink">{preview.container ?? '—'}</dd>
-                )}
-                {Object.entries(preview.attributes).map(([name, value]) => (
-                  <div key={name}>
-                    <dt className="mt-3 font-medium text-ink">{name}</dt>
-                    <dd className="font-mono text-ink">{value}</dd>
-                  </div>
-                ))}
-                {/*
-                  The empty case is the one that matters here: a template that
-                  resolves to nothing for this person produces no attributes at
-                  all, and a preview that renders an empty list silently is a
-                  preview that says the templates are fine.
-                */}
-                {Object.keys(preview.attributes).length === 0 && (
-                  <div className="mt-3 text-muted">
-                    No attributes resolved for this person.
-                  </div>
-                )}
-                {preview.problems.length > 0 && (
-                  <div className="mt-4">
-                    <Alert tone="danger" title="This person could not be placed">
-                      <ul className="list-disc pl-5">
-                        {preview.problems.map((p) => (
-                          <li key={p}>{p}</li>
-                        ))}
-                      </ul>
-                    </Alert>
-                  </div>
-                )}
-              </dl>
-            )}
-          </div>
-        </Panel>
+                </div>
+              )}
+            </div>
+          </FormSection>
+
+          <FormSection title="Initial password">
+            <Field
+              label="Length"
+              name="length"
+              value={profile.passwordLength}
+              onChange={(v) => set('passwordLength', v)}
+              inputMode="numeric"
+              placeholder="Default"
+              {...mark('length')}
+            />
+            <Select
+              label="Delivery"
+              name="initialPasswordDelivery"
+              value={profile.initialPasswordDelivery}
+              onChange={(v) => set('initialPasswordDelivery', v as Delivery)}
+              {...mark('initialPasswordDelivery')}
+              options={[
+                { value: 'vaultOnly', label: 'Vault only — nobody is sent it' },
+                { value: 'manager', label: "The person's manager" },
+                { value: 'personalEmail', label: "The person's personal email" },
+              ]}
+            />
+          </FormSection>
+
+          {/* In the form, directly above Save, because it is a preview OF this
+              draft: bound to it, withdrawn the moment it changes, and read
+              in the same glance as the button it is meant to inform. */}
+          <FormSection
+            title="Preview"
+            status={
+              busy === 'preview' ? (
+                <StateBadge state="running">Previewing</StateBadge>
+              ) : previewStale ? (
+                <StaleBadge />
+              ) : preview ? (
+                <StateBadge state="healthy">Matches this draft</StateBadge>
+              ) : null
+            }
+          >
+            <div className="space-y-4 sm:col-span-2">
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                <Select
+                  label="Person"
+                  name="personId"
+                  value={personId}
+                  onChange={(value) => { invalidatePreview(); setPersonId(value); }}
+                  options={[
+                    { value: '', label: 'Pick a person…' },
+                    ...(persons?.persons ?? []).map((person) => ({
+                      value: person.id,
+                      label: nameOf(person),
+                    })),
+                  ]}
+                />
+                <PickerNote
+                  shown={persons?.persons?.length ?? 0}
+                  total={persons?.total ?? 0}
+                  to="/admin/users?tab=people"
+                  label="People"
+                />
+                <Button
+                  type="button"
+                  onClick={onPreview}
+                  loading={busy === 'preview'}
+                  disabled={personId === '' || !!busy}
+                >
+                  Preview
+                </Button>
+              </div>
+
+              {previewStale && !preview && (
+                <p className="text-sm text-warning" role="status">
+                  The draft changed after the last preview. Preview again to see what it produces.
+                </p>
+              )}
+
+              {preview && (
+                <dl className="rounded-panel border border-border-subtle p-4">
+                  <dt className="font-medium text-ink">Account name</dt>
+                  <dd className="font-mono text-ink">
+                    {preview.correlationKey ?? '—'}{' '}
+                    {preview.taken && (
+                      <span className="font-sans text-warning">
+                        (the base name is already taken; this is the next free
+                        one)
+                      </span>
+                    )}
+                  </dd>
+                  {preview.userPrincipalName && (
+                    <>
+                      <dt className="mt-3 font-medium text-ink">User principal name</dt>
+                      <dd className="font-mono text-ink">{preview.userPrincipalName}</dd>
+                    </>
+                  )}
+                  <dt className="mt-3 font-medium text-ink">Container</dt>
+                  {preview.placesAccountsInContainers === false ? (
+                    <dd className="text-muted">Not used: this target has no containers.</dd>
+                  ) : (
+                    <dd className="font-mono text-ink">{preview.container ?? '—'}</dd>
+                  )}
+                  {Object.entries(preview.attributes).map(([name, value]) => (
+                    <div key={name}>
+                      <dt className="mt-3 font-medium text-ink">{name}</dt>
+                      <dd className="font-mono text-ink">{value}</dd>
+                    </div>
+                  ))}
+                  {/*
+                    The empty case is the one that matters here: a template that
+                    resolves to nothing for this person produces no attributes at
+                    all, and a preview that renders an empty list silently is a
+                    preview that says the templates are fine.
+                  */}
+                  {Object.keys(preview.attributes).length === 0 && (
+                    <div className="mt-3 text-muted">
+                      No attributes resolved for this person.
+                    </div>
+                  )}
+                  {preview.problems.length > 0 && (
+                    <div className="mt-4">
+                      <Alert tone="danger" title="This person could not be placed">
+                        <ul className="list-disc pl-5">
+                          {preview.problems.map((p) => (
+                            <li key={p}>{p}</li>
+                          ))}
+                        </ul>
+                      </Alert>
+                    </div>
+                  )}
+                </dl>
+              )}
+            </div>
+          </FormSection>
+
+          <FormActions
+            sticky
+            status={draftStatus({
+              dirty,
+              stale: previewStale ? 'Preview is out of date' : null,
+            })}
+          >
+            <Button type="submit" variant="primary" loading={busy === 'save'} disabled={!!busy}>
+              Save profile
+            </Button>
+          </FormActions>
+        </form>
 
         {back}
       </div>

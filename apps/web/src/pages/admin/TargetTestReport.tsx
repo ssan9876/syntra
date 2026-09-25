@@ -1,4 +1,5 @@
-import { Alert, Panel, Status } from '@syntra/ui';
+import { Alert, StateBadge, Status } from '@syntra/ui';
+import { StaleBadge } from './DraftState.js';
 
 export interface ConnectorRight {
   right: 'createUser' | 'modifyUser' | 'moveUser' | 'modifyMembership';
@@ -45,10 +46,13 @@ function rightTone(
 
 export function RightsReport({ rights }: { rights: ConnectorRight[] }) {
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-2" aria-label="What the bind account may do">
       {rights.map((r) => (
         <li key={r.right} className="flex flex-wrap items-center gap-2">
-          <Status tone={rightTone(r.status)}>
+          <Status
+            tone={rightTone(r.status)}
+            glyph={r.status === 'granted' ? 'check' : r.status === 'denied' ? 'blocked' : 'alert'}
+          >
             {r.status === 'unverified' ? 'Could not check' : r.status}
           </Status>
           <span className="text-ink">{RIGHT_LABELS[r.right]}</span>
@@ -59,32 +63,35 @@ export function RightsReport({ rights }: { rights: ConnectorRight[] }) {
   );
 }
 
-export function TestReport({ result }: { result: TestResult }) {
-  if (!result.ok) {
-    return (
-      <Alert tone="danger" title="Could not connect">
-        {result.message}
-      </Alert>
-    );
-  }
-
+/**
+ * The result of the last connection test, shown in the connection stage it
+ * belongs to.
+ *
+ * `stale` is set by the editor the moment the connection it was run against
+ * changes. The rights below describe the bind account and URL that were
+ * TESTED, and a report that went on looking current after the bind DN was
+ * retyped would be answering a question nobody is asking any more.
+ */
+export function TestReport({ result, stale = false }: { result: TestResult; stale?: boolean }) {
   return (
-    <Panel title="Connection test">
-      <div className="space-y-4 p-4">
-        <p className="flex flex-wrap items-center gap-2">
-          <Status tone="active">Connected</Status>
-          <span className="text-muted">{result.message}</span>
-        </p>
-        {result.rights && result.rights.length > 0 && (
-          <>
-            <p className="text-muted">
-              What this bind account is allowed to do. A right it could not
-              confirm is not a right it has.
-            </p>
-            <RightsReport rights={result.rights} />
-          </>
-        )}
+    <div className="space-y-3 sm:col-span-2" aria-label="Connection test result" role="group">
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="font-medium text-ink">Connection test</h4>
+        {stale && <StaleBadge />}
       </div>
-    </Panel>
+      {!result.ok ? (
+        <Alert tone="danger" title="Could not connect">
+          {result.message}
+        </Alert>
+      ) : (
+        <>
+          <p className="flex flex-wrap items-center gap-2">
+            <StateBadge state="healthy">Connected</StateBadge>
+            <span className="text-muted">{result.message}</span>
+          </p>
+          {result.rights && result.rights.length > 0 && <RightsReport rights={result.rights} />}
+        </>
+      )}
+    </div>
   );
 }

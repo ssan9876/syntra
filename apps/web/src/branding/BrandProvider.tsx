@@ -19,9 +19,19 @@ export interface Brand {
   logo: string | null;
   primary: string | null;
   accent: string | null;
+  /** Where "Get help" goes. Re-checked with `isSupportUrl` before rendering. */
+  supportUrl: string | null;
+  supportLabel: string | null;
 }
 
-const EMPTY: Brand = { name: null, logo: null, primary: null, accent: null };
+const EMPTY: Brand = {
+  name: null,
+  logo: null,
+  primary: null,
+  accent: null,
+  supportUrl: null,
+  supportLabel: null,
+};
 
 const BrandContext = createContext<Brand>(EMPTY);
 

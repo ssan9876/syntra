@@ -1,9 +1,31 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Status } from '@syntra/ui';
-import { api } from '../../session/api.js';
-import { useApiResource } from './hooks.js';
+import {
+  Alert,
+  Button,
+  Check,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  StateBadge,
+  useToast,
+  type ComboOption,
+  type State,
+  type SummaryError,
+} from '@syntra/ui';
+import { ApiError, api } from '../../session/api.js';
+import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
+import { PersonPicker } from './PickerNote.js';
+import { usePersonReceipts } from './use-person-receipts.js';
+import {
+  OnboardingReceipt,
+  REQUIRED,
+  receiptEvidence,
+  receiptState,
+  type ReceiptRow,
+} from './onboarding-receipt.js';
 
 interface OperationResult {
   person: { id: string; givenName: string; familyName: string };
@@ -14,19 +36,107 @@ interface OperationResult {
   };
 }
 
+/** A lifecycle step's status as the receipt's state language. */
+function stepState(status: string): { state: State; label: string } {
+  switch (status) {
+    case 'succeeded': return { state: 'healthy', label: 'Done' };
+    case 'skipped': return { state: 'inactive', label: 'Skipped' };
+    case 'failed': return { state: 'blocked', label: 'Failed' };
+    case 'running': return { state: 'running', label: 'Running' };
+    default: return { state: 'pending', label: status === 'pending' ? 'Queued' : status };
+  }
+}
+
+function operationState(status: string): { state: State; label: string } {
+  if (status === 'completed') return { state: 'healthy', label: 'Completed' };
+  if (status === 'awaiting_approval') return { state: 'pending', label: 'Awaiting approval' };
+  if (['queued', 'running', 'waiting'].includes(status)) return { state: 'pending', label: 'Waiting for targets' };
+  return { state: 'blocked', label: 'Needs attention' };
+}
+
+/**
+ * The durable receipt: the operation's own steps, then one row per target
+ * from the person's provisioning receipts, polled until each target is
+ * observed or needs a person. The operation says the work was QUEUED; only
+ * the receipts say whether it landed.
+ */
+function OnboardingResult({ result }: { result: OperationResult }) {
+  const receipts = usePersonReceipts(result.person.id);
+  const overall = operationState(result.operation.status);
+  const rows: ReceiptRow[] = [
+    ...result.operation.steps.map((step) => ({
+      key: step.key,
+      title: step.title,
+      ...stepState(step.status),
+      evidence: step.message ?? undefined,
+    })),
+    ...(receipts.receipts ?? []).map((receipt) => ({
+      key: receipt.id,
+      title: receipt.targetName,
+      ...receiptState(receipt),
+      evidence: receiptEvidence(receipt),
+    })),
+  ];
+  return <>
+    <PageHeader
+      title={`${result.person.givenName} ${result.person.familyName}`}
+      status={<StateBadge state={overall.state}>{overall.label}</StateBadge>}
+    />
+    {receipts.problem && <div className="mb-4"><Alert tone="warning">{receipts.problem}</Alert></div>}
+    <OnboardingReceipt title="Onboarding receipt" rows={rows} />
+    <div className="mt-4 flex flex-wrap gap-4">
+      <Link className="link font-medium" to={`/admin/people/${result.person.id}`}>Open employee</Link>
+      <Link className="link" to={`/admin/lifecycle-operations/${result.operation.id}`}>Open operation timeline</Link>
+      <Link className="link" to="/admin/employee-work">Open employee work</Link>
+    </div>
+  </>;
+}
+
+/**
+ * Onboarding as one server-side operation.
+ *
+ * One request saves the employee, the contract, the optional login and the
+ * target work, under an idempotency key held for the life of the page — so a
+ * double click or a retry after a dropped connection resumes the same
+ * operation rather than creating a second employee. The form is grouped the
+ * way the request is, marks the three fields the server insists on, and
+ * keeps its submit in reach however far down the contract fields go.
+ */
 export function GuidedOnboardingPage() {
   const targets = useApiResource<{ targets: { id: string; name: string; enabled: boolean }[] }>('/api/admin/targets');
   const key = useRef(crypto.randomUUID());
+  const toast = useToast();
   const [values, setValues] = useState<Record<string, string>>({ startDate: '' });
+  const [manager, setManager] = useState<ComboOption | null>(null);
   const [login, setLogin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [result, setResult] = useState<OperationResult | null>(null);
   const set = (name: string, value: string) => setValues((current) => ({ ...current, [name]: value }));
+  const enabled = (targets.data?.targets ?? []).filter((target) => target.enabled);
 
-  const submit = async () => {
-    setBusy(true);
+  function missing(): Record<string, string> {
+    const found: Record<string, string> = {};
+    if (!values.givenName?.trim()) found.givenName = 'Enter a given name';
+    if (!values.familyName?.trim()) found.familyName = 'Enter a family name';
+    if (!values.startDate) found.startDate = 'Enter a start date';
+    if (login && !values.login?.trim()) found.login = 'Enter a login';
+    if (login && !values.email?.trim()) found.email = 'Enter the login email';
+    return found;
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const invalid = missing();
     setProblem('');
+    setErrors(invalid);
+    if (Object.keys(invalid).length > 0) return;
+    setBusy(true);
+    // Each optional value omitted when blank: the schema validates these as
+    // e-mail addresses, dates and bounded strings, and '' satisfies none.
+    const optional = (...names: string[]) =>
+      Object.fromEntries(names.filter((name) => values[name]?.trim()).map((name) => [name, values[name]!.trim()]));
     try {
       const response = await api<OperationResult>('/api/admin/lifecycle-operations/onboard', {
         method: 'POST',
@@ -35,56 +145,109 @@ export function GuidedOnboardingPage() {
           person: {
             givenName: values.givenName ?? '',
             familyName: values.familyName ?? '',
-            ...(values.externalId ? { externalId: values.externalId } : {}),
-            ...(values.businessEmail ? { businessEmail: values.businessEmail } : {}),
+            ...optional('externalId', 'businessEmail', 'personalEmail'),
           },
           contract: {
             sequence: 1,
             isPrimary: true,
             startDate: values.startDate ?? '',
-            ...(values.department ? { department: values.department } : {}),
-            ...(values.jobTitle ? { jobTitle: values.jobTitle } : {}),
+            ...optional('endDate', 'department', 'jobTitle', 'costCentre', 'employer', 'location'),
+            ...(manager ? { managerPersonId: manager.value } : {}),
+            ...(values.fte?.trim() ? { fte: Number(values.fte) } : {}),
           },
           ...(login
             ? {
                 login: {
                   login: values.login ?? '',
-                  email: values.loginEmail ?? '',
+                  email: values.email ?? '',
                   displayName: `${values.givenName ?? ''} ${values.familyName ?? ''}`.trim(),
                 },
               }
             : {}),
-          targetIds: (targets.data?.targets ?? []).filter((target) => target.enabled).map((target) => target.id),
+          targetIds: enabled.map((target) => target.id),
         }),
       });
       setResult(response);
+      toast({ tone: 'success', title: `${response.person.givenName} ${response.person.familyName} onboarding started` });
     } catch (error) {
-      setProblem(error instanceof Error ? error.message : 'Onboarding could not be started.');
+      setErrors(fieldErrors(error));
+      setProblem(error instanceof ApiError
+        ? (error.problem.detail ?? error.problem.title)
+        : error instanceof Error ? error.message : 'Onboarding could not be started.');
     } finally {
       setBusy(false);
     }
   };
 
-  if (result) {
-    const waiting = ['queued', 'running', 'waiting'].includes(result.operation.status);
-    return <>
-      <PageHeader title={`${result.person.givenName} ${result.person.familyName}`} />
-      <div aria-live="polite"><Alert tone={waiting ? 'info' : result.operation.status === 'completed' ? 'success' : 'danger'}>{waiting ? 'Onboarding is waiting for target systems.' : result.operation.status === 'completed' ? 'Onboarding completed.' : 'Onboarding needs attention.'}</Alert></div>
-      <Panel title="Durable onboarding receipt"><ol className="divide-y divide-border-subtle">{result.operation.steps.map((step) => <li key={step.key} className="flex items-start justify-between gap-4 p-4"><div><strong>{step.title}</strong>{step.message && <p className="text-sm text-muted">{step.message}</p>}</div><Status tone={step.status === 'succeeded' || step.status === 'skipped' ? 'active' : step.status === 'failed' ? 'danger' : 'warning'}>{step.status}</Status></li>)}</ol></Panel>
-      <div className="mt-4 flex gap-4"><Link className="font-medium text-primary underline" to={`/admin/people/${result.person.id}`}>Open employee</Link><Link className="text-primary underline" to={`/admin/lifecycle-operations/${result.operation.id}`}>Open operation timeline</Link><Link className="text-primary underline" to="/admin/employee-work">Open employee work</Link></div>
-    </>;
-  }
+  if (result) return <OnboardingResult result={result} />;
+
+  const summary: SummaryError[] = [
+    ...Object.entries(errors).map(([field, message]) => ({ field, message })),
+    ...(problem ? [{ message: problem }] : []),
+  ];
+  const text = (name: string, label: string, extra: { type?: string; placeholder?: string; required?: boolean } = {}) => (
+    <Field
+      name={name}
+      label={label}
+      type={extra.type}
+      placeholder={extra.placeholder}
+      required={extra.required}
+      className={extra.required ? REQUIRED : undefined}
+      value={values[name] ?? ''}
+      onChange={(value) => set(name, value)}
+      error={errors[name]}
+    />
+  );
 
   return <>
     <PageHeader title="Onboard employee" />
-    <p className="mb-4 max-w-3xl text-sm text-muted">One request saves the employee, contract, optional login, and target work. Refreshing the page after submission does not create a second employee.</p>
-    {problem && <div className="mb-4" aria-live="assertive"><Alert tone="danger">{problem}</Alert></div>}
-    <div className="space-y-4">
-      <Panel title="Employee"><div className="grid gap-4 p-4 sm:grid-cols-2"><Field label="Given name" value={values.givenName ?? ''} onChange={(value) => set('givenName', value)} /><Field label="Family name" value={values.familyName ?? ''} onChange={(value) => set('familyName', value)} /><Field label="External id" value={values.externalId ?? ''} onChange={(value) => set('externalId', value)} /><Field label="Business email" type="email" value={values.businessEmail ?? ''} onChange={(value) => set('businessEmail', value)} /></div></Panel>
-      <Panel title="Employment"><div className="grid gap-4 p-4 sm:grid-cols-2"><Field label="Start date" type="date" value={values.startDate ?? ''} onChange={(value) => set('startDate', value)} /><Field label="Department" value={values.department ?? ''} onChange={(value) => set('department', value)} /><Field label="Job title" value={values.jobTitle ?? ''} onChange={(value) => set('jobTitle', value)} /></div></Panel>
-      <Panel title="Syntra login"><div className="space-y-4 p-4"><Check label="Create a Syntra login" checked={login} onChange={setLogin} />{login && <div className="grid gap-4 sm:grid-cols-2"><Field label="Login" value={values.login ?? ''} onChange={(value) => set('login', value)} /><Field label="Login email" type="email" value={values.loginEmail ?? ''} onChange={(value) => set('loginEmail', value)} /></div>}</div></Panel>
-      <Panel title="Target systems"><div className="p-4 text-sm text-muted">{targets.loading ? 'Loading target systems…' : targets.error ? `Targets could not be loaded: ${targets.error}` : `${(targets.data?.targets ?? []).filter((target) => target.enabled).length} enabled target system(s) will receive durable work receipts.`}</div></Panel>
-      <div className="sticky bottom-0 flex justify-end border-t border-border-subtle bg-bg/95 py-4 backdrop-blur"><Button loading={busy} disabled={targets.loading || !values.givenName || !values.familyName || !values.startDate} onClick={() => void submit()}>Start onboarding</Button></div>
-    </div>
+    <form noValidate onSubmit={(event) => void submit(event)} className="space-y-6">
+      <ErrorSummary errors={summary} title="Onboarding was not started" />
+      <FormSection title="Identity">
+        {text('givenName', 'Given name', { required: true, placeholder: 'Maya' })}
+        {text('familyName', 'Family name', { required: true, placeholder: 'Okafor' })}
+        {text('externalId', 'External id', { placeholder: 'E1042' })}
+        {text('businessEmail', 'Business email', { type: 'email' })}
+        {text('personalEmail', 'Personal email', { type: 'email' })}
+      </FormSection>
+      <FormSection title="Contract">
+        {text('startDate', 'Start date', { type: 'date', required: true })}
+        {text('endDate', 'End date', { type: 'date' })}
+        {text('department', 'Department', { placeholder: 'Nursing' })}
+        {text('jobTitle', 'Job title', { placeholder: 'Staff Nurse' })}
+        {text('costCentre', 'Cost centre')}
+        {text('location', 'Location')}
+        {text('employer', 'Employer')}
+        {text('fte', 'FTE', { placeholder: '1.0' })}
+        <PersonPicker name="managerPersonId" label="Manager" value={manager} onChange={setManager} error={errors.managerPersonId} />
+      </FormSection>
+      <FormSection
+        title="Sign-in account"
+        status={<StateBadge state={login ? 'pending' : 'inactive'}>{login ? 'Will be created' : 'None'}</StateBadge>}
+      >
+        <Check className="sm:col-span-2" label="Create a Syntra login" checked={login} onChange={setLogin} />
+        {login && <>
+          {text('login', 'Login', { required: true, placeholder: 'mokafor' })}
+          {text('email', 'Login email', { type: 'email', required: true })}
+        </>}
+      </FormSection>
+      <FormSection
+        title="Target systems"
+        status={targets.loading && !targets.data
+          ? <StateBadge state="running">Loading</StateBadge>
+          : targets.error
+            ? <StateBadge state="attention">Unavailable</StateBadge>
+            : <StateBadge state={enabled.length > 0 ? 'pending' : 'inactive'}>{`${enabled.length} will receive work`}</StateBadge>}
+      >
+        {targets.error
+          ? <Alert tone="warning">Targets could not be loaded: {targets.error}</Alert>
+          : enabled.length > 0 && <ul className="flex flex-wrap gap-2 sm:col-span-2" aria-label="Targets receiving work">
+            {enabled.map((target) => <li key={target.id} className="rounded-full border border-border-control px-2.5 py-0.5 text-sm text-ink">{target.name}</li>)}
+          </ul>}
+      </FormSection>
+      <FormActions sticky>
+        <Button type="submit" loading={busy} disabled={targets.loading && !targets.data}>Start onboarding</Button>
+      </FormActions>
+    </form>
   </>;
 }

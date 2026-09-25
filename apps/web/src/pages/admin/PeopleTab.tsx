@@ -2,14 +2,20 @@ import { useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
+  ColumnPicker,
+  DensityToggle,
   Empty,
   ListControls,
   Pager,
   Panel,
   SkeletonRows,
-  Status,
+  StateBadge,
   Table,
+  TableToolbar,
   buttonClasses,
+  useDensity,
+  useHiddenColumns,
+  type ColumnDef,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
@@ -21,6 +27,14 @@ interface PersonRow {
   externalId: string | null;
   status: string;
 }
+
+/** The name opens the record and the status is what is scanned for. */
+const COLUMNS: ColumnDef[] = [
+  { id: 'name', label: 'Name', required: true },
+  { id: 'email', label: 'Email' },
+  { id: 'reference', label: 'Reference' },
+  { id: 'status', label: 'Status', required: true },
+];
 
 /**
  * The people, as a list and nothing else.
@@ -53,6 +67,10 @@ export function PeopleTab() {
   const pageSize = params.get('pageSize');
   if (pageSize) query.set('pageSize', pageSize);
   const qs = query.toString();
+
+  const [density, setDensity] = useDensity('people');
+  const [hidden, setHidden] = useHiddenColumns('people');
+  const shows = (column: string) => !hidden.has(column);
 
   const { data, error, loading } = useApiResource<{
     persons: PersonRow[];
@@ -142,15 +160,24 @@ export function PeopleTab() {
           three is what closes that, and it is why this page keeps a list and
           nothing else. */}
 
+      {!error && data && persons.length > 0 && (
+        <TableToolbar>
+          <ColumnPicker columns={COLUMNS} hidden={hidden} onChange={setHidden} />
+          <DensityToggle value={density} onChange={setDensity} />
+        </TableToolbar>
+      )}
+
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={6} cols={4} />}
+          {/* Skeleton only before the first answer; a search keeps the
+              previous rows until the next arrive. */}
+          {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
           {/* Two empty states, because they need different actions. "Nothing
               here yet" wants the create button; "nothing matched" wants the
               search cleared, and saying what was searched makes a typo
               visible. */}
-          {!loading && persons.length === 0 && total === 0 && !filtered && (
+          {data && persons.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
               {/* An action, not a sentence. The old copy said "Add someone
                   directly, or import a file from your HR system on the Import
@@ -165,11 +192,16 @@ export function PeopleTab() {
                     Add someone
                   </Link>
                 }
+                secondaryAction={
+                  <Link to="/admin/users?tab=import" className="link">
+                    Import a file
+                  </Link>
+                }
               />
             </div>
           )}
 
-          {!loading && persons.length === 0 && total === 0 && filtered && (
+          {data && persons.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
                 title={`Nobody matches ${q || status}`}
@@ -179,7 +211,7 @@ export function PeopleTab() {
                     className={buttonClasses('secondary')}
                     onClick={() => update({ q: '', status: '', page: '' })}
                   >
-                    Clear the search
+                    Reset filters
                   </button>
                 }
               >
@@ -194,7 +226,7 @@ export function PeopleTab() {
               and the directory is not, so the unfiltered empty state would say
               "No people yet" over thousands of people. One way out, and it is
               the only thing this state offers. */}
-          {!loading && persons.length === 0 && total > 0 && (
+          {data && persons.length === 0 && total > 0 && (
             <div className="p-6">
               <Empty
                 title={`Page ${page} is past the end`}
@@ -211,22 +243,19 @@ export function PeopleTab() {
             </div>
           )}
 
-          {!loading && persons.length > 0 && (
-            <Table>
+          {persons.length > 0 && (
+            <Table stickyHeader label="People" density={density}>
               <thead>
                 <tr>
                   <th scope="col">
                     Name
                   </th>
-                  <th
-                    scope="col"
-                    className="max-sm:hidden"
-                  >
-                    Email
-                  </th>
-                  <th scope="col">
-                    Reference
-                  </th>
+                  {shows('email') && (
+                    <th scope="col" className="max-sm:hidden">
+                      Email
+                    </th>
+                  )}
+                  {shows('reference') && <th scope="col">Reference</th>}
                   <th scope="col">
                     Status
                   </th>
@@ -243,23 +272,21 @@ export function PeopleTab() {
                         {person.givenName} {person.familyName}
                       </Link>
                     </td>
-                    <td className="max-sm:hidden">
-                      {person.businessEmail ?? '—'}
-                    </td>
-                    <td>
-                      {person.externalId ?? '—'}
-                    </td>
+                    {shows('email') && (
+                      <td className="max-sm:hidden">{person.businessEmail ?? '—'}</td>
+                    )}
+                    {shows('reference') && <td>{person.externalId ?? '—'}</td>}
                     <td>
                       {/*
                         Inactive people stay listed and labelled, as inactive
                         accounts do. Hiding a leaver to keep the table tidy
                         would make the register unauditable.
                       */}
-                      <Status
-                        tone={person.status === 'active' ? 'active' : 'inactive'}
-                      >
-                        {person.status === 'active' ? 'Active' : 'Inactive'}
-                      </Status>
+                      {person.status === 'active' ? (
+                        <StateBadge state="healthy">Active</StateBadge>
+                      ) : (
+                        <StateBadge state="inactive">Inactive</StateBadge>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -272,7 +299,7 @@ export function PeopleTab() {
       {/* Not gated on the rows. The count is the answer to "how many are
           there", a page past the end has none of them, and the pager is what
           gets back. */}
-      {!error && !loading && (
+      {!error && data && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

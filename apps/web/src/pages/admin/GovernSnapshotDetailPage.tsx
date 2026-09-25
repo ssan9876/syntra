@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, StateBadge, Table, useToast } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 import { GovernRuleCandidates } from './GovernRuleCandidates.js';
+import { RunState } from './run-states.js';
 
 interface SourceLine {
   sourceKind: string;
@@ -48,12 +49,16 @@ export function GovernSnapshotDetailPage() {
     id ? `/api/admin/govern/snapshots/${id}` : null,
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const toast = useToast();
 
   const snapshot = data?.snapshot;
 
   return (
     <>
-      <PageHeader title="Snapshot" />
+      <PageHeader
+        title="Snapshot"
+        status={snapshot ? <RunState status={snapshot.status} /> : undefined}
+      />
       {/* "Assembled" and not "as of": the distinction the deleted sentence
           spent a clause on is carried by the word itself, beside the two
           per-source read times the page already shows. Put next to those, the
@@ -62,7 +67,7 @@ export function GovernSnapshotDetailPage() {
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
-      {loading && <SkeletonRows rows={6} cols={4} />}
+      {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
       {snapshot && data && (
         <div className="space-y-6">
@@ -70,15 +75,15 @@ export function GovernSnapshotDetailPage() {
           <Panel title="What nobody can explain">
             <div className="grid grid-cols-3 gap-4 p-4">
               <div>
-                <p className="text-2xl font-semibold text-ink">{snapshot.unattributableCount}</p>
+                <p className="figure text-2xl font-semibold text-ink">{snapshot.unattributableCount}</p>
                 <p className="text-muted">holdings nobody can explain</p>
               </div>
               <div>
-                <p className="text-2xl font-semibold text-ink">{snapshot.coverageGapCount}</p>
+                <p className="figure text-2xl font-semibold text-ink">{snapshot.coverageGapCount}</p>
                 <p className="text-muted">regions this snapshot could not describe</p>
               </div>
               <div>
-                <p className="text-2xl font-semibold text-ink">
+                <p className="figure text-2xl font-semibold text-ink">
                   {snapshot.unattributedAccountCount}
                 </p>
                 <p className="text-muted">accounts belonging to nobody Syntra knows</p>
@@ -89,13 +94,13 @@ export function GovernSnapshotDetailPage() {
           <Panel title="Totals">
             <div className="grid grid-cols-2 gap-4 p-4">
               <div>
-                <p className="text-2xl font-semibold text-ink">
+                <p className="figure text-2xl font-semibold text-ink">
                   {snapshot.holdingCount.toLocaleString()}
                 </p>
                 <p className="text-muted">holdings</p>
               </div>
               <div>
-                <p className="text-2xl font-semibold text-ink">
+                <p className="figure text-2xl font-semibold text-ink">
                   {snapshot.personsWithActiveContract.toLocaleString()}
                 </p>
                 <p className="text-muted">people with an active contract</p>
@@ -109,11 +114,13 @@ export function GovernSnapshotDetailPage() {
             <Table>
               <thead>
                 <tr>
-                  <th>Source</th>
-                  <th>Last successful read</th>
-                  <th>Freshness</th>
-                  <th>Completeness</th>
-                  <th />
+                  <th scope="col">Source</th>
+                  <th scope="col">Last successful read</th>
+                  <th scope="col">Freshness</th>
+                  <th scope="col">Completeness</th>
+                  <th scope="col">
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -131,17 +138,19 @@ export function GovernSnapshotDetailPage() {
                       {/* Words, not a colour alone. A badge that only differs by
                           hue is unreadable to a reader who cannot see the hue,
                           and this is the number the whole report rests on. */}
-                      <Status tone={source.staleness === 'fresh' ? 'active' : 'danger'}>
-                        {source.staleness === 'fresh' ? 'Fresh' : 'Stale'}
-                      </Status>
+                      {source.staleness === 'fresh' ? (
+                        <StateBadge state="healthy">Fresh</StateBadge>
+                      ) : (
+                        <StateBadge state="attention">Stale</StateBadge>
+                      )}
                       <span className="ml-2 text-muted">
                         against a {source.freshnessSlaHours}-hour SLA
                       </span>
                     </td>
                     <td>
-                      <Status tone={source.completeness === 'complete' ? 'active' : 'warning'}>
+                      <StateBadge state={source.completeness === 'complete' ? 'healthy' : 'attention'}>
                         {COMPLETENESS_LABEL[source.completeness] ?? source.completeness}
-                      </Status>
+                      </StateBadge>
                     </td>
                     <td className="text-right">
                       {source.sourceKind !== 'syntraInternal' && (
@@ -157,9 +166,10 @@ export function GovernSnapshotDetailPage() {
                                 const owner =
                                   (result as { owner?: string }).owner ?? 'the owning subsystem';
                                 setActionError(null);
-                                window.alert(
-                                  `Enqueued ${owner}'s own job. Govern does not read this source itself and does not hold the answer; the next snapshot will show what it found.`,
-                                );
+                                toast({
+                                  title: `Refresh queued with ${owner}`,
+                                  body: 'The next snapshot shows what it found.',
+                                });
                                 reload();
                               })
                               .catch((cause: unknown) =>

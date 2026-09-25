@@ -1,7 +1,19 @@
 import { useState } from 'react';
-import { Alert, Button, Check, Empty, Field, Panel, Select, Table } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  Empty,
+  ErrorSummary,
+  Field,
+  FormActions,
+  Panel,
+  Select,
+  Table,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 
 /**
  * What an application is told about whoever signs in.
@@ -69,6 +81,8 @@ export function ApplicationClaims({
   const [busy, setBusy] = useState<string | null>(null);
   const [applied, setApplied] = useState<string | null>(null);
   const [applyProblem, setApplyProblem] = useState<string | null>(null);
+  /** A refused Remove. It had no catch, so a 403 read as a dead button. */
+  const [removeProblem, setRemoveProblem] = useState<string | null>(null);
 
   if (protocols.length === 0) return null;
 
@@ -80,11 +94,18 @@ export function ApplicationClaims({
 
   async function remove(id: string) {
     setBusy(id);
+    setRemoveProblem(null);
     try {
       await api(`/api/admin/applications/${applicationId}/claims/${id}`, {
         method: 'DELETE',
       });
       reload();
+    } catch (cause) {
+      setRemoveProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That mapping could not be removed.',
+      );
     } finally {
       setBusy(null);
     }
@@ -163,6 +184,11 @@ export function ApplicationClaims({
             <Alert tone="danger">{applyProblem}</Alert>
           </div>
         )}
+        {removeProblem && (
+          <div className="mb-4">
+            <Alert tone="danger">{removeProblem}</Alert>
+          </div>
+        )}
 
         {adding && (
           <div className="mb-4">
@@ -214,7 +240,11 @@ export function ApplicationClaims({
                   <td>
                     <div className="row-actions">
                       <Button
-                        variant="ghost"
+                        // Removing a mapping stops the application being told
+                        // something at the next sign-in; `danger-quiet` so it
+                        // does not read as a neutral row control.
+                        variant="danger-quiet"
+                        size="sm"
                         disabled={busy === row.id}
                         onClick={() => remove(row.id)}
                       >
@@ -251,6 +281,7 @@ function ClaimForm({
   const [multiValued, setMultiValued] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const source = SOURCES.find((s) => s.value === sourceKind)!;
   const needsField = source.field !== null;
@@ -264,6 +295,7 @@ function ClaimForm({
   async function save() {
     setBusy(true);
     setProblem(null);
+    setErrors({});
     try {
       await api(`/api/admin/applications/${applicationId}/claims`, {
         method: 'POST',
@@ -281,10 +313,14 @@ function ClaimForm({
       });
       onSaved();
     } catch (cause) {
+      const marked = formFieldErrors(cause);
+      setErrors(marked);
       setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+        Object.keys(marked).length > 0
+          ? null
+          : cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That could not be saved.',
       );
     } finally {
       setBusy(false);
@@ -292,10 +328,35 @@ function ClaimForm({
   }
 
   return (
-    <div className="rounded-panel border border-border-control p-3">
-      <div className="space-y-3">
+    // A form of its own, nested visually inside the claims panel but not a
+    // control: its edge is a divider-weight rule, and the controls inside
+    // carry the control boundary.
+    <form
+      noValidate
+      className="space-y-3 rounded-panel border border-border-subtle bg-surface p-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (ready) void save();
+      }}
+    >
+      <ErrorSummary
+        errors={summaryErrors(
+          errors,
+          {
+            protocol: 'Protocol',
+            claimName: 'Sent as',
+            sourceKind: 'From',
+            sourceField: source.field ?? 'Field',
+            literalValue: 'Value',
+          },
+          problem,
+        )}
+        {...(Object.keys(errors).length === 0 ? { title: 'Not added' } : {})}
+      />
+      <div className="grid max-w-4xl gap-3 sm:grid-cols-2">
         {protocols.length > 1 && (
           <Select
+            name="protocol"
             label="Protocol"
             value={protocol}
             onChange={setProtocol}
@@ -303,29 +364,49 @@ function ClaimForm({
               value: p,
               label: p === 'saml' ? 'SAML' : 'OpenID Connect',
             }))}
+            error={errors.protocol}
+            className="sm:col-span-2"
           />
         )}
 
         <Field
+          name="claimName"
           label="Sent as"
           value={claimName}
           onChange={setClaimName}
           required
+          error={errors.claimName}
         />
 
         <Select
+          name="sourceKind"
           label="From"
           value={sourceKind}
           onChange={setSourceKind}
           options={SOURCES.map((s) => ({ value: s.value, label: s.label }))}
+          error={errors.sourceKind}
         />
 
         {needsField && (
-          <Field label={source.field!} value={sourceField} onChange={setSourceField} required />
+          <Field
+            name="sourceField"
+            label={source.field!}
+            value={sourceField}
+            onChange={setSourceField}
+            required
+            error={errors.sourceField}
+          />
         )}
 
         {isLiteral && (
-          <Field label="Value" value={literalValue} onChange={setLiteralValue} required />
+          <Field
+            name="literalValue"
+            label="Value"
+            value={literalValue}
+            onChange={setLiteralValue}
+            required
+            error={errors.literalValue}
+          />
         )}
 
         {sourceKind === 'groups' && (
@@ -335,18 +416,16 @@ function ClaimForm({
             label="Send every group, not just the first"
           />
         )}
-
-        {problem && <Alert tone="danger">{problem}</Alert>}
-
-        <div className="flex gap-2">
-          <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={save}>
-            Add mapping
-          </Button>
-          <Button variant="secondary" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-        </div>
       </div>
-    </div>
+
+      <FormActions>
+        <Button type="button" variant="secondary" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" variant="primary" size="sm" loading={busy} disabled={!ready}>
+          Add mapping
+        </Button>
+      </FormActions>
+    </form>
   );
 }

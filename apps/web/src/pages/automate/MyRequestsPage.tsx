@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, buttonClasses, Empty, Panel, SkeletonRows, StateBadge } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { useApiResource } from '../../session/use-api-resource.js';
-import { REQUEST_LABEL, REQUEST_TONE, when } from './status.js';
+import { REQUEST_LABEL, REQUEST_STATE, when } from './status.js';
 
 interface RequestRow {
   id: string;
@@ -13,7 +13,7 @@ interface RequestRow {
 }
 
 export function MyRequestsPage() {
-  const { data, error, loading } = useApiResource<{ requests: RequestRow[] }>(
+  const { data, error } = useApiResource<{ requests: RequestRow[] }>(
     '/api/portal/automate/requests',
   );
 
@@ -24,18 +24,25 @@ export function MyRequestsPage() {
         {error && <Alert tone="danger">{error}</Alert>}
         <div className="mt-6">
           <Panel>
-            {loading && <SkeletonRows rows={4} cols={3} />}
-            {!loading && (data?.requests ?? []).length === 0 && (
+            {!data && !error && <SkeletonRows rows={4} cols={3} />}
+            {data && (data.requests ?? []).length === 0 && (
               <div className="p-6">
-                <Empty title="You have not asked for anything yet">
+                <Empty
+                  title="You have not asked for anything yet"
+                  action={
+                    <Link to="/catalog" className={buttonClasses('primary')}>
+                      Browse the catalog
+                    </Link>
+                  }
+                >
                   Anything you request appears here with where it is and who it
                   is with.
                 </Empty>
               </div>
             )}
-            {!loading && (data?.requests ?? []).length > 0 && (
+            {data && (data.requests ?? []).length > 0 && (
               <ul className="divide-y divide-border-subtle">
-                {data!.requests.map((row) => (
+                {(data.requests ?? []).map((row) => (
                   <li
                     key={row.id}
                     className="flex items-center justify-between gap-4 px-4 py-3"
@@ -54,9 +61,9 @@ export function MyRequestsPage() {
                         <p className="text-sm text-muted">{row.statusReason}</p>
                       )}
                     </div>
-                    <Status tone={REQUEST_TONE[row.status] ?? 'neutral'}>
+                    <StateBadge state={REQUEST_STATE[row.status] ?? 'setup'}>
                       {REQUEST_LABEL[row.status] ?? row.status}
-                    </Status>
+                    </StateBadge>
                   </li>
                 ))}
               </ul>

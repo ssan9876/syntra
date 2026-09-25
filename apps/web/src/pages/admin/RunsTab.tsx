@@ -1,6 +1,16 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  buttonClasses,
+  Empty,
+  Panel,
+  RefreshStatus,
+  SkeletonRows,
+  Table,
+  TableToolbar,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { RunState } from './run-states.js';
 
 interface RunRow {
   id: string;
@@ -15,37 +25,6 @@ interface SourceRow {
   id: string;
   name: string;
 }
-
-type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary';
-
-// `blocked` gets the danger tone so it is unmissable in a list — it is the
-// one status that means a run needs a human decision before anything else can
-// happen.
-const TONE: Record<string, Tone> = {
-  queued: 'neutral',
-  running: 'neutral',
-  previewed: 'primary',
-  blocked: 'danger',
-  applied: 'active',
-  partially_applied: 'warning',
-  failed: 'danger',
-  // Applying is work in progress, like running. Cancelled is a deliberate
-  // outcome, not a fault: neutral, so red keeps meaning "look at this".
-  applying: 'neutral',
-  cancelled: 'neutral',
-};
-
-const LABEL: Record<string, string> = {
-  queued: 'Queued',
-  running: 'Running',
-  previewed: 'Previewed',
-  blocked: 'Blocked',
-  applied: 'Applied',
-  partially_applied: 'Partially applied',
-  failed: 'Failed',
-  applying: 'Applying',
-  cancelled: 'Cancelled',
-};
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 
@@ -85,7 +64,19 @@ export function RunsTab() {
   );
 
   const error = syncRuns.error ?? importRuns.error;
-  const loading = syncRuns.loading || importRuns.loading;
+  // Skeleton only before the first answer. A refresh keeps the rows on
+  // screen, so pressing Refresh does not flash the table away.
+  const loaded = syncRuns.data !== null && importRuns.data !== null;
+  const refreshing = syncRuns.loading || importRuns.loading;
+  // The older of the two: the list is only as fresh as its stalest half.
+  const updatedAt =
+    syncRuns.updatedAt && importRuns.updatedAt
+      ? new Date(Math.min(syncRuns.updatedAt.getTime(), importRuns.updatedAt.getTime()))
+      : null;
+  const refresh = () => {
+    syncRuns.reload();
+    importRuns.reload();
+  };
 
   const names = new Map(
     [...(sources.data?.sources ?? []), ...(personSources.data?.sources ?? [])].map(
@@ -102,21 +93,34 @@ export function RunsTab() {
     <>
       {error && <Alert tone="danger">{error}</Alert>}
 
+      {!error && loaded && (
+        <TableToolbar>
+          <RefreshStatus updatedAt={updatedAt} onRefresh={refresh} refreshing={refreshing} />
+        </TableToolbar>
+      )}
+
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={6} cols={5} />}
+          {!loaded && <SkeletonRows rows={6} cols={5} />}
 
-          {!loading && rows.length === 0 && (
+          {loaded && rows.length === 0 && (
             <div className="p-6">
-              <Empty title="No runs yet">
+              <Empty
+                title="No runs yet"
+                action={
+                  <Link to="/admin/sources?tab=sources" className={buttonClasses('secondary')}>
+                    Go to sources
+                  </Link>
+                }
+              >
                 Runs appear here once a source has been read, on its schedule or by
                 hand.
               </Empty>
             </div>
           )}
 
-          {!loading && rows.length > 0 && (
-            <Table>
+          {loaded && rows.length > 0 && (
+            <Table stickyHeader label="Runs">
               <thead>
                 <tr>
                   <th scope="col">Started</th>
@@ -147,9 +151,7 @@ export function RunsTab() {
                     <td>{family.label}</td>
                     <td className="tabular-nums max-sm:hidden">{run.recordsRead}</td>
                     <td>
-                      <Status tone={TONE[run.status] ?? 'neutral'}>
-                        {LABEL[run.status] ?? run.status}
-                      </Status>
+                      <RunState status={run.status} />
                     </td>
                   </tr>
                 ))}

@@ -1,5 +1,15 @@
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Meter, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  buttonClasses,
+  Empty,
+  Meter,
+  Panel,
+  SkeletonRows,
+  StateBadge,
+  Table,
+  type State,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
 interface CampaignRow {
@@ -18,14 +28,27 @@ interface CampaignRow {
   blockedItems: number;
 }
 
-type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary';
-const TONE: Record<string, Tone> = {
-  draft: 'neutral',
-  open: 'primary',
-  executing: 'warning',
-  closed_complete: 'active',
-  closed_incomplete: 'warning',
+/**
+ * A campaign's status in the console's state language. `open` is waiting on
+ * its reviewers, so it is pending rather than something for this reader to
+ * act on; a campaign that closed with items undecided needs a look.
+ */
+const CAMPAIGN_STATE: Record<string, { state: State; label: string }> = {
+  draft: { state: 'setup', label: 'Draft' },
+  open: { state: 'pending', label: 'Open for review' },
+  executing: { state: 'running', label: 'Executing' },
+  closed_complete: { state: 'healthy', label: 'Closed, complete' },
+  closed_incomplete: { state: 'attention', label: 'Closed, incomplete' },
 };
+
+export function CampaignState({ status }: { status: string }) {
+  const known = CAMPAIGN_STATE[status];
+  return (
+    <StateBadge state={known?.state ?? 'setup'}>
+      {known?.label ?? status.replace(/_/g, ' ')}
+    </StateBadge>
+  );
+}
 
 /**
  * THE ONE RULE OF THIS SCREEN: the headline number never appears alone.
@@ -86,26 +109,22 @@ export function GovernCampaignsTab() {
           several tabs would need a word saying which tab its button
           applied to. */}
       <div className="mb-4 flex justify-end">
-        <Link to="/admin/govern/campaigns/new">
-            <Button variant="primary" size="sm">
-              New campaign
-            </Button>
-          </Link>
+        <Link to="/admin/govern/campaigns/new" className={buttonClasses('primary', 'sm')}>
+          New campaign
+        </Link>
       </div>
 
       {error !== null && <Alert tone="danger">{error}</Alert>}
-      {loading && <SkeletonRows rows={5} cols={4} />}
+      {!data && loading && <SkeletonRows rows={5} cols={4} />}
 
-      {!loading && campaigns.length === 0 && (
+      {data && campaigns.length === 0 && (
         <Empty
           title="No campaigns yet"
           action={
             // The empty state TOLD the reader to scope a review and offered no
             // way to. Every endpoint behind this link already existed.
-            <Link to="/admin/govern/campaigns/new">
-              <Button variant="primary" size="sm">
-                New campaign
-              </Button>
+            <Link to="/admin/govern/campaigns/new" className={buttonClasses('primary', 'sm')}>
+              New campaign
             </Link>
           }
         >
@@ -119,10 +138,10 @@ export function GovernCampaignsTab() {
           <Table>
             <thead>
               <tr>
-                <th>Campaign</th>
-                <th>Status</th>
-                <th>Due</th>
-                <th>Coverage</th>
+                <th scope="col">Campaign</th>
+                <th scope="col">Status</th>
+                <th scope="col">Due</th>
+                <th scope="col">Coverage</th>
               </tr>
             </thead>
             <tbody>
@@ -139,9 +158,7 @@ export function GovernCampaignsTab() {
                     )}
                   </td>
                   <td>
-                    <Status tone={TONE[campaign.status] ?? 'neutral'}>
-                      {campaign.status.replace(/_/g, ' ')}
-                    </Status>
+                    <CampaignState status={campaign.status} />
                   </td>
                   <td>
                     {new Date(campaign.dueAt).toLocaleDateString()}

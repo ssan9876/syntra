@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
@@ -107,73 +107,62 @@ export function RequestFormPage() {
     <AppShell>
       <div className="mx-auto w-full max-w-2xl px-6 py-8">
         {error && <Alert tone="danger">{error}</Alert>}
-        {loading && (
+        {!data && loading && (
           <Panel>
             <SkeletonRows rows={4} cols={2} />
           </Panel>
         )}
-        {!loading && data && (
-          <Panel
-            title={data.name}
-            // Spread, not `?? undefined`. Under `exactOptionalPropertyTypes`
-            // an explicit `undefined` is not assignable to
-            // `description?: string` -- Global Constraint 18, and the repo's
-            // convention everywhere else.
-            {...(data.requestInstructions === null
-              ? {}
-              : { description: data.requestInstructions })}
-          >
+        {data && (
+          <Panel title={data.name}>
             <div className="space-y-4 p-4">
+              {/* The catalog owner's instructions -- content the product
+                  carries, not console prose. It was passed to a `Panel`
+                  prop that no longer exists, and so silently never shown. */}
+              {data.requestInstructions && (
+                <p className="max-w-[65ch] whitespace-pre-line text-ink">{data.requestInstructions}</p>
+              )}
               {problem && <Alert tone="warning">{problem}</Alert>}
 
               {data.formSchema.map((field) => (
                 <div key={field.key}>
                   {field.type === 'select' ||
                   field.type === 'resourcePicker' ? (
-                    <label className="block">
-                      <span className="mb-1 block font-medium text-ink">
-                        {field.label}
-                      </span>
-                      <select
-                        className="w-full rounded-control border border-border-subtle bg-surface px-3 py-2"
+                    <>
+                      <Select
+                        label={field.label}
                         value={values[field.key] ?? ''}
-                        onChange={(event) =>
-                          setValues({
-                            ...values,
-                            [field.key]: event.target.value,
-                          })
+                        onChange={(value) =>
+                          setValues({ ...values, [field.key]: value })
                         }
-                      >
-                        <option value="">Choose one</option>
-                        {(field.type === 'resourcePicker'
-                          ? data.resources.map((r) => ({
-                              value: r.id,
-                              label: r.resourceId,
-                            }))
-                          : (field.options ?? [])
-                        ).map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                        options={[
+                          { value: '', label: 'Choose one' },
+                          ...(field.type === 'resourcePicker'
+                            ? data.resources.map((r) => ({
+                                value: r.id,
+                                label: r.resourceId,
+                              }))
+                            : (field.options ?? [])),
+                        ]}
+                      />
+                      {/* The catalog owner's own words about this field --
+                          content the product carries, not console prose. */}
                       {field.help && (
-                        <span className="mt-1 block text-muted">
-                          {field.help}
-                        </span>
+                        <p className="mt-1 text-sm text-muted">{field.help}</p>
                       )}
-                    </label>
+                    </>
                   ) : (
-                    <Field
-                      label={field.label}
-                      value={values[field.key] ?? ''}
-                      onChange={(value) =>
-                        setValues({ ...values, [field.key]: value })
-                      }
-                      {...(field.help === undefined
-                        ? {}
-                        : { hint: field.help })}
-                    />
+                    <>
+                      <Field
+                        label={field.label}
+                        value={values[field.key] ?? ''}
+                        onChange={(value) =>
+                          setValues({ ...values, [field.key]: value })
+                        }
+                      />
+                      {field.help && (
+                        <p className="mt-1 text-sm text-muted">{field.help}</p>
+                      )}
+                    </>
                   )}
                 </div>
               ))}

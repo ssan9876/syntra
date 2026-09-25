@@ -11,6 +11,8 @@ export interface CheckProps {
   warning?: string | undefined;
   className?: string;
   disabled?: boolean;
+  /** Carried to the input so a form-level `ErrorSummary` can focus it. */
+  name?: string | undefined;
 }
 
 /**
@@ -31,6 +33,7 @@ export function Check({
   warning,
   className = '',
   disabled,
+  name,
 }: CheckProps) {
   const id = useId();
   return (
@@ -38,6 +41,7 @@ export function Check({
       <label className="flex items-start gap-2.5">
         <input
           type="checkbox"
+          name={name}
           checked={checked}
           disabled={disabled}
           onChange={(e) => onChange(e.target.checked)}

@@ -1,7 +1,64 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Button, Panel } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  ErrorSummary,
+  FormActions,
+  Panel,
+  useToast,
+  type SummaryError,
+} from '@syntra/ui';
 import { ApiError, api, type Problem } from '../../session/api.js';
-import { fieldErrors } from './hooks.js';
+
+/**
+ * `fieldErrors`, keyed by the name of the CONTROL rather than the last path
+ * segment.
+ *
+ * A list field is validated item by item, so a bad second ACS URL arrives as
+ * `acsUrls.1` — and the last segment of that is `1`, which names no control
+ * on any form. The index is dropped so the message lands on the box the list
+ * is typed into.
+ */
+export function formFieldErrors(cause: unknown): Record<string, string> {
+  if (!(cause instanceof ApiError)) return {};
+  const errors: Record<string, string> = {};
+  for (const issue of cause.problem.errors ?? []) {
+    const field = issue.path
+      ?.split('.')
+      .filter((segment) => !/^\d+$/.test(segment))
+      .pop();
+    if (field && !errors[field]) errors[field] = issue.message;
+  }
+  return errors;
+}
+
+/** `givenName` → "Given name", for a summary line whose control has no label map. */
+function humanize(key: string): string {
+  const spaced = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Per-field refusals, and a form-level one, as `ErrorSummary` lines.
+ *
+ * Each field line is prefixed with the name of the control it belongs to. The
+ * same message is also shown against the field itself, and "must be a URL"
+ * read at the top of a four-screen form says nothing about WHICH of the three
+ * URL boxes it means. `labels` names them as the form does; a key it does not
+ * cover is spelled out from the API's own field name rather than dropped.
+ */
+export function summaryErrors(
+  fields: Record<string, string>,
+  labels: Record<string, string> = {},
+  problem?: string | null,
+): SummaryError[] {
+  const lines: SummaryError[] = Object.entries(fields).map(([field, message]) => ({
+    field,
+    message: `${labels[field] ?? humanize(field)}: ${message}`,
+  }));
+  if (problem) lines.push({ message: problem });
+  return lines;
+}
 
 /**
  * The record form the four directory pages share, for both creating and
@@ -39,6 +96,7 @@ export function RecordPanel({
   disabled,
   disabledReason,
   confirmable,
+  savedTitle,
 }: {
   /** The panel's heading when open, e.g. "New group". */
   title: string;
@@ -98,7 +156,14 @@ export function RecordPanel({
     message: ReactNode;
     retryWith: Record<string, unknown>;
   } | null;
+  /**
+   * The confirmation once the server has taken it. Defaults to "Changes
+   * saved" for an edit and "Created" for a create; a caller whose noun is
+   * worth naming ("Group created") passes its own.
+   */
+  savedTitle?: string | undefined;
 }) {
+  const toast = useToast();
   const controlled = onCancel !== undefined;
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>(initial ?? {});
@@ -167,6 +232,13 @@ export function RecordPanel({
         body: JSON.stringify({ ...(build(values) as object), ...extra }),
       });
       close();
+      // A toast, not an Alert. The form closes on success, so a banner inside
+      // it would vanish with it; and a save that answers only by the panel
+      // disappearing is a save the reader cannot tell from a Cancel.
+      toast({
+        tone: 'success',
+        title: savedTitle ?? (method === 'PATCH' ? 'Changes saved' : 'Created'),
+      });
       // The list reloads rather than optimistically appending. What the server
       // stored is the truth — a name it trimmed, a default it filled in — and
       // showing a guess of it teaches people to distrust the screen.
@@ -182,7 +254,7 @@ export function RecordPanel({
           return;
         }
       }
-      const marked = fieldErrors(cause);
+      const marked = formFieldErrors(cause);
       setErrors(marked);
       // A field-level message is shown against its field. The banner is for
       // everything else, and saying both would say it twice.
@@ -227,10 +299,24 @@ export function RecordPanel({
     );
   }
 
+  // Measured against what the form opened with, so reverting a change by hand
+  // clears the flag rather than leaving "unsaved" on a form that matches.
+  const base = initial ?? {};
+  const dirty = Object.keys({ ...base, ...values }).some(
+    (key) => (values[key] ?? '') !== (base[key] ?? ''),
+  );
+  const summary = summaryErrors(errors, {}, problem);
+
   return (
     <Panel title={title}>
       <div className="space-y-4 p-4" ref={panelRef}>
-        {problem && <Alert tone="danger">{problem}</Alert>}
+        {/* One place for every refusal, focused when it appears. A field's
+            own message stays against the field as well; this is the line
+            that is guaranteed to be where the reader is looking. */}
+        <ErrorSummary
+          errors={summary}
+          {...(Object.keys(errors).length === 0 ? { title: 'Not saved' } : {})}
+        />
 
         {pending && (
           <Alert tone="warning" title="Check this first">
@@ -251,14 +337,14 @@ export function RecordPanel({
 
         <div className="grid gap-4 sm:grid-cols-2">{fields(values, set, errors)}</div>
 
-        <div className="flex gap-2">
+        <FormActions status={dirty ? <span className="text-muted">Unsaved changes</span> : null}>
           <Button variant="primary" onClick={() => void submit()} loading={busy} disabled={busy}>
             {submitLabel}
           </Button>
           <Button variant="secondary" onClick={close} disabled={busy}>
             Cancel
           </Button>
-        </div>
+        </FormActions>
       </div>
     </Panel>
   );
