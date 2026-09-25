@@ -36,7 +36,11 @@ export const CANCELLED_ACTION_MESSAGE = 'not attempted: the run was cancelled';
  * only `open` ones: a campaign's decision to remove access would silently
  * never happen.
  */
-export async function abandonProposedActions(tx: TenantClient, runId: string): Promise<number> {
+export async function abandonProposedActions(
+  tx: TenantClient,
+  runId: string,
+  message: string = CANCELLED_ACTION_MESSAGE,
+): Promise<number> {
   const abandoned = await tx.provisionAction.findMany({
     where: { runId, status: 'proposed' },
     select: { id: true, revocationOrderId: true },
@@ -44,7 +48,7 @@ export async function abandonProposedActions(tx: TenantClient, runId: string): P
   if (abandoned.length === 0) return 0;
   await tx.provisionAction.updateMany({
     where: { id: { in: abandoned.map((a) => a.id) } },
-    data: { status: 'superseded', message: CANCELLED_ACTION_MESSAGE },
+    data: { status: 'superseded', message },
   });
   const orderIds = [
     ...new Set(

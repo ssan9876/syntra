@@ -74,7 +74,7 @@ async function readExportableData(tx: TenantClient, tenantId: string) {
         where: { id: tenantId },
         select: { id: true, name: true, slug: true, primaryDomain: true, additionalDomains: true, status: true, adminMfaRequired: true, passwordMinLength: true, selfEnrolmentEnabled: true, lockoutThreshold: true, lockoutWindowMinutes: true, lockoutDurationMinutes: true, passwordMaxAgeDays: true, passwordHistoryDepth: true },
       }),
-      tx.user.findMany({ orderBy: { id: 'asc' }, select: { id: true, login: true, email: true, displayName: true, status: true, statusReason: true, passwordSource: true, passwordSourceHint: true, orgUnitId: true, personId: true, sourceId: true, sourceAnchor: true, createdAt: true, updatedAt: true } }),
+      tx.user.findMany({ orderBy: { id: 'asc' }, select: { id: true, login: true, email: true, displayName: true, status: true, statusReason: true, passwordSource: true, passwordSourceHint: true, kind: true, orgUnitId: true, personId: true, sourceId: true, sourceAnchor: true, createdAt: true, updatedAt: true } }),
       tx.userAttribute.findMany({ orderBy: { id: 'asc' } }),
       tx.orgUnit.findMany({ orderBy: { id: 'asc' }, select: { id: true, name: true, parentId: true, sourceId: true, sourceAnchor: true, status: true, statusReason: true } }),
       tx.group.findMany({ orderBy: { id: 'asc' }, select: { id: true, name: true, description: true, sourceId: true, sourceAnchor: true, status: true, statusReason: true } }),

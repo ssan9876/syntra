@@ -263,3 +263,104 @@ describe('a receipt whose person already has an account at the target', () => {
     expect(actions.every((action) => action.personId !== anna)).toBe(true);
   });
 });
+
+/**
+ * Another run on the target, and what it means for a receipt.
+ *
+ * Found live: a `previewed` plan holding somebody ELSE's work refused every
+ * onboarding and offboarding retry on the target as "Another run is in
+ * progress or awaiting review" until a person applied it.
+ */
+describe('a receipt and another run on the same target', () => {
+  it("supersedes a leftover preview holding somebody else's work, and audits it", async () => {
+    const targetId = await entraTarget();
+    const anna = await seedPerson('Anna', 'Novak');
+    await createAccountsThroughARun(targetId);
+    await seedPerson('Ben', 'Okafor');
+    await withTenant(tenantId, (tx) =>
+      tx.targetSystem.update({ where: { id: targetId }, data: { createAccountThresholdPercent: 100 } }),
+    );
+    // The leftover: a receipt preview that planned Ben's account and was left
+    // `previewed` for a person to apply.
+    const first = await onboardingReceipt(anna, targetId, 'first');
+    await runPersonProvision(scheduler(), provider, { tenantId, receiptId: first.receiptId }, { connector: entra() });
+    const leftover = (await stateOf(first.receiptId, first.operationId)).run!;
+    expect(leftover.status).toBe('previewed');
+
+    const retry = await onboardingReceipt(anna, targetId, 'retry');
+    await runPersonProvision(scheduler(), provider, { tenantId, receiptId: retry.receiptId }, { connector: entra() });
+
+    const after = await stateOf(retry.receiptId, retry.operationId);
+    expect(after.receipt.message ?? '').not.toMatch(/Another run/);
+    expect(after.receipt.status).toBe('applied');
+    const old = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: leftover.id } }));
+    expect(old).toMatchObject({ status: 'failed', error: 'superseded by a later run' });
+    // Nothing was written on its behalf: its actions were superseded, not applied.
+    const oldActions = await withTenant(tenantId, (tx) => tx.provisionAction.findMany({ where: { runId: leftover.id } }));
+    expect(oldActions.length).toBeGreaterThan(0);
+    expect(oldActions.every((action) => action.status === 'superseded')).toBe(true);
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'provision.run.superseded', targetId: leftover.id } }),
+    );
+    expect(event?.payload).toMatchObject({ previousStatus: 'previewed', receiptId: retry.receiptId });
+    // Ben's work is carried by the new plan, still for a person to apply.
+    expect(after.run?.status).toBe('previewed');
+    expect(graph.users.size).toBe(1);
+  });
+
+  it('does not step over a run held for confirmation, and applies nothing', async () => {
+    const targetId = await entraTarget();
+    const anna = await seedPerson('Anna', 'Novak');
+    await createAccountsThroughARun(targetId);
+    // Ben's account is 1 of 1: over the default create threshold, so the
+    // run is held for a person to confirm.
+    await seedPerson('Ben', 'Okafor');
+    const held = await previewProvisionRun(tenantId, provider, targetId, { connector: entra() });
+    expect(held.status).toBe('blocked');
+    const heldRow = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: held.id } }));
+    expect(heldRow.requiresConfirmation).toBe(true);
+    const runsBefore = await withTenant(tenantId, (tx) => tx.provisionRun.count());
+
+    const { receiptId, operationId } = await onboardingReceipt(anna, targetId, 'held');
+    await runPersonProvision(scheduler(), provider, { tenantId, receiptId }, { connector: entra() });
+    // Retrying changes nothing either.
+    await withTenant(tenantId, (tx) =>
+      tx.personProvisionReceipt.update({ where: { id: receiptId }, data: { status: 'pending' } }),
+    );
+    await runPersonProvision(scheduler(), provider, { tenantId, receiptId }, { connector: entra() });
+
+    const after = await stateOf(receiptId, operationId);
+    expect(after.receipt.status).toBe('blocked');
+    expect(after.receipt.message).toMatch(/held for confirmation/);
+    const stillHeld = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: held.id } }));
+    expect(stillHeld.status).toBe('blocked');
+    expect(await withTenant(tenantId, (tx) => tx.provisionRun.count())).toBe(runsBefore);
+    const heldActions = await withTenant(tenantId, (tx) => tx.provisionAction.findMany({ where: { runId: held.id } }));
+    expect(heldActions.length).toBeGreaterThan(0);
+    expect(heldActions.every((action) => action.status === 'proposed')).toBe(true);
+    // Ben's account was not created at the target.
+    expect(graph.users.size).toBe(1);
+  });
+
+  it('waits, and is requeued, while another run is applying', async () => {
+    const targetId = await entraTarget();
+    const anna = await seedPerson('Anna', 'Novak');
+    await createAccountsThroughARun(targetId);
+    const applying = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: { tenantId, targetSystemId: targetId, status: 'applying', lastProgressAt: new Date() },
+      }),
+    );
+
+    const jobs = scheduler();
+    const { receiptId, operationId } = await onboardingReceipt(anna, targetId, 'busy');
+    await runPersonProvision(jobs, provider, { tenantId, receiptId }, { connector: entra() });
+
+    const after = await stateOf(receiptId, operationId);
+    expect(after.receipt.status).toBe('deferred');
+    expect(after.receipt.message).toMatch(/Waiting: another run on this target is applying/);
+    expect(jobs.enqueue).toHaveBeenCalledWith('provision.person', { tenantId, receiptId }, { startAfterSeconds: 30 });
+    const untouched = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: applying.id } }));
+    expect(untouched.status).toBe('applying');
+  });
+});

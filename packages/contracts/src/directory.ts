@@ -23,6 +23,12 @@ export const createUserRequest = z.object({
    * contracts is the case the person/contract/user split was built for.
    */
   allowSecondAccount: z.boolean().optional(),
+  /**
+   * 'service' for an account an integration uses through API tokens. A
+   * service account belongs to no person, so it cannot be combined with a
+   * `personId`, and it suppresses the person matcher. Defaults to 'person'.
+   */
+  kind: z.enum(['person', 'service']).optional(),
 });
 export type CreateUserRequest = z.infer<typeof createUserRequest>;
 

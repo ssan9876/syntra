@@ -376,6 +376,15 @@ die() {
 }
 
 # Refused before anything started, so it does NOT touch update.status.
+#
+# THE RULE FOR WHICH ONE TO CALL: anything that can fail before the first
+# `status` call of an update or rollback -- argument parsing, validation, the
+# lock, the environment, the release token, "is there anything to roll back
+# to" -- is a refusal. update.status is what the console shows, and a `failed`
+# written by a request that never started replaced the record of the update
+# that put the running version in place: a typo, a double click or a missing
+# token made a healthy install report a failure. die() is for failures once
+# work has begun, where `failed` is the truth.
 refuse() { log "REFUSED: $1"; exit 1; }
 
 current_version() {
@@ -642,7 +651,7 @@ SHADOW_URL=""
 resolve_environment() {
   DB_URL="${SYNTRA_DATABASE_URL:-$(env_value DATABASE_URL "$SHARED/.env")}"
   [ -n "$DB_URL" ] \
-    || die "no DATABASE_URL in $SHARED/.env, so the migration step has nothing to connect to"
+    || refuse "no DATABASE_URL in $SHARED/.env, so the migration step has nothing to connect to"
 
   # Named in the datasource block, so the schema does not LOAD without it --
   # even though `migrate deploy` never connects to it and only `migrate dev`
@@ -676,9 +685,9 @@ resolve_environment() {
   # taken by a role that bypasses RLS, which is SUPERUSER_DATABASE_URL's role
   # where one is configured.
   [ -n "$PG_DB" ]    || PG_DB=$(pg_url_field db "$DB_URL") \
-    || die "DATABASE_URL names no database, so there is nothing to dump or migrate"
+    || refuse "DATABASE_URL names no database, so there is nothing to dump or migrate"
   [ -n "$APP_ROLE" ] || APP_ROLE=$(pg_url_field user "$DB_URL") \
-    || die "DATABASE_URL names no role, so the restored schema would have no owner"
+    || refuse "DATABASE_URL names no role, so the restored schema would have no owner"
   if [ -z "$PG_ROLE" ]; then
     local super; super=$(env_value SUPERUSER_DATABASE_URL "$SHARED/.env")
     if [ -n "$super" ]; then
@@ -705,13 +714,14 @@ do_update() {
   local adopt="${2:-}"
   local from; from=$(current_version)
 
-  version_valid "$target" || die "\"$target\" is not a version this will install"
+  # Every check down to the first `status` call is a refusal -- see refuse().
+  version_valid "$target" || refuse "\"$target\" is not a version this will install"
 
   adoption_allowed "$from" "$adopt" \
     || if [ "$from" = "dev" ]; then
-         die "this install is a working tree, not a release; take it to its first release once with: syntra-update --adopt <version>"
+         refuse "this install is a working tree, not a release; take it to its first release once with: syntra-update --adopt <version>"
        else
-         die "--adopt is for a working tree taking its first release; this install is already v$from"
+         refuse "--adopt is for a working tree taking its first release; this install is already v$from"
        fi
 
   # Skipped for an adoption and only for one: `dev` cannot be ordered against
@@ -726,6 +736,11 @@ do_update() {
   if [ "$from" != "dev" ]; then
     version_newer "$target" "$from" || refuse "$target is not newer than the running $from"
   fi
+
+  # Checked here, before `downloading` is written, rather than left to api():
+  # by the time api() runs the status already says an update started, and a
+  # token that was never configured is not an update that failed.
+  [ -n "${SYNTRA_RELEASE_TOKEN:-}" ] || refuse "no release token was provided"
 
   local dir="$RELEASES/$target"
   local tmp="$dir.partial"
@@ -853,11 +868,12 @@ restore_after_failure() {
 do_rollback() {
   local from; from=$(current_version)
   local back_to; back_to=$(previous_release)
-  [ -n "$back_to" ] || die "there is no previous release to go back to"
+  # Both refusals: nothing has been touched until `rolling-back` is written.
+  [ -n "$back_to" ] || refuse "there is no previous release to go back to"
 
   local dump
   dump=$(ls -1t "$BACKUPS"/pre-"$from"-*.dump 2>/dev/null | head -1 || true)
-  [ -n "$dump" ] || die "no database dump was taken before v$from; roll back by hand"
+  [ -n "$dump" ] || refuse "no database dump was taken before v$from; roll back by hand"
 
   status "rolling-back" "returning to v$back_to"
   stop_service

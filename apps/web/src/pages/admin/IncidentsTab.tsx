@@ -81,7 +81,12 @@ export function IncidentsTab() {
                       <p className="mt-1 max-w-[68ch] text-muted">The plan would {run.planned.replace(/^would /, '')}.</p>
                     )}
                     <p className="mt-0.5 text-sm text-muted">
-                      Planned {new Date(run.startedAt).toLocaleString()}. Later runs and onboardings on this target wait until it is applied or superseded.
+                      Planned {new Date(run.startedAt).toLocaleString()}.{' '}
+                      {run.status === 'blocked' && run.requiresConfirmation
+                        ? 'Scheduled runs and onboardings on this target wait until it is confirmed or cancelled.'
+                        : run.status === 'blocked'
+                          ? 'Nobody can confirm it; the next run replaces it and checks again.'
+                          : 'Scheduled runs wait until it is applied; an onboarding, an offboarding or a run started by hand replaces it with a fresh plan.'}
                     </p>
                   </div>
                   <Link className="link shrink-0 text-sm" to={run.href}>

@@ -69,6 +69,17 @@ export async function mustRenewPassword(
 }
 
 /**
+ * Whether this account is a service account (`User.kind = 'service'`): used by
+ * an integration through API tokens rather than by a person. Read by the two
+ * places the distinction changes anything -- an administrator's password set
+ * (no must-change) and the renewal gate for a token (not applied).
+ */
+export async function isServiceAccount(tx: TenantClient, userId: string): Promise<boolean> {
+  const user = await tx.user.findUnique({ where: { id: userId }, select: { kind: true } });
+  return user?.kind === 'service';
+}
+
+/**
  * Whether `password` is one this user has already used, within the tenant's
  * configured depth.
  *

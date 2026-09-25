@@ -18,6 +18,17 @@ and can roll back. The environment variables that configure it —
 in [Configuration](configure.md#updating-from-the-console); all are optional,
 and an install that sets none of them simply has no update button.
 
+**A refused update leaves the status alone.** `syntra-update` writes
+`var/update.status`, which is what the console shows. Anything it refuses
+before an update or rollback has started — a malformed version, a version not
+newer than the running one, `--adopt` on a release (or a working tree without
+it), a missing release token, no `DATABASE_URL`, another update already
+running, a rollback with no previous release or no pre-migration dump — exits
+non-zero with `REFUSED: …` on stderr and does **not** touch that file, so the
+record of the last successful update survives a typo or a double click. Only a
+failure after work has begun (download, checksum, install, dump, migration,
+restart) writes `failed`.
+
 The scripts themselves are not tied to the lab: `SYNTRA_ROOT` moves the
 release layout away from `/opt/syntra`, and `SYNTRA_RELEASE_REPO` names the
 GitHub repository whose releases they download, for a fork that cuts its own.
@@ -904,9 +915,9 @@ every console page names it, and **Activity → Attention** lists it under
 
 - **Provisioning runs awaiting review** (`previewed` or `blocked`): the target,
   what the run would do and the guard's reason, with a link to the run
-  (`/admin/targets/:id/runs/:runId`). While one waits, later scheduled runs on
-  that target are skipped and person provisioning (onboarding) on it is
-  refused with "Another run is in progress or awaiting review", so these are
+  (`/admin/targets/:id/runs/:runId`). What one holds up is described in
+  [Runs that replace a waiting run](#runs-that-replace-a-waiting-run) below; a
+  run **held for confirmation** stops everything on its target, so those are
   worth clearing promptly.
 - **Lifecycle operations** that failed, or whose target step waits on
   read-back verification (Employee work).
@@ -939,6 +950,43 @@ thresholds say, and no setting changes that. A run the guard **refused**
 outright (no accounts read from the target, a collapsed person population, an
 axis with no denominator) cannot be confirmed: fix the cause and run again.
 
+### Runs that replace a waiting run
+
+A target has at most one unfinished run. What a new run does about one that is
+already there depends on what that run is, and on who asked for the new one:
+
+| The run already there | Scheduled run | Run started by hand (`POST /targets/:id/runs`) | Onboarding / offboarding (a person's receipt) |
+| --- | --- | --- | --- |
+| `previewed` — a plan nobody applied | skipped, and the skip is recorded on the target | **supersedes it** | **supersedes it** |
+| `blocked`, **held for confirmation** (a threshold tripped, or the first run) | skipped | skipped | **held** — the receipt is `blocked` naming the held run |
+| `blocked`, refused outright (nothing to confirm) | supersedes it | supersedes it | supersedes it |
+| `running` / `applying`, alive | skipped | skipped | **waits** — deferred and retried every 30 seconds |
+| `running` / `applying`, silent for six hours | adopted | adopted | adopted |
+
+**Superseding** a run marks it `failed` with *superseded by a later run* (the
+runs list and the run page show it as *Superseded*), marks its unapplied actions
+`superseded`, re-opens any revocation order they carried, and writes a
+`provision.run.superseded` audit event naming the run, its previous status and,
+for a receipt, the receipt. Nothing is written to the target on its behalf:
+the new run's plan is computed afresh for the whole target, and still carries
+whatever of the old plan is still wanted — including other people's work, which
+stays in the new plan for somebody to apply.
+
+The schedule deliberately does not supersede a `previewed` plan, so the review
+screen is not replaced every night. A person asking — by hand, or through an
+onboarding or offboarding — is asking for current work to happen, and a stale
+preview holding other people's changes used to refuse every such retry on the
+target with "Another run is in progress or awaiting review".
+
+**A hold for confirmation is never stepped over by a retry.** It is a question
+put to a person, and it is resolved only by confirming the run or cancelling it
+(**Cancel** on the run, or `POST /targets/:id/runs/:runId/cancel`). Nor could a
+retry get round the guard even if it did replace the run: every preview
+evaluates the guard afresh against baselines that only an **applied** run moves
+(whether the target has ever been applied, and the last applied population), so
+a change still over a threshold is held again. A receipt only ever applies its
+own person's actions, from a plan the guard let through.
+
 ### Onboarding against an account that already exists
 
 When a person's account was created or adopted by a different run, their
@@ -948,7 +996,8 @@ Syntra records; only a mismatch or an incomplete read-back leaves it waiting
 for manual verification. A preview started for one person that found nothing
 to change anywhere is closed as an empty applied run rather than left
 awaiting review; one that found work for other people is left for a person to
-apply and shows in the banner.
+apply and shows in the banner. It does not hold up the next onboarding or
+offboarding on the target, which supersedes it (see above).
 
 ## Queue recovery
 

@@ -251,6 +251,7 @@ Linked to a data subject by person: `personId`. Erasure: **pseudonymize** -- Acc
 | `statusReason` | operational | replaced by `erased` |  |
 | `passwordSource` | operational | retained |  |
 | `passwordSourceHint` | operational | cleared |  |
+| `kind` | operational | retained |  |
 | `orgUnitId` | operational | retained |  |
 | `personId` | identity | retained |  |
 | `sourceId` | operational | retained |  |

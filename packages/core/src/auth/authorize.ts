@@ -19,7 +19,7 @@ import {
 } from './attempt-service.js';
 import { resolveApiToken } from './api-token-service.js';
 import { authenticate } from './login-service.js';
-import { mustRenewPassword } from './password-ageing.js';
+import { isServiceAccount, mustRenewPassword } from './password-ageing.js';
 import { readSession, type SessionScope } from './session-service.js';
 import {
   enrolledFactorTypes,
@@ -698,7 +698,18 @@ async function decide(
       // The last gate before a session exists, and the only one every path
       // shares — password sign-in, a completed factor, a completed enrolment
       // and an application launch all arrive here.
-      if (await mustRenewPassword(tx, input.userId, tenant, input.now)) {
+      //
+      // A SERVICE ACCOUNT'S TOKEN is the one caller exempt from the renewal
+      // gate. The token does not use the password, and nobody signs in as an
+      // integration to renew one, so a pending renewal -- an administrator's
+      // must-change flag or scheduled expiry -- would refuse every request
+      // until a human happened to sign in as `svc-…`. It is exempt from THIS
+      // gate only: deactivation, lockout, policy and break-glass above still
+      // apply, and an interactive sign-in to the same account still meets the
+      // gate. A person's account keeps it for tokens as well, unchanged.
+      const renewalApplies =
+        !input.machine || !(await isServiceAccount(tx, input.userId));
+      if (renewalApplies && (await mustRenewPassword(tx, input.userId, tenant, input.now))) {
         const attempt = await issueAttempt(tx, {
           userId: input.userId,
           applicationId: input.applicationId,

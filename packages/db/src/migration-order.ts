@@ -146,6 +146,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261104090000_privacy_data_subject_requests',
   '20261105000000_tenant_support_destination',
   '20261105010000_application_icons',
+  '20261106000000_user_service_account',
 ];
 
 /**

@@ -10,20 +10,31 @@ import { AdapterWritesBlockedError } from './adapter-rollout.js';
 import { ProvisionRunInFlightError, previewProvisionRun } from './run-service.js';
 import { claimSyntraUsers, enqueuePairedSync } from './syntra-user.js';
 import { PERSON_PROVISION_JOB, runPersonProvision, type PersonProvisionPayload } from './person-receipts.js';
+import { STALE_RUN_MS } from './run-gate.js';
 
 export const PROVISION_JOB = 'provision.run';
 
 export interface ProvisionJobPayload {
   tenantId: string;
   targetSystemId: string;
+  /**
+   * A person asked for this run (`POST /targets/:id/runs`), as opposed to the
+   * schedule or an automation. The one difference: a `previewed` plan left on
+   * the target is SUPERSEDED rather than skipped for -- somebody asking for a
+   * new plan is asking for the old one to be replaced, and its plan would be
+   * recomputed anyway. A run held for confirmation is still not stepped over;
+   * see `awaitingDecision`.
+   */
+  requested?: boolean;
 }
 
 /** A background job has no request and therefore no bound tenant. */
 export function provisionJobPayload(
   tenantId: string,
   targetSystemId: string,
+  options: { requested?: boolean } = {},
 ): ProvisionJobPayload {
-  return { tenantId, targetSystemId };
+  return options.requested ? { tenantId, targetSystemId, requested: true } : { tenantId, targetSystemId };
 }
 
 /**
@@ -169,7 +180,7 @@ function awaitingDecision(run: {
  * interval at all, because no elapsed time makes an unconfirmable refusal
  * into something a person can act on.
  */
-export const STALE_RUN_MS = 6 * 60 * 60 * 1000;
+export { STALE_RUN_MS };
 
 export interface RunProvisionJobOptions {
   /**
@@ -288,7 +299,10 @@ export async function runProvisionJob(
     });
 
     if (inFlight) {
-      const awaitingReview = awaitingDecision(inFlight);
+      // A person asking for a run replaces a plan nobody applied; the
+      // schedule does not, so the review screen is not overwritten nightly.
+      const replacesPreview = payload.requested === true && inFlight.status === 'previewed';
+      const awaitingReview = awaitingDecision(inFlight) && !replacesPreview;
       // `lastProgressAt`, falling back to `startedAt` for a row written before
       // that column existed. `startedAt` alone is stamped at preview and never
       // restamped, so a run previewed at T and confirmed at T+7h entered
@@ -306,7 +320,7 @@ export async function runProvisionJob(
       const refusedOutright =
         inFlight.status === 'blocked' && !inFlight.requiresConfirmation;
       const abandoned =
-        !awaitingReview && (refusedOutright || ageMs >= STALE_RUN_MS);
+        !awaitingReview && (refusedOutright || replacesPreview || ageMs >= STALE_RUN_MS);
 
       if (!abandoned) {
         const reason = awaitingReview

@@ -12,6 +12,7 @@ import { targetWithCredential } from './target-service.js';
 import { compareObservedState } from '../lifecycle/verification.js';
 import { transitionLifecycleStep } from '../lifecycle/operation-service.js';
 import { readLifecyclePolicy } from '../lifecycle/policy.js';
+import { activeRunGate } from './run-gate.js';
 
 export const PERSON_PROVISION_JOB = 'provision.person';
 export interface PersonProvisionPayload { tenantId: string; receiptId: string }
@@ -259,14 +260,58 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     return updated;
   };
   try {
-    const ready = await withTenant(tenantId, async tx => {
+    /**
+     * WHAT ANOTHER RUN ON THE TARGET MEANS FOR THIS RECEIPT (`activeRunGate`).
+     *
+     * It used to be one answer for all four non-terminal states: "Another run
+     * is in progress or awaiting review". A `previewed` plan somebody never
+     * applied -- often one holding OTHER people's work, or a stale plan from
+     * days ago -- therefore stopped every onboarding and offboarding retry on
+     * the target until a person applied it.
+     *
+     * - `previewed`, or `blocked` outright (nothing anyone can confirm): the
+     *   receipt's own preview SUPERSEDES it. Its plan is recomputed for the
+     *   whole target anyway; the old run is recorded as superseded and
+     *   audited, its unapplied actions are marked superseded, and nothing is
+     *   written to the target on its behalf.
+     * - `running` / `applying` with a live worker: the receipt WAITS -- it is
+     *   deferred and requeued, because stepping over a live run would adopt it
+     *   mid-write. A run silent for `STALE_RUN_MS` is wreckage and is adopted.
+     * - `blocked` for CONFIRMATION (a threshold tripped, or the target's first
+     *   run): the receipt is HELD, and the held run is left exactly as it was.
+     *   That run is a question put to a person; an automated retry must not
+     *   take it away from them. Even if it did, it could not bypass the guard:
+     *   the receipt's preview evaluates the guard afresh for the WHOLE target
+     *   against baselines only an applied run moves, so a change still over
+     *   the threshold is held again. The receipt only ever applies its own
+     *   person's actions from a plan the guard let through.
+     */
+    const gate = await withTenant(tenantId, async tx => {
       const target = await tx.targetSystem.findUnique({ where: { id: receipt.targetSystemId } });
-      if (!target?.enabled) return 'This target is disabled or has been removed.';
-      const active = await tx.provisionRun.findFirst({ where: { targetSystemId: receipt.targetSystemId, status: { in: ['running', 'applying', 'previewed', 'blocked'] } } });
-      if (active && (active.id !== receipt.runId || ['running', 'applying'].includes(active.status))) return 'Another run is in progress or awaiting review. Resolve it before retrying.';
-      return null;
+      if (!target?.enabled) return { refusal: 'This target is disabled or has been removed.' } as const;
+      const active = await tx.provisionRun.findFirst({ where: { targetSystemId: receipt.targetSystemId, status: { in: ['running', 'applying', 'previewed', 'blocked'] } }, orderBy: { startedAt: 'desc' } });
+      return { active, verdict: activeRunGate(active) } as const;
     });
-    if (ready) { await finish('blocked', ready); return; }
+    if ('refusal' in gate) { await finish('blocked', gate.refusal); return; }
+    if (gate.verdict === 'held') {
+      await finish('blocked', `A run on this target is held for confirmation${gate.active?.blockedReason ? ` (${gate.active.blockedReason})` : ''}. Confirm or cancel that run, then retry; this request does not replace a decision that is waiting for a person.`);
+      return;
+    }
+    if (gate.verdict === 'wait') {
+      const evidence = (receipt.evidence ?? {}) as Record<string, unknown>;
+      const deferrals = (typeof evidence.deferrals === 'number' ? evidence.deferrals : 0) + 1;
+      await withTenant(tenantId, tx => tx.personProvisionReceipt.update({
+        where: { id: receiptId },
+        data: {
+          status: 'deferred',
+          message: `Waiting: another run on this target is ${gate.active?.status === 'applying' ? 'applying changes' : 'being planned'}. Retrying in ${DEFERRAL_SECONDS} seconds (deferral ${deferrals}).`,
+          evidence: { ...evidence, deferrals, lastDeferredAt: new Date().toISOString(), waitingForRunId: gate.active?.id ?? null },
+        },
+      }));
+      await enqueueReceipt(tenantId, receiptId, scheduler, DEFERRAL_SECONDS);
+      await reconcileLifecycleTargetStep(tenantId, receipt.requestKey).catch(() => undefined);
+      return;
+    }
     const run = await previewProvisionRun(tenantId, provider, receipt.targetSystemId, { ...options, receiptId });
     if (run.status === 'blocked') { await finish('blocked', run.blockedReason ?? 'Review the guard on the linked run.'); return; }
     const plan = await withTenant(tenantId, async tx => ({
