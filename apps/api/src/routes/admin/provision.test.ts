@@ -1012,7 +1012,10 @@ describe('approving a held action of a finished run', () => {
     expect(response.statusCode).toBe(202);
     expect(response.json()).toMatchObject({ runRequested: true, approval: { sourceActionId: actionId, actionType: 'rename_account' } });
     expect(scheduler.enqueued.slice(before)).toEqual([
-      { name: 'provision.run', data: { tenantId: ctx.tenantId, targetSystemId: targetId } },
+      {
+        name: 'provision.run',
+        data: { tenantId: ctx.tenantId, targetSystemId: targetId, requested: true },
+      },
     ]);
     const events = await withTenant(ctx.tenantId, (tx) =>
       tx.auditEvent.findMany({ where: { action: 'provision.action.approved' } }),
