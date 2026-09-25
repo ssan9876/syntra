@@ -67,6 +67,6 @@ test('pages through people and searches for one', async ({ page }) => {
   await expect(page).not.toHaveURL(/page=2/);
 
   // And clearing it puts the list back.
-  await page.getByRole('button', { name: 'Clear the search' }).click();
+  await page.getByRole('button', { name: 'Reset filters' }).click();
   await expect(page.locator('tbody tr').first()).toBeVisible();
 });
