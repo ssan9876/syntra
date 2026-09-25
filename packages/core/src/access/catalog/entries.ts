@@ -168,7 +168,12 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
       { key: 'host', label: 'Snipe-IT hostname', example: 'assets.acme.example' },
     ],
     saml: {
-      spEntityId: 'https://{{host}}/saml/metadata',
+      // The entity ID Snipe-IT publishes in its own metadata is its bare base
+      // URL, not the metadata URL. Checked against a live instance's
+      // /saml/metadata: `entityID="https://<host>"`. A mismatch here is a
+      // refused AuthnRequest on every sign-in, so importing the SP's metadata
+      // remains the better route where it is reachable.
+      spEntityId: 'https://{{host}}',
       acsUrls: ['https://{{host}}/saml/acs'],
       nameIdFormat: EMAIL_NAMEID,
       sloUrl: 'https://{{host}}/saml/sls',
