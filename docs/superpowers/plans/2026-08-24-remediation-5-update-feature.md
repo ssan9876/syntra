@@ -21,7 +21,7 @@
 - The test harness **sources the shipped script** (`SYNTRA_UPDATE_SOURCE_ONLY=1`), which means `set -euo pipefail` is in force inside the harness too. A new assertion that calls a helper expected to return non-zero must wrap it — `"$(pg_url_field db "$url" || echo ERR)"` — or the harness exits mid-file and reports a pass count that looks fine.
 - **The updater runs detached, under `systemd-run`, and must never assume the API process survives.** It has no Prisma client, no tenant context, no session and no way to ask anybody anything. Everything it needs it reads from `shared/.env` or from its own arguments, and everything it reports it writes to `var/update.status`.
 - Anything the updater writes to `var/update.status` is read by the console. A new step name means a new entry in `IN_FLIGHT` (`packages/core/src/update/update-service.ts`) **and** in `STEP_TEXT` (`apps/web/src/pages/admin/UpdatesPage.tsx`), or the console shows a raw slug and decides the update has stopped.
-- **Nothing in this plan may be exercised against the live lab (192.168.88.20, `/root/syntra`, `infra-postgres-1`, the `syntra` unit) until Task 11 passes against a scratch install.** Not the updater, not `syntra-install`, not the migration. Task 11 runs on the lab host but against its own root, its own unit, its own port and its own database, and it asserts the live install is untouched before it starts and after it finishes.
+- **Nothing in this plan may be exercised against the live lab (192.0.2.20, `/root/syntra`, `infra-postgres-1`, the `syntra` unit) until Task 11 passes against a scratch install.** Not the updater, not `syntra-install`, not the migration. Task 11 runs on the lab host but against its own root, its own unit, its own port and its own database, and it asserts the live install is untouched before it starts and after it finishes.
 - Commit messages: lower-case type prefix, imperative, no trailing period — e.g. `fix(update): give the migrate step the DATABASE_URL it has never had`.
 
 ---
@@ -2607,7 +2607,7 @@ echo "built $OUT/$NAME.tar.gz"
 
 - [ ] **Step 4: Establish that the live install is untouched, and record it**
 
-On the lab host (`ssh root@192.168.88.20`):
+On the lab host (`ssh root@192.0.2.20`):
 
 ```bash
 systemctl is-active syntra; ls -l /opt/syntra/current 2>/dev/null || echo "not converted"

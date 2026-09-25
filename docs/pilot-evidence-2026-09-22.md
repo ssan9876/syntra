@@ -30,7 +30,7 @@ read, entitlement discovery/search, create, idempotent create retry,
 read-back, managed-field update, disable and final disabled read-back all
 passed; evidence is in
 `test-results/entra-evidence-2026-09-23T00-07-35-716Z.json`. The run left
-`syntra-validate-ccabbe78@ssanderxyz1234.onmicrosoft.com` disabled and did not
+`syntra-validate-ccabbe78@contoso.onmicrosoft.com` disabled and did not
 delete it. The tenant had no security groups, so grant/revoke membership remain
 the only native Entra write capabilities awaiting disposable-tenant evidence.
 

@@ -30,3 +30,31 @@ tools/*-mutants.results.*.json
 # Local tooling caches, not the project.
 .impeccable/
 .pnpm-store/
+
+# Secrets and machine-local files. `.env` and `.env.*` above already keep every
+# environment file out (only `.env.example` templates are tracked); these cover
+# the other shapes a local credential or server setting arrives in.
+.envrc
+.netrc
+.pgpass
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kubeconfig
+kubeconfig*
+*.secret
+*.secrets
+secrets/
+.dc-admin*
+.svc-*.txt
+# Local overrides of checked-in configuration.
+*.local
+*.local.*
+docker-compose.override.yml
+docker-compose.*.override.yml
+values.local.yaml
+# A Windows shell that does not expand %USERPROFILE% writes the literal name
+# into the working directory -- which is how a password file once landed here.
+*%USERPROFILE%*

@@ -23,8 +23,8 @@ const roles = [
     holders: [
       {
         userId: 'u1',
-        login: 'ssander',
-        displayName: 'Seth Sander',
+        login: 'jdoe',
+        displayName: 'Jane Doe',
         status: 'active',
         scopeOrgUnitId: null,
       },
@@ -33,7 +33,7 @@ const roles = [
 ];
 
 const USERS = [
-  { id: 'u1', login: 'ssander', displayName: 'Seth Sander', status: 'active' },
+  { id: 'u1', login: 'jdoe', displayName: 'Jane Doe', status: 'active' },
   { id: 'u2', login: 'agray', displayName: 'Andrew Gray', status: 'active' },
 ];
 
@@ -147,7 +147,7 @@ describe('the roles screen', () => {
 
     // "1 holder" is not something anybody can revoke from. Until this, the
     // only way to find out WHO, or to take it off them, was a database client.
-    expect(await screen.findByText('ssander')).toBeInTheDocument();
+    expect(await screen.findByText('jdoe')).toBeInTheDocument();
   });
 
   it('assigns the role to somebody who does not hold it', async () => {
@@ -157,9 +157,9 @@ describe('the roles screen', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
     const picker = screen.getByLabelText('Account');
-    // ssander already holds it: offering them again invites an assignment the
+    // jdoe already holds it: offering them again invites an assignment the
     // unique index refuses.
-    expect(within(picker).queryByText('ssander')).not.toBeInTheDocument();
+    expect(within(picker).queryByText('jdoe')).not.toBeInTheDocument();
     await user.selectOptions(picker, 'u2');
     await user.click(screen.getByRole('button', { name: 'Grant' }));
 
@@ -176,7 +176,7 @@ describe('the roles screen', () => {
     const sent = mockApi();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
+    await user.click(await screen.findByRole('button', { name: 'Revoke jdoe' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({
@@ -429,8 +429,8 @@ describe('when the caller cannot read the directory', () => {
     // Revoking reads nothing from the directory: the holders travel with the
     // role. Losing that control along with the picker would make an
     // rbac-only role unable to undo its own grants.
-    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
-    expect(screen.getByText('ssander')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Revoke jdoe' }));
+    expect(screen.getByText('jdoe')).toBeInTheDocument();
   });
 });
 /**
@@ -461,8 +461,8 @@ describe('granting within one org unit', () => {
       holders: [
         {
           userId: 'u1',
-          login: 'ssander',
-          displayName: 'Seth Sander',
+          login: 'jdoe',
+          displayName: 'Jane Doe',
           status: 'active',
           scopeOrgUnitId: null,
         },
@@ -583,7 +583,7 @@ describe('granting within one org unit', () => {
     const sent = mockScoped();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Revoke ssander' }));
+    await user.click(await screen.findByRole('button', { name: 'Revoke jdoe' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     // No query at all: the path alone has always meant every scope, and a

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateContainerDn } from './org-unit-container-service.js';
 
-const base = 'OU=Users,OU=Syntra,DC=ssander,DC=local';
+const base = 'OU=Users,OU=Syntra,DC=example,DC=local';
 
 function refusal(result: ReturnType<typeof validateContainerDn>) {
   if (result.ok) throw new Error('expected a refusal, got a valid DN');
@@ -36,7 +36,7 @@ describe('validateContainerDn', () => {
     // The failure this closes: a materialisation pointing at CN=Users, or at
     // another domain's subtree, would have Provision writing where the target
     // configuration never said it could.
-    const result = refusal(validateContainerDn('CN=Users,DC=ssander,DC=local', base));
+    const result = refusal(validateContainerDn('CN=Users,DC=example,DC=local', base));
     expect(result.reason).toBe('outside_base');
     expect(result.message).toContain(base);
   });
@@ -67,13 +67,13 @@ describe('validateContainerDn', () => {
     // this, which is why the comparison is on RDN boundaries.
     expect(
       refusal(
-        validateContainerDn('OU=Evil,OU=XUsers,OU=Syntra,DC=ssander,DC=local', base),
+        validateContainerDn('OU=Evil,OU=XUsers,OU=Syntra,DC=example,DC=local', base),
       ).reason,
     ).toBe('outside_base');
   });
 
   it('refuses a DN shorter than the base', () => {
-    expect(refusal(validateContainerDn('DC=ssander,DC=local', base)).reason).toBe(
+    expect(refusal(validateContainerDn('DC=example,DC=local', base)).reason).toBe(
       'outside_base',
     );
   });

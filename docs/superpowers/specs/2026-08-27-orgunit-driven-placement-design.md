@@ -397,7 +397,7 @@ than none.
 
 ## Rollout on the lab
 
-The lab target (`ssander.local (AD)`) runs with `autoApply: true` and
+The lab target (`example.local (AD)`) runs with `autoApply: true` and
 `archiveAccountThresholdPercent: 2`. Moves deliberately share the archive axis
 (`guard.ts:168`), and the tenant holds four people, so **one** account move is
 25 percent and the first run will skip rather than apply.
@@ -408,7 +408,7 @@ deliberately for the lab, then apply. Not: discover it during a run and lower a
 safety limit under time pressure.
 
 `containerTemplate` on that target is `%baseDn%` today, so every account
-currently lands in `OU=Users,OU=Syntra,DC=ssander,DC=local`. The two existing
+currently lands in `OU=Users,OU=Syntra,DC=example,DC=local`. The two existing
 OrgUnits — `Company` and `Users`, both ingested — become `adopted` rows, which
 means placement can be tested against a container that already exists before
 `create_container` is ever exercised.
