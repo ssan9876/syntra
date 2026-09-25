@@ -2132,7 +2132,7 @@ Not personal data: `id`, `tenantId`, `targetSystemId`, `correlationKeyTemplate`,
 
 #### `Application`
 
-No personal data. Columns: `id`, `tenantId`, `name`, `slug`, `description`, `iconUrl`, `launchUrl`, `type`, `category`, `catalogKey`, `visibility`, `status`, `createdAt`, `updatedAt`.
+No personal data. Columns: `id`, `tenantId`, `name`, `slug`, `description`, `iconUrl`, `iconKey`, `iconImage`, `iconType`, `iconSize`, `iconHash`, `launchUrl`, `type`, `category`, `catalogKey`, `visibility`, `status`, `createdAt`, `updatedAt`.
 
 #### `ApprovalStage`
 
@@ -2363,7 +2363,7 @@ Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pa
 
 #### `Tenant`
 
-No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
+No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `brandSupportUrl`, `brandSupportLabel`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
 
 #### `TenantDeletionRequest`
 
