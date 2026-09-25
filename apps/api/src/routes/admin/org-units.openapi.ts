@@ -25,6 +25,12 @@ export const orgUnitsOpenApi = describeAdminRoutes('Organizational units', {
     params: idParam,
     status: 201,
   },
+  'POST /org-units/:id/containers/:targetSystemId/switch-to-mirrored': {
+    summary: "Hand a unit's manually typed container over to the target's org-unit mirror",
+    description:
+      'Rewrites the binding to the DN derived from the org-unit tree. Nothing is written to the directory: when the target had confirmed the typed DN, the next provisioning run proposes moving that OU, with the accounts in it, and a person confirms it. 409 when the target does not mirror, the unit cannot be derived, or another unit holds the DN.',
+    params: idParam.merge(targetParam),
+  },
   'DELETE /org-units/:id/containers/:targetSystemId': {
     summary: "Stop tracking a unit's container on a target system",
     description: 'Removes the tracking record only; the container in the target directory is left in place.',

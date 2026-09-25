@@ -59,8 +59,10 @@ describe('connector lifecycle metadata', () => {
 
   it('certifies containers only for the adapter that has them', () => {
     expect(connectorLifecycleMetadata('activeDirectory').certification.capabilities).toContain('create_container');
+    expect(connectorLifecycleMetadata('activeDirectory').certification.capabilities).toContain('move_container');
     for (const type of ['scim2', 'httpJson', 'entraId']) {
       expect(connectorLifecycleMetadata(type).certification.capabilities).not.toContain('create_container');
+      expect(connectorLifecycleMetadata(type).certification.capabilities).not.toContain('move_container');
     }
   });
 

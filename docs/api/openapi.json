@@ -16020,6 +16020,78 @@
         }
       }
     },
+    "/api/admin/org-units/{id}/containers/{targetSystemId}/switch-to-mirrored": {
+      "post": {
+        "operationId": "postOrgUnitsByIdContainersByTargetSystemIdSwitchToMirrored",
+        "tags": [
+          "Organizational units"
+        ],
+        "summary": "Hand a unit's manually typed container over to the target's org-unit mirror",
+        "description": "Rewrites the binding to the DN derived from the org-unit tree. Nothing is written to the directory: when the target had confirmed the typed DN, the next provisioning run proposes moving that OU, with the accounts in it, and a person confirms it. 409 when the target does not mirror, the unit cannot be derived, or another unit holds the DN.\n\nRequires `provision.manage`.",
+        "x-syntra-permission": [
+          "provision.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "targetSystemId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/org-units/{id}/deactivate": {
       "post": {
         "operationId": "postOrgUnitsByIdDeactivate",
@@ -24377,6 +24449,20 @@
                       "durationMinutes"
                     ],
                     "additionalProperties": false
+                  },
+                  "mirrorOrgUnits": {
+                    "type": "boolean"
+                  },
+                  "orgUnitRootDn": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 1024
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -26132,6 +26218,77 @@
               "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/targets/{id}/org-unit-mirror": {
+      "get": {
+        "operationId": "getTargetsByIdOrgUnitMirror",
+        "tags": [
+          "Target systems"
+        ],
+        "summary": "Preview the org-unit tree as this target would mirror it",
+        "description": "Every org unit with the DN mirroring derives for it, the container row that exists and which one wins, and why a unit cannot be mirrored (a name over 64 characters, two units deriving one DN). Local: the directory is not read. `rootDn` previews an unsaved root.\n\nRequires `provision.read`.",
+        "x-syntra-permission": [
+          "provision.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "rootDn",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
             }
           }
         ],

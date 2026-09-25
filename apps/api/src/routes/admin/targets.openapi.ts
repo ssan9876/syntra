@@ -5,6 +5,7 @@ import {
   createTargetRequestSchema,
   idParam,
   movePlacementRequest,
+  orgUnitMirrorPreviewQuery,
   placementResponse,
   testTargetRequestSchema,
   updateTargetRequestSchema,
@@ -40,6 +41,13 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
     description: 'A live read through the connector; an unreachable target answers 502 `target-unreachable`.',
     params: idParam,
     response: containerListResponse,
+  },
+  'GET /targets/:id/org-unit-mirror': {
+    summary: 'Preview the org-unit tree as this target would mirror it',
+    description:
+      'Every org unit with the DN mirroring derives for it, the container row that exists and which one wins, and why a unit cannot be mirrored (a name over 64 characters, two units deriving one DN). Local: the directory is not read. `rootDn` previews an unsaved root.',
+    params: idParam,
+    query: orgUnitMirrorPreviewQuery,
   },
   'GET /targets/:id/placements/:personId': {
     summary: "Read a person's manual account placement on a target system",

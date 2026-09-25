@@ -1298,6 +1298,20 @@ model OrgUnitContainer {
   /// different answers to the question somebody asks when a container turns up
   /// in a domain nobody expected it in.
   state          String       @default("desired")
+  /// 'manual' | 'mirrored'
+  ///
+  /// 'manual'   -- a DN an administrator typed (Materialise). Always wins
+  ///   over the derived one, and is never rewritten by mirroring.
+  /// 'mirrored' -- derived from the unit's ancestor path by a target with
+  ///   `mirrorOrgUnits` on, and re-derived by every run of that target.
+  source         String       @default("manual")
+  /// The DN the target last confirmed, kept when `dn` has since changed (a
+  /// unit renamed or re-parented, or a manual row switched to mirrored) and
+  /// the change has not reached the target yet. A run turns it into a
+  /// `move_container`, so the OU -- and every account in it -- moves, rather
+  /// than a second OU being created and the first left behind. Null when
+  /// nothing is pending.
+  previousDn     String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -2150,7 +2164,18 @@ model TargetSystem {
   /// is audited as confirmed by this setting.
   autoConfirmRenames Boolean @default(false)
 
-  lastRunAt        DateTime?
+  /// Mirror the org-unit tree as OUs. When on, every ACTIVE org unit without
+  /// a manual materialisation is placed at a DN derived from its ancestor
+  /// path -- `OU=<unit>,OU=<parent>,...,<orgUnitRootDn>` -- and a run creates
+  /// the missing OUs parent-first and moves renamed or re-parented ones.
+  /// Off by default; turning it on writes nothing to the directory by itself.
+  /// Offered only for a target that places accounts in containers.
+  mirrorOrgUnits Boolean @default(false)
+  /// Where the mirrored tree hangs. Null means the target's `baseDn`.
+  /// Validated below the base by `validateContainerDn`.
+  orgUnitRootDn  String?
+
+  lastRunAt       DateTime?
   lastAppliedRunAt DateTime?
 
   /// Ruling P4. A scheduled run that did not start because one was awaiting

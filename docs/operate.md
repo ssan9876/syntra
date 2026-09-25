@@ -950,6 +950,11 @@ directory one new starter is a large share. Later runs are measured against
 the new value; the held run keeps its verdict and still needs confirming or
 superseding.
 
+A run that **moves an OU** (see [Org units as OUs](#org-units-as-ous)) is
+always held for a person, however small: *would move 1 container and every
+account inside it*. OU creates count against the absolute cap
+`maxContainerCreatesPerRun` (default 5), missing parents included.
+
 A target's **first** run is always confirmed by a person, whatever the
 thresholds say, and no setting changes that. A run the guard **refused**
 outright (no accounts read from the target, a collapsed person population, an
@@ -1043,6 +1048,66 @@ to change anywhere is closed as an empty applied run rather than left
 awaiting review; one that found work for other people is left for a person to
 apply and shows in the banner. It does not hold up the next onboarding or
 offboarding on the target, which supersedes it (see above).
+
+### Org units as OUs
+
+A person's account is placed, on a target that has containers (Active
+Directory), by the first of: a manual **Move** of that account, the
+**container of their org unit** on that target, the account profile's
+container template, and its fallback container. An org unit gets a container
+on a target in one of two ways, shown on the unit's page under **Containers**:
+
+- **Materialised** — somebody typed a DN for that unit on that target. The
+  Materialise box pre-fills `OU=<unit>,<parent's container>` when the parent
+  already has a container there, and `OU=<unit>,<base DN>` otherwise. A typed
+  DN always wins.
+- **Mirrored** — the target has **Mirror org units as OUs** on (target page,
+  *Org units*). Every **active** unit is then placed at a DN derived from its
+  place in Syntra's tree, `OU=<unit>,OU=<parent>,…,<root>`, the top-level unit
+  nearest the root. The root is the *Org-unit root* (blank: the target's base
+  DN); it must sit below the base DN. The section previews, from the real org
+  units and before anything is saved, which DN every unit would get and why a
+  unit cannot be mirrored.
+
+Names are escaped per RFC 4514 (`Sales, West` becomes `OU=Sales\, West`).
+A name over Active Directory's 64-character OU limit is never truncated: that
+unit — and every unit below it — is reported as not mirrored until it is
+renamed. So are two active units that would derive the same DN (two `IT`s
+under one parent), and a unit whose derived DN is another unit's typed DN.
+
+**Nothing is written by the setting.** Turning mirroring on, changing the
+root, renaming or moving a unit only change what the *next run* proposes.
+Each run of a mirroring target first brings the units' container rows into
+step with the tree (audited as `provision.target.org_units_mirrored`), then
+plans against them, under the guard:
+
+- **Missing OUs are created parent first**, including missing parents that
+  are not units of their own — the root, say — so
+  `OU=IT,OU=ssander.local,OU=Syntra,DC=…` works when none of the three exist.
+  Missing parents are created only for mirrored containers, only as `OU=`
+  containers, and never at or above the base DN. A typed DN gets no
+  invented parents: a typo in one still fails `not_found`.
+- **A renamed or re-parented unit's OU is moved**, with an LDAP modifyDN, so
+  every account, child OU and GPO link in it moves too. Only the topmost OU
+  that changed moves; its children ride along. Accounts inside it get no
+  per-account move. A run that moves an OU is always held for a person; the
+  run page's **Directory structure** panel lists the OUs to create, the OUs
+  to move with every account that rides along, and the accounts that move to
+  a different OU on their own.
+- **Nothing is deleted.** A deactivated unit keeps its row and its OU, and
+  its accounts stay where they are; it is shown as *No longer mirrored*. A
+  deleted unit's OU stays in the directory. If the new OU already exists when
+  a move is due (somebody made it by hand), the old OU is left behind, named
+  in the audit event, and the accounts move one by one.
+
+**Switch to mirrored** on a unit's typed container hands it to the mirror:
+the row takes the derived DN, and when the target had confirmed the typed DN
+the next run proposes moving that OU — the flat `OU=IT,OU=Syntra,…` becoming
+`OU=IT,OU=ssander.local,OU=Syntra,…` — and a person confirms it. Audited as
+`orgUnit.container.switch_to_mirrored`; the setting itself is audited on
+`provision.target.update` as `mirrorOrgUnits` and `orgUnitRootDn`
+`{ from, to }`. Mirroring is refused on a target that does not place accounts
+in containers (Entra ID, SCIM, HTTP), and the target page says why.
 
 ## Queue recovery
 

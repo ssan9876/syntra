@@ -1623,4 +1623,58 @@ describe('createContainer against a real domain controller', () => {
     // refused there; either way it must not come back ok.
     expect(result.ok).toBe(false);
   });
+
+  it('writes the unescaped name to `ou` for an escaped RDN', async () => {
+    // A mirrored org unit called `Sales, West` arrives escaped. Writing the
+    // escaped form to `ou` would not match the RDN.
+    const dn = `OU=Sales\\, West,${testOu}`;
+    const result = await adTargetConnector.write(config, op(dn));
+    expect(result.ok).toBe(true);
+    const { searchEntries } = await admin.search(dn, { scope: 'base', attributes: ['ou'] });
+    expect((searchEntries[0] as unknown as { ou: string }).ou).toBe('Sales, West');
+  });
+});
+
+describe('moveContainer against a real domain controller', () => {
+  const move = (fromDn: string, toDn: string) => ({
+    op: 'move_container' as const,
+    actionId: 'm-1',
+    fromDn,
+    toDn,
+  });
+
+  it('renames and re-parents an OU with the accounts inside it, keeping its anchor', async () => {
+    const parent = `OU=Parent,${testOu}`;
+    const from = `OU=IT,${testOu}`;
+    const to = `OU=Tech,${parent}`;
+    const created = await adTargetConnector.write(config, { op: 'create_container', actionId: 'c-1', dn: from });
+    await adTargetConnector.write(config, { op: 'create_container', actionId: 'c-2', dn: parent });
+    await adTargetConnector.write(config, {
+      ...createOp('a-1', 'it.person'),
+      attributes: { ...createOp('a-1', 'it.person').attributes, distinguishedName: [`CN=it.person,${from}`] },
+    });
+
+    const result = await adTargetConnector.write(config, move(from, to));
+
+    expect(result).toMatchObject({ ok: true, anchor: created.anchor });
+    const { searchEntries } = await admin.search(`CN=it.person,${to}`, { scope: 'base', attributes: ['cn'] });
+    expect(searchEntries).toHaveLength(1);
+    // Retried after it landed: success, not a failure.
+    const again = await adTargetConnector.write(config, move(from, to));
+    expect(again.ok).toBe(true);
+  });
+
+  it('refuses to move onto an OU that already exists', async () => {
+    const from = `OU=A,${testOu}`;
+    const to = `OU=B,${testOu}`;
+    await adTargetConnector.write(config, { op: 'create_container', actionId: 'c-1', dn: from });
+    await adTargetConnector.write(config, { op: 'create_container', actionId: 'c-2', dn: to });
+    const result = await adTargetConnector.write(config, move(from, to));
+    expect(result).toMatchObject({ ok: false, failure: 'conflict' });
+  });
+
+  it('reports not_found when there is nothing to move', async () => {
+    const result = await adTargetConnector.write(config, move(`OU=Gone,${testOu}`, `OU=Else,${testOu}`));
+    expect(result).toMatchObject({ ok: false, failure: 'not_found' });
+  });
 });

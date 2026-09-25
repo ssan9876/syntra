@@ -2,6 +2,7 @@ import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { targetContainers, TargetHasNoContainersError } from './placement-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
+import { deriveForTarget, mirrorUnits, targetMirrors } from './org-unit-mirror.js';
 
 export type DnRefusal = {
   ok: false;
@@ -219,11 +220,16 @@ export async function materialiseOrgUnit(
           targetSystemId: input.targetSystemId,
           dn: validated.dn,
           state,
+          source: 'manual',
         },
         // A re-materialise re-reads the target, which is also how a row whose
         // container was made by hand in the meantime heals from 'desired' to
         // 'adopted' without anybody deleting anything.
-        update: { dn: validated.dn, state },
+        //
+        // A typed DN is 'manual' however the row began: it wins over the
+        // mirror from now on, and whatever move the mirror had pending is
+        // dropped with the DN it was pending for.
+        update: { dn: validated.dn, state, source: 'manual', previousDn: null },
       });
       await recordEvent(tx, {
         actorUserId: input.actorUserId,
@@ -301,26 +307,106 @@ export async function containersForTarget(
   return new Map(rows.map((r) => [r.orgUnitId, { id: r.id, dn: r.dn, state: r.state }]));
 }
 
-/** Every materialisation of one unit, across targets, for the console. */
+export interface OrgUnitContainerView {
+  targetSystemId: string;
+  targetName: string;
+  /** Where this unit's accounts go on this target: the row's DN, or the derived one. */
+  dn: string;
+  /** The row's state, or 'derived' when no row exists yet. */
+  state: string;
+  /** 'manual' | 'mirrored'. */
+  source: string;
+  /** A move the next run will propose, from here to `dn`. */
+  previousDn: string | null;
+  /** Whether the target mirrors org units at all. */
+  mirroring: boolean;
+  /** Whether the mirror keeps this placement in step (false: deactivated, or cannot be derived). */
+  mirrored: boolean;
+  /** The DN mirroring derives for this unit on this target, when it can. */
+  derivedDn: string | null;
+  /** Why the unit cannot be mirrored here, if it cannot. */
+  problem: string | null;
+}
+
+/**
+ * Every placement of one unit, across targets, for the console.
+ *
+ * A mirroring target with no row yet still answers -- with the DN the next run
+ * derives, in state 'derived' -- because "where do this unit's accounts go"
+ * has an answer the moment mirroring is on, and a panel saying "not in any
+ * directory yet" on a mirroring target would be wrong.
+ */
 export async function containersForOrgUnit(
   tx: TenantClient,
   orgUnitId: string,
-): Promise<{ targetSystemId: string; targetName: string; dn: string; state: string }[]> {
-  const rows = await tx.orgUnitContainer.findMany({
-    where: { orgUnitId },
-    select: {
-      targetSystemId: true,
-      dn: true,
-      state: true,
-      targetSystem: { select: { name: true } },
-    },
-  });
-  return rows.map((r) => ({
-    targetSystemId: r.targetSystemId,
-    targetName: r.targetSystem.name,
-    dn: r.dn,
-    state: r.state,
-  }));
+): Promise<OrgUnitContainerView[]> {
+  const [rows, targets] = await Promise.all([
+    tx.orgUnitContainer.findMany({
+      where: { orgUnitId },
+      select: { targetSystemId: true, dn: true, state: true, source: true, previousDn: true },
+    }),
+    tx.targetSystem.findMany({
+      select: { id: true, name: true, type: true, config: true, mirrorOrgUnits: true, orgUnitRootDn: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+  const mirroringTargets = targets.filter(targetMirrors);
+  const units = mirroringTargets.length === 0 ? [] : await mirrorUnits(tx);
+  const unit = units.find((u) => u.id === orgUnitId);
+  const rowByTarget = new Map(rows.map((row) => [row.targetSystemId, row]));
+
+  const views: OrgUnitContainerView[] = [];
+  for (const target of targets) {
+    const row = rowByTarget.get(target.id);
+    const mirroring = targetMirrors(target);
+    let derivedDn: string | null = null;
+    let problem: string | null = null;
+    if (mirroring) {
+      const derivation = deriveForTarget(target, units);
+      derivedDn = derivation.dns.get(orgUnitId) ?? null;
+      problem =
+        derivation.problems.find((p) => p.orgUnitId === orgUnitId)?.message ??
+        (unit !== undefined && unit.status !== 'active' ? 'this unit is deactivated, so it is not mirrored' : null);
+      if (derivedDn !== null && row === undefined) {
+        const taken = await tx.orgUnitContainer.findFirst({
+          where: { targetSystemId: target.id, dn: { equals: derivedDn, mode: 'insensitive' } },
+          select: { orgUnitId: true },
+        });
+        if (taken !== null && taken.orgUnitId !== orgUnitId) {
+          problem = `${derivedDn} is already the container of another unit on this target`;
+          derivedDn = null;
+        }
+      }
+    }
+    if (row !== undefined) {
+      views.push({
+        targetSystemId: target.id,
+        targetName: target.name,
+        dn: row.dn,
+        state: row.state,
+        source: row.source,
+        previousDn: row.previousDn,
+        mirroring,
+        mirrored: mirroring && row.source === 'mirrored' && problem === null,
+        derivedDn,
+        problem,
+      });
+    } else if (mirroring && (derivedDn !== null || problem !== null)) {
+      views.push({
+        targetSystemId: target.id,
+        targetName: target.name,
+        dn: derivedDn ?? '',
+        state: 'derived',
+        source: 'mirrored',
+        previousDn: null,
+        mirroring,
+        mirrored: derivedDn !== null,
+        derivedDn,
+        problem,
+      });
+    }
+  }
+  return views;
 }
 
 function isUniqueViolation(cause: unknown): boolean {

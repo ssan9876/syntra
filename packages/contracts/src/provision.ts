@@ -255,6 +255,18 @@ export const updateTargetRequestSchema = createTargetRequestSchema
       startMinute: z.number().int().min(0).max(1439),
       durationMinutes: z.number().int().min(1).max(1440),
     }).strict().optional(),
+    /**
+     * Mirror the org-unit tree as OUs: every active unit is placed at a DN
+     * derived from its ancestor path, and a run creates and moves the OUs.
+     * Refused (422 `mirror-unsupported`) for a target that does not place
+     * accounts in containers. Turning it on writes nothing to the directory.
+     */
+    mirrorOrgUnits: z.boolean().optional(),
+    /**
+     * Where the mirrored tree hangs. Null or blank means the target's base DN;
+     * anything else must sit below it (422 `invalid-org-unit-root`).
+     */
+    orgUnitRootDn: z.string().max(1024).nullable().optional(),
   })
   .strict();
 export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;
@@ -508,6 +520,14 @@ export type PlacementResponse = z.infer<typeof placementResponse>;
  * the container usually does not exist yet -- that is the point of the
  * request. It is validated against the target's base DN on the way in.
  */
+/**
+ * The target page's preview of a mirrored tree. `rootDn` previews a root that
+ * has not been saved yet; absent, the saved one (or the base DN) is used.
+ */
+export const orgUnitMirrorPreviewQuery = z
+  .object({ rootDn: z.string().max(1024).optional() })
+  .strict();
+
 export const materialiseOrgUnitRequest = z
   .object({
     targetSystemId: z.string().uuid(),

@@ -1,4 +1,5 @@
 import { splitDn, type ProvisionActionType } from '@syntra/connectors';
+import { dnDepth, rebaseDn, type ContainerMove } from './container-structure.js';
 import { activeOn, departureDate } from './desired.js';
 import { unprocessableScope } from './reconcile.js';
 import type {
@@ -23,6 +24,9 @@ export const ACTION_ORDER = [
   // Before everything, and not alphabetically: an account cannot be created
   // in a container that does not exist yet, nor moved into one.
   'create_container',
+  // Ranked WITH the creates, not after them: the final sort orders the two
+  // together by depth. See `containerRank`.
+  'move_container',
   'create_account',
   'update_account',
   'rename_account',
@@ -64,6 +68,19 @@ export interface PlanInput {
    * turns that decision into an action and does not second-guess it.
    */
   containersToCreate: ReadonlyMap<string, string>;
+  /**
+   * Missing ancestors of a mirrored container, created with no row of their
+   * own. Absent means none.
+   */
+  intermediateContainers?: readonly string[];
+  /**
+   * Containers to move, with the accounts that ride along. Absent means none.
+   * An account inside a moving container is NOT given a move of its own: the
+   * container's modifyDN takes it along, and a second per-account move would
+   * be counted by the guard as one and attempted against a DN the container
+   * move has already changed.
+   */
+  containersToMove?: readonly (ContainerMove & { accounts?: readonly string[] })[];
   /**
    * Whether the target places accounts in containers, as its connector
    * declares. False for a flat target (Entra ID, SCIM), where an account's
@@ -199,6 +216,50 @@ export function planActions(input: PlanInput): PlannedAction[] {
       attributedGrantIds: [],
       requiresConfirmation: false,
       message: `create the container ${dn}`,
+      revocationOrderId: null,
+    });
+  }
+  // No row id: nothing records an anchor against these. `intermediate` is
+  // what tells `apply.ts` that is deliberate rather than a malformed action.
+  for (const dn of input.intermediateContainers ?? []) {
+    actions.push({
+      actionType: 'create_container',
+      personId: null,
+      accountId: null,
+      entitlementId: null,
+      before: null,
+      after: { dn, orgUnitContainerId: null, intermediate: true },
+      attributedRuleIds: [],
+      attributedGrantIds: [],
+      requiresConfirmation: false,
+      message: `create the container ${dn}, a missing parent in the mirrored org-unit tree`,
+      revocationOrderId: null,
+    });
+  }
+  const moves = input.containersToMove ?? [];
+  for (const move of moves) {
+    const accounts = [...(move.accounts ?? [])];
+    actions.push({
+      actionType: 'move_container',
+      personId: null,
+      accountId: null,
+      entitlementId: null,
+      before: { dn: move.fromDn },
+      after: {
+        dn: move.toDn,
+        fromDn: move.fromDn,
+        orgUnitContainerId: move.orgUnitContainerId,
+        riderIds: move.riderIds,
+        accounts,
+      },
+      attributedRuleIds: [],
+      attributedGrantIds: [],
+      // Confirmed at the RUN, by the guard -- see `evaluateProvisionGuard`.
+      requiresConfirmation: false,
+      message:
+        accounts.length === 0
+          ? `move the container ${move.fromDn} to ${move.toDn}`
+          : `move the container ${move.fromDn} to ${move.toDn}, and with it ${accounts.length} account${accounts.length === 1 ? '' : 's'}: ${accounts.join(', ')}`,
       revocationOrderId: null,
     });
   }
@@ -387,7 +448,13 @@ export function planActions(input: PlanInput): PlannedAction[] {
         // is never moved. Every move to a shallower container is missed, and
         // the fallback container exists precisely for the case where the
         // deeper one cannot be computed.
-        const currentContainer = containerOf(current);
+        // Where the account WILL be once this run's container moves land: an
+        // account inside a moving OU is carried by the move, so it is compared
+        // (and recorded as `before`) from there, and only an account the
+        // moves do not carry to its desired container is moved on its own.
+        const actualContainer = containerOf(current);
+        const currentContainer =
+          actualContainer === null ? null : rebaseDn(actualContainer, moves);
         const containerChanged =
           input.placesAccountsInContainers !== false &&
           currentContainer !== null &&
@@ -406,7 +473,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
           // move threshold.
           const flat = input.placesAccountsInContainers === false;
           push('update_account', {
-            before: { attributes: current.attributes, container: flat ? null : containerOf(current) },
+            before: { attributes: current.attributes, container: flat ? null : currentContainer },
             after: {
               attributes: state.account.attributes,
               container: flat ? null : state.account.container,
@@ -671,10 +738,38 @@ export function planActions(input: PlanInput): PlannedAction[] {
     .map((action, index) => ({ action, index }))
     .sort(
       (a, b) =>
-        ACTION_ORDER.indexOf(a.action.actionType) -
-          ACTION_ORDER.indexOf(b.action.actionType) || a.index - b.index,
+        rank(a.action.actionType) - rank(b.action.actionType) ||
+        containerDepth(a.action) - containerDepth(b.action) ||
+        a.index - b.index,
     )
     .map((entry) => entry.action);
+}
+
+/**
+ * The sort rank of an action type: its place in {@link ACTION_ORDER}, except
+ * that a container move shares the creates' rank so the two are ordered
+ * together, by depth.
+ */
+function rank(type: ProvisionActionType): number {
+  return ACTION_ORDER.indexOf(type === 'move_container' ? 'create_container' : type);
+}
+
+/**
+ * How deep a container action's DESTINATION is; zero for every other action,
+ * whose relative order this leaves alone.
+ *
+ * Parent first, across creates AND moves: a unit re-parented under a new
+ * parent needs the parent created before the move, and a child created under
+ * a unit renamed in the same run needs the rename before the create. Ordering
+ * by the depth of where each lands satisfies both, and a two-level missing
+ * tree (`OU=IT,OU=ssander.local,OU=Syntra`) comes out root first.
+ */
+function containerDepth(action: PlannedAction): number {
+  if (action.actionType !== 'create_container' && action.actionType !== 'move_container') {
+    return 0;
+  }
+  const dn = (action.after as { dn?: unknown } | null)?.dn;
+  return typeof dn === 'string' ? dnDepth(dn) : 0;
 }
 
 /**

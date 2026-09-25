@@ -357,6 +357,23 @@ export {
   unmaterialiseOrgUnit,
   validateContainerDn,
 } from './provision/org-unit-container-service.js';
+export type { OrgUnitContainerView } from './provision/org-unit-container-service.js';
+export {
+  AD_OU_NAME_MAX_LENGTH,
+  deriveMirroredDns,
+  mirrorPreview,
+  switchToMirrored,
+  syncMirroredContainers,
+  targetPlacesAccountsInContainers,
+} from './provision/org-unit-mirror.js';
+export type {
+  MirrorPreview,
+  MirrorPreviewUnit,
+  MirrorProblem,
+  MirrorSyncReport,
+  SwitchToMirroredOutcome,
+} from './provision/org-unit-mirror.js';
+export { dnDepth, planContainerStructure, rebaseDn } from './provision/container-structure.js';
 export type {
   ContainerPreview,
   ContainerPreviewFacts,

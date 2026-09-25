@@ -334,6 +334,7 @@ function toWriteOperation(
   const before = asRecord(action.before);
   switch (action.actionType) {
     case 'create_container':
+    case 'move_container':
       // Applied by `applyContainerAction`, which never reaches this function:
       // it needs no account context and no initial password. Present so the
       // switch stays exhaustive rather than falling to a default nobody reads.
@@ -1059,10 +1060,21 @@ async function applyContainerAction(
   const after = asRecord(action.after);
   const dn = text(after.dn);
   const orgUnitContainerId = text(after.orgUnitContainerId);
-  if (dn === '' || orgUnitContainerId === '') {
+  // A mirrored tree's missing ancestor has no row of its own, and says so.
+  // Anything else without a row is malformed and is refused, as before.
+  const intermediate = action.actionType === 'create_container' && after.intermediate === true;
+  const fromDn = text(after.fromDn);
+  if (
+    dn === '' ||
+    (orgUnitContainerId === '' && !intermediate) ||
+    (action.actionType === 'move_container' && fromDn === '')
+  ) {
     return finish(tenantId, action.id, {
       ok: false,
-      message: 'this action names no container to create',
+      message:
+        action.actionType === 'move_container'
+          ? 'this action names no container to move'
+          : 'this action names no container to create',
       failure: 'rejected',
     });
   }
@@ -1079,15 +1091,73 @@ async function applyContainerAction(
       targetId: action.id,
       outcome: 'success',
       sourceIp: null,
-      payload: { actionType: action.actionType, dn, attempt: action.attempts + 1 },
+      payload: {
+        actionType: action.actionType,
+        dn,
+        ...(action.actionType === 'move_container' ? { fromDn } : {}),
+        attempt: action.attempts + 1,
+      },
     });
   });
+
+  if (action.actionType === 'move_container') {
+    const result = await options.connector.write(options.config as never, {
+      op: 'move_container',
+      actionId: action.id,
+      fromDn,
+      toDn: dn,
+    });
+    if (result.ok) {
+      // The row now describes the container where it is. Its riders -- the
+      // rows of the units beneath it, whose DNs changed only because it moved
+      // -- are settled with it: the directory moved them in the same modifyDN.
+      const riderIds = Array.isArray(after.riderIds)
+        ? after.riderIds.filter((id): id is string => typeof id === 'string' && id !== '')
+        : [];
+      await withTenant(tenantId, async (tx) => {
+        await tx.orgUnitContainer.updateMany({
+          where: { id: orgUnitContainerId },
+          data: {
+            previousDn: null,
+            ...(result.anchor === undefined ? {} : { anchor: result.anchor }),
+          },
+        });
+        if (riderIds.length > 0) {
+          await tx.orgUnitContainer.updateMany({
+            where: { id: { in: riderIds } },
+            data: { previousDn: null },
+          });
+        }
+      });
+      return finish(tenantId, action.id, result, { attempts: action.attempts + 1 });
+    }
+    // Everything else leaves `previousDn` in place, so the next run proposes
+    // the move again, through the guard, to a person. A `conflict` -- an OU
+    // already at the destination -- is NOT adopted the way a create's is: the
+    // source still holds accounts, and merging two OUs is not a decision a
+    // scheduler gets to make.
+    return finish(tenantId, action.id, result, { attempts: action.attempts + 1 });
+  }
 
   const result = await options.connector.write(options.config as never, {
     op: 'create_container',
     actionId: action.id,
     dn,
   });
+
+  if (intermediate) {
+    // No row to record against. Created, or already there -- which for a
+    // parent is exactly as good -- and otherwise failed where somebody reads
+    // it, with the containers beneath it failing `not_found` after it.
+    return finish(
+      tenantId,
+      action.id,
+      result.ok || result.failure !== 'conflict'
+        ? result
+        : { ok: true, message: `${dn} already existed at the target` },
+      { attempts: action.attempts + 1 },
+    );
+  }
 
   if (result.ok) {
     await withTenant(tenantId, (tx) =>
@@ -1140,9 +1210,9 @@ async function applyOneAction(
     return 'applied';
   }
 
-  if (action.actionType === 'create_container') {
+  if (action.actionType === 'create_container' || action.actionType === 'move_container') {
     // Handled before `readActionContext`, which resolves an ACCOUNT and would
-    // answer null for the one action type that names an object instead.
+    // answer null for the two action types that name an object instead.
     return applyContainerAction(tenantId, action, options);
   }
 

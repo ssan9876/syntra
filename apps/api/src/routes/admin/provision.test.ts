@@ -1122,6 +1122,57 @@ describe('PATCH /api/admin/targets/:id autoConfirmRenames', () => {
   });
 });
 
+describe('PATCH /api/admin/targets/:id mirrorOrgUnits', () => {
+  it('is off on a new target, saved with a root, returned, and audited from/to', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const before = (await get(`/api/admin/targets/${targetId}`, cookie)).json();
+    expect(before).toMatchObject({ mirrorOrgUnits: false, orgUnitRootDn: null, placesAccountsInContainers: true });
+    const root = `OU=Org,${before.config.baseDn}`;
+    const response = await patch(`/api/admin/targets/${targetId}`, cookie, { mirrorOrgUnits: true, orgUnitRootDn: root });
+    expect(response.statusCode).toBe(204);
+    expect((await get(`/api/admin/targets/${targetId}`, cookie)).json()).toMatchObject({
+      mirrorOrgUnits: true,
+      orgUnitRootDn: root,
+    });
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'provision.target.update' }, orderBy: { sequence: 'asc' } }),
+    );
+    expect(events.at(-1)!.payload).toMatchObject({
+      mirrorOrgUnits: { from: false, to: true },
+      orgUnitRootDn: { from: null, to: root },
+    });
+  });
+
+  it('refuses a root outside the base with 422 on the field', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await patch(`/api/admin/targets/${targetId}`, cookie, {
+      mirrorOrgUnits: true,
+      orgUnitRootDn: 'OU=Else,DC=other,DC=test',
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json().errors).toEqual([expect.objectContaining({ path: 'orgUnitRootDn' })]);
+  });
+
+  it('previews the tree -> DN mapping without touching the directory', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const base = (await get(`/api/admin/targets/${targetId}`, cookie)).json().config.baseDn as string;
+    await withTenant(ctx.tenantId, async (tx) => {
+      const parent = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'ssander.local' } });
+      await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'IT', parentId: parent.id } });
+    });
+    const response = await get(
+      `/api/admin/targets/${targetId}/org-unit-mirror?rootDn=${encodeURIComponent(`OU=Syntra,${base}`)}`,
+      cookie,
+    );
+    expect(response.statusCode).toBe(200);
+    const it = response.json().units.find((u: { name: string }) => u.name === 'IT');
+    expect(it).toMatchObject({ depth: 1, derivedDn: `OU=IT,OU=ssander.local,OU=Syntra,${base}` });
+  });
+});
+
 describe('the tenant-wide external-write stop', () => {
   it('is placed with a reason, refuses every apply, and needs a second administrator to lift', async () => {
     const first = await manager();

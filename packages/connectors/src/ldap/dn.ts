@@ -38,6 +38,48 @@ export function escapeDnValue(value: string): string {
 }
 
 /**
+ * The inverse of {@link escapeDnValue}: one RDN value as the directory stores
+ * it in the naming attribute.
+ *
+ * Needed wherever an RDN is taken apart to be written back as an attribute.
+ * `createContainer` sets `ou` from the DN it is given, and an org unit called
+ * `Sales, West` arrives as `OU=Sales\, West,...`: writing `ou: Sales\, West`
+ * names an attribute value that does not match the RDN, which Active Directory
+ * refuses as a naming violation -- one round trip after it could have been
+ * right. Handles the RFC 4514 forms: `\` before a special character, and
+ * `\XX` hex pairs (UTF-8 bytes, so a multi-byte character arrives as several).
+ */
+export function unescapeDnValue(value: string): string {
+  const bytes: number[] = [];
+  const flush = (into: string[]) => {
+    if (bytes.length > 0) {
+      into.push(Buffer.from(bytes).toString('utf8'));
+      bytes.length = 0;
+    }
+  };
+  const out: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (character !== '\\' || index === value.length - 1) {
+      flush(out);
+      out.push(character);
+      continue;
+    }
+    const pair = value.slice(index + 1, index + 3);
+    if (/^[0-9a-fA-F]{2}$/.test(pair)) {
+      bytes.push(Number.parseInt(pair, 16));
+      index += 2;
+      continue;
+    }
+    flush(out);
+    out.push(value[index + 1]!);
+    index += 1;
+  }
+  flush(out);
+  return out.join('');
+}
+
+/**
  * Escapes a value for an LDAP filter, per RFC 4515.
  *
  * Here rather than in `ad/connector.ts` for the reason this module exists:

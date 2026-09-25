@@ -20,6 +20,16 @@ export interface Target {
   autoApply: boolean;
   /** Absent from an older API, which is read as off. */
   autoConfirmRenames?: boolean;
+  /** Mirror the org-unit tree as OUs. Absent from an older API: off. */
+  mirrorOrgUnits?: boolean;
+  /** Where the mirrored tree hangs; null means the base DN. */
+  orgUnitRootDn?: string | null;
+  /**
+   * What the connector declares. Absent from an older API, which is read as
+   * "unknown" and offers the setting -- the server refuses it where it cannot
+   * work, with a message that says why.
+   */
+  placesAccountsInContainers?: boolean;
   schedule: string | null;
   enforcementMode: EnforcementMode;
   preHireDays: number;
@@ -90,6 +100,8 @@ export interface Form {
   enabled: boolean;
   autoApply: boolean;
   autoConfirmRenames: boolean;
+  mirrorOrgUnits: boolean;
+  orgUnitRootDn: string;
   enforcementMode: EnforcementMode;
   preHireDays: string;
   entitlementRevocationDelayDays: string;
@@ -132,6 +144,8 @@ export const BLANK: Form = {
   enabled: true,
   autoApply: false,
   autoConfirmRenames: false,
+  mirrorOrgUnits: false,
+  orgUnitRootDn: '',
   enforcementMode: 'additive',
   preHireDays: '0',
   entitlementRevocationDelayDays: '0',
@@ -307,6 +321,8 @@ export function formFrom(target: Target): Form {
     enabled: target.enabled,
     autoApply: target.autoApply,
     autoConfirmRenames: target.autoConfirmRenames ?? false,
+    mirrorOrgUnits: target.mirrorOrgUnits ?? false,
+    orgUnitRootDn: target.orgUnitRootDn ?? '',
     enforcementMode: target.enforcementMode,
     preHireDays: String(target.preHireDays),
     entitlementRevocationDelayDays: String(target.entitlementRevocationDelayDays),

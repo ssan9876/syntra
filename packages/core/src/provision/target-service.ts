@@ -1,3 +1,5 @@
+import { validateContainerDn } from './org-unit-container-service.js';
+import { baseDnOf, targetPlacesAccountsInContainers } from './org-unit-mirror.js';
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
   targetConnectorFor,
@@ -452,6 +454,18 @@ export interface UpdateTargetInput extends Partial<CreateTargetInput> {
   maxAttempts?: number;
   concurrency?: number;
   maintenanceWindow?: { enabled: boolean; days: number[]; startMinute: number; durationMinutes: number };
+  /**
+   * Mirror the org-unit tree as OUs. Refused for a target that does not
+   * place accounts in containers: there is nothing there for it to mirror
+   * into, and a setting that silently does nothing is one somebody will
+   * believe is working.
+   */
+  mirrorOrgUnits?: boolean;
+  /**
+   * Where the mirrored tree hangs; null (or blank) means the target's base
+   * DN. Validated below that base by `validateContainerDn`.
+   */
+  orgUnitRootDn?: string | null;
 }
 
 const maintenanceWindowSchema = z.object({
@@ -531,6 +545,42 @@ export async function updateTarget(
     };
     assertLadder(ladder);
 
+    // Mirroring is judged against the configuration the target will HAVE, so
+    // a save that changes the base DN and the root together is checked as one.
+    const effectiveType = scalars.type ?? before.type;
+    const effectiveConfig = config ?? before.config;
+    const orgUnitRootDn =
+      input.orgUnitRootDn === undefined
+        ? undefined
+        : input.orgUnitRootDn === null || input.orgUnitRootDn.trim() === ''
+          ? null
+          : input.orgUnitRootDn.trim();
+    const mirrorOrgUnits = input.mirrorOrgUnits;
+    if (mirrorOrgUnits !== undefined && typeof mirrorOrgUnits !== 'boolean') {
+      throw new LadderConfigurationError('invalid-mirror-org-units', 'mirrorOrgUnits', 'mirrorOrgUnits must be true or false');
+    }
+    const mirroringAfter = mirrorOrgUnits ?? before.mirrorOrgUnits;
+    if (mirrorOrgUnits === true && !targetPlacesAccountsInContainers(effectiveType, effectiveConfig)) {
+      // `LadderConfigurationError` for its shape rather than its name: a code,
+      // the field to highlight and a sentence, which the route already turns
+      // into a 422 an editor can place beside the control.
+      throw new LadderConfigurationError(
+        'mirror-unsupported',
+        'mirrorOrgUnits',
+        'this target does not place accounts in containers, so there is no tree of OUs to mirror org units into',
+      );
+    }
+    const rootToCheck = orgUnitRootDn === undefined ? before.orgUnitRootDn : orgUnitRootDn;
+    if (
+      rootToCheck !== null &&
+      (orgUnitRootDn !== undefined || config !== undefined || (mirrorOrgUnits === true && mirroringAfter))
+    ) {
+      const validated = validateContainerDn(rootToCheck, baseDnOf(effectiveConfig));
+      if (!validated.ok) {
+        throw new LadderConfigurationError('invalid-org-unit-root', 'orgUnitRootDn', validated.message);
+      }
+    }
+
     await tx.targetSystem.update({
       where: { id: targetId },
       data: {
@@ -568,6 +618,11 @@ export async function updateTarget(
         ...(ladderInput.renameEnabled === undefined
           ? {}
           : { renameEnabled: ladderInput.renameEnabled }),
+        // Written to the row and nowhere else. Turning mirroring on writes
+        // nothing to the directory: the next run derives the rows and
+        // proposes the OUs, under the guard, where a person can read them.
+        ...(mirrorOrgUnits === undefined ? {} : { mirrorOrgUnits }),
+        ...(orgUnitRootDn === undefined ? {} : { orgUnitRootDn }),
         entitlementRevocationDelayDays: ladder.entitlementRevocationDelayDays,
         disableGraceDays: ladder.disableGraceDays,
         archiveAfterDays: ladder.archiveAfterDays,
@@ -622,6 +677,15 @@ export async function updateTarget(
                 to: scalars.autoConfirmRenames,
               },
             }),
+        // From/to whenever sent, like `autoConfirmRenames`: whether the
+        // directory's OU tree follows Syntra's, and from where, is a question
+        // somebody asks after an OU appears or moves.
+        ...(mirrorOrgUnits === undefined
+          ? {}
+          : { mirrorOrgUnits: { from: before.mirrorOrgUnits, to: mirrorOrgUnits } }),
+        ...(orgUnitRootDn === undefined
+          ? {}
+          : { orgUnitRootDn: { from: before.orgUnitRootDn, to: orgUnitRootDn } }),
         ...(input.thresholds === undefined ? {} : { thresholds }),
         ladder,
         credentialReplaced: scalars.bindPassword !== undefined,

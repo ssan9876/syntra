@@ -76,7 +76,7 @@ describe('GET /api/admin/targets/:id/adapter', () => {
       writesBlockedReason: null,
       deprecationOverride: null,
     });
-    expect(body.capabilities).toHaveLength(9);
+    expect(body.capabilities).toHaveLength(10);
     expect(body.capabilities.every((c: { certified: boolean; refusal: string | null }) => c.certified && c.refusal === null)).toBe(true);
   });
 

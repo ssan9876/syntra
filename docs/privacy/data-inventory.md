@@ -2312,7 +2312,7 @@ No personal data. Columns: `id`, `tenantId`, `name`, `parentId`, `sourceId`, `so
 
 #### `OrgUnitContainer`
 
-No personal data. Columns: `id`, `tenantId`, `orgUnitId`, `targetSystemId`, `dn`, `anchor`, `state`, `createdAt`, `updatedAt`.
+No personal data. Columns: `id`, `tenantId`, `orgUnitId`, `targetSystemId`, `dn`, `anchor`, `state`, `source`, `previousDn`, `createdAt`, `updatedAt`.
 
 #### `PersonFieldMapping`
 
@@ -2403,7 +2403,7 @@ No personal data. Columns: `id`, `tenantId`, `name`, `functionAId`, `functionBId
 | `adapterSelectionChangedByUserId` | identity |  |  |
 | `deprecationOverrideByUserId` | identity |  |  |
 
-Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `autoConfirmRenames`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
+Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `autoConfirmRenames`, `mirrorOrgUnits`, `orgUnitRootDn`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
 
 #### `Tenant`
 

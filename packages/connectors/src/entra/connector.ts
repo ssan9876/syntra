@@ -759,6 +759,8 @@ export const entraTargetConnector: EntraTargetConnector = {
 
 async function performWrite(connection: EntraConnection, op: WriteOperation): Promise<WriteResult> {
       switch (op.op) {
+        // Moved exactly as it is created: not at all, there being no containers.
+        case 'move_container':
         case 'create_container':
           return {
             ok: false,

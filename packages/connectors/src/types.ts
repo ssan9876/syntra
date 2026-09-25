@@ -65,6 +65,19 @@ export type ProvisionActionType =
    * hold none.
    */
   | 'create_container'
+  /**
+   * Renames or re-parents ONE container, with everything inside it, through
+   * LDAP modifyDN. Names an object, like `create_container`: a `fromDn`, a
+   * `toDn` and a null `personId`.
+   *
+   * Emitted only for an `OrgUnitContainer` row whose `dn` changed after the
+   * target confirmed it -- a mirrored unit renamed or re-parented, or a manual
+   * row switched to mirrored. Moving the OU rather than creating a second one
+   * is what keeps the accounts, the group policy links and the delegations
+   * that hang off it; the old OU is never deleted (there is no delete of any
+   * kind), so the alternative leaves an empty husk behind in the directory.
+   */
+  | 'move_container'
   | 'create_account'
   | 'update_account'
   | 'enable_account'
@@ -76,12 +89,17 @@ export type ProvisionActionType =
   | 'deactivate_syntra_user'
   | 'reactivate_syntra_user';
 
-/** The nine that reach a connector, in the order enforcement applies them. */
+/** The ten that reach a connector, in the order enforcement applies them. */
 export const CONNECTOR_ACTION_TYPES = [
   // First, and not alphabetically: a container has to exist before an account
   // can be created in it or moved into it. An account applied ahead of its
   // container fails, and would fail again on every subsequent run.
   'create_container',
+  // Beside the creates, and ordered with them by depth (`plan.ts`): a unit
+  // moved under a parent created in the same run needs the parent first, and
+  // a child created under a unit renamed in the same run needs the rename
+  // first.
+  'move_container',
   'create_account',
   'update_account',
   'enable_account',
@@ -147,6 +165,18 @@ export type WriteOperation =
        * P9 forbids.
        */
       dn: string;
+    }
+  | {
+      op: 'move_container';
+      actionId: string;
+      /** Where the container is now, in full. */
+      fromDn: string;
+      /**
+       * Where it goes, in full: a new RDN, a new parent, or both. The parent
+       * must already exist -- a missing one is `not_found`, exactly as for
+       * `create_container`, and the caller orders a create of it first.
+       */
+      toDn: string;
     }
   | {
       op: 'create_account';

@@ -110,8 +110,10 @@ const catalog = {
           evidence: 'Shared contract against disposable Samba infrastructure',
           // The only adapter with containers: an org unit is materialised as
           // an OU, and the Samba integration suite creates, renames, enables
-          // and archives against real infrastructure.
-          capabilities: ['create_container', ...ACCOUNT_AND_ENTITLEMENT_WRITES],
+          // and archives against real infrastructure. It also moves an OU
+          // with the accounts inside it (`move_container`, an LDAP modifyDN),
+          // which is what a mirrored org unit renamed or re-parented needs.
+          capabilities: ['create_container', 'move_container', ...ACCOUNT_AND_ENTITLEMENT_WRITES],
         },
       },
     ],
@@ -319,6 +321,9 @@ export function releaseIsCertified(release: ConnectorAdapterRelease): boolean {
  */
 export const ADVERTISED_FLAG_FOR: Record<ConnectorCapability, keyof ConnectorCapabilities> = {
   create_container: 'createAccount',
+  // A container is only ever moved so the accounts in it follow their unit,
+  // and moving an account is an update.
+  move_container: 'updateAccount',
   create_account: 'createAccount',
   update_account: 'updateAccount',
   rename_account: 'updateAccount',
@@ -331,6 +336,7 @@ export const ADVERTISED_FLAG_FOR: Record<ConnectorCapability, keyof ConnectorCap
 
 export const CAPABILITY_LABEL: Record<ConnectorCapability, string> = {
   create_container: 'create containers',
+  move_container: 'move containers',
   create_account: 'create accounts',
   update_account: 'update accounts',
   rename_account: 'rename accounts',

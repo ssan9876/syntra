@@ -808,6 +808,8 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
       // ABSOLUTE_CAP_ACTION_TYPES. Guarded is guarded; how it is measured is
       // the next assertion's business, not this one's.
       create_container: true,
+      // Absolute cap of zero: any container move holds the run.
+      move_container: true,
       create_account: true,
       disable_account: true,
       archive_account: true,
@@ -832,7 +834,7 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
     // The two sets are disjoint, and create_container is in the absolute one.
     // If somebody later moves it into POPULATIONS by inventing a denominator,
     // this fails -- which is the point of asserting it separately.
-    expect([...ABSOLUTE_CAP_ACTION_TYPES]).toEqual(['create_container']);
+    expect([...ABSOLUTE_CAP_ACTION_TYPES]).toEqual(['create_container', 'move_container']);
     expect(GUARDED_ACTION_TYPES).not.toContain('create_container');
   });
 
@@ -909,6 +911,33 @@ describe('evaluateProvisionGuard — the container-create cap', () => {
     });
     expect(verdict.blocked).toBe(true);
     expect(verdict).toMatchObject({ requiresConfirmation: false });
+  });
+});
+
+describe('evaluateProvisionGuard — moving a container', () => {
+  const containerMove = (): PlannedAction => ({
+    actionType: 'move_container',
+    personId: null,
+    accountId: null,
+    entitlementId: null,
+    before: { dn: 'OU=IT,OU=Syntra,DC=acme,DC=test' },
+    after: { dn: 'OU=IT,OU=ssander.local,OU=Syntra,DC=acme,DC=test', fromDn: 'OU=IT,OU=Syntra,DC=acme,DC=test' },
+    attributedRuleIds: [],
+    attributedGrantIds: [],
+    requiresConfirmation: false,
+    message: 'move',
+    revocationOrderId: null,
+  });
+
+  it('holds the run for a person on a single move, however large the directory', () => {
+    const verdict = guard({ actions: [containerMove()], accountsAtTarget: 10_000 });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
+    expect(reasonsOf(verdict).join(' ')).toContain('would move 1 container and every account inside it');
+  });
+
+  it('does not count a move against the create cap', () => {
+    const verdict = guard({ actions: [containerMove(), containerMove()] });
+    expect(reasonsOf(verdict).join(' ')).not.toContain('maxContainerCreatesPerRun');
   });
 });
 

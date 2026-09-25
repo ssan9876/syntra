@@ -1,3 +1,4 @@
+import { orgUnitPlacementDn } from './org-unit-mirror.js';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { conditionSchema } from './condition.js';
 import { desiredState } from './desired.js';
@@ -128,6 +129,8 @@ export async function projectPersonOnTargets(
         entitlementRevocationDelayDays: true,
         archiveAfterDays: true,
         renameEnabled: true,
+        mirrorOrgUnits: true,
+        orgUnitRootDn: true,
       },
     }),
   }));
@@ -180,6 +183,8 @@ async function projectOne(
     entitlementRevocationDelayDays: number;
     archiveAfterDays: number | null;
     renameEnabled: boolean;
+    mirrorOrgUnits: boolean;
+    orgUnitRootDn: string | null;
   },
   person: PersonFacts,
   contracts: ContractFacts[],
@@ -217,12 +222,10 @@ async function projectOne(
         where: { targetSystemId: target.id, personId: person.id },
         select: { container: true },
       }),
-      orgUnitId === null
-        ? Promise.resolve(null)
-        : tx.orgUnitContainer.findFirst({
-            where: { targetSystemId: target.id, orgUnitId },
-            select: { dn: true },
-          }),
+      // The row, or -- for a mirroring target the next run has not synced
+      // yet -- the DN that run will derive, so this projection and the run
+      // agree about a unit created a minute ago.
+      orgUnitId === null ? Promise.resolve(null) : orgUnitPlacementDn(tx, target, orgUnitId),
     ]);
 
   const entitlements = new Map<string, EntitlementFacts>(
@@ -323,7 +326,7 @@ async function projectOne(
     // by not writing it anywhere.
     takenCorrelationKeys: new Set<string>(),
     containerOverride: placement?.container ?? null,
-    orgUnitContainer: container?.dn ?? null,
+    orgUnitContainer: container,
     renameEnabled: target.renameEnabled,
     now,
     horizon,

@@ -371,6 +371,8 @@ export const httpTargetConnector: TargetConnector<Config> & {
     const entitlement = config.document.entitlement;
 
     switch (op.op) {
+      // Moved exactly as it is created: not at all, there being no containers.
+      case 'move_container':
       case 'create_container':
         // A document-driven HTTP target describes account and entitlement
         // operations only. There is no container document to POST, and

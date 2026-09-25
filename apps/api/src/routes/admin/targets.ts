@@ -5,6 +5,7 @@ import {
   createTargetRequestSchema,
   idParam,
   movePlacementRequest,
+  orgUnitMirrorPreviewQuery,
   placementResponse,
   testTargetRequestSchema,
   updateTargetRequestSchema,
@@ -75,6 +76,8 @@ import {
   grantDeprecationOverride,
   clearDeprecationOverride,
   MAX_DEPRECATION_OVERRIDE_MS,
+  mirrorPreview,
+  targetPlacesAccountsInContainers,
   type Scheduler,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -113,6 +116,8 @@ const TARGET_FIELDS = {
   schedule: true,
   autoApply: true,
   autoConfirmRenames: true,
+  mirrorOrgUnits: true,
+  orgUnitRootDn: true,
   enabled: true,
   enforcementMode: true,
   preHireDays: true,
@@ -526,7 +531,37 @@ export async function registerAdminTargetRoutes(
         tx.targetSystem.findUnique({ where: { id }, select: TARGET_FIELDS }),
       );
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
-      return target;
+      // What the connector declares, so the console offers "Mirror org units
+      // as OUs" only where there are OUs to mirror into -- and says why not
+      // everywhere else -- without a second request or a guess from `type`.
+      return {
+        ...target,
+        placesAccountsInContainers: targetPlacesAccountsInContainers(target.type, target.config),
+      };
+    },
+  );
+
+  /**
+   * The org-unit tree as this target would mirror it: every unit, its derived
+   * DN, the row that exists and what wins, and why a unit cannot be mirrored.
+   *
+   * Read-only and local. It reads the tenant's real org units and this
+   * target's rows and asks the directory nothing, so it is safe to call
+   * before mirroring is on -- which is the point: the target page shows the
+   * tree -> DN mapping before anybody turns it on. `rootDn` previews a root
+   * not yet saved.
+   */
+  app.get(
+    '/targets/:id/org-unit-mirror',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { rootDn } = orgUnitMirrorPreviewQuery.parse(request.query);
+      const preview = await mirrorPreview(request.tenantId, id, {
+        ...(rootDn === undefined ? {} : { rootOverride: rootDn.trim() === '' ? null : rootDn }),
+      });
+      if (preview === null) throw new ProblemError(404, 'not-found', 'Target not found');
+      return preview;
     },
   );
 
