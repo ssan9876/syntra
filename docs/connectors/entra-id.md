@@ -138,6 +138,36 @@ requires re-entering the client secret, and a connection test may still
 borrow the saved secret, because it changes what users are called, not where
 the secret is sent.
 
+## Existing users and adoption
+
+Syntra compares a user it reads from Graph with a correlation key by the
+**local part** of the user's `userPrincipalName`, and only when the UPN's
+domain is the one Syntra would create it in (`userPrincipalDomain`, else a
+domain `tenantId`). `anna.novak@contoso.com` holds the key `anna.novak` on a
+target whose domain is `contoso.com`; `anna.novak@partner.example` holds no
+key at all and is never matched. The domain is compared case-insensitively.
+
+What that means for users who already exist in the tenant:
+
+- **A run never takes an existing user over.** A provisioning run binds a
+  person to a Graph user only by its object id (the anchor), never by name. An
+  in-domain user whose name a person would be generated reserves that name,
+  exactly as a hand-made `sAMAccountName` does in Active Directory: the person
+  is proposed the next free name (`anna.novak2`), and the existing user is not
+  written to.
+- **A collision is a `conflict`.** When Graph refuses a create because the UPN
+  is taken (the user appeared after the plan was made, or before this
+  behaviour existed), the account is marked `conflict` and the person is left
+  alone by every later run.
+- **Adoption is the way out, and it is a person's decision.** On the person's
+  account, **Adopt** first shows the specific Graph user it would bind
+  (`GET /api/admin/targets/:id/accounts/:personId/adoption-candidate`), found
+  by the same local-part rule, then binds it on a written reason
+  (`POST …/adopt`). Adoption performs one read and no write in Entra; managed
+  attributes converge on the next run, in a plan somebody reviews. A user in
+  another domain is not offered: the candidate lookup answers `404
+  candidate-not-visible` ("no account named … is visible in the target").
+
 ## Containers are not used
 
 Entra ID has no organizational units. The connector declares that it places

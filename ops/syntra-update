@@ -718,8 +718,13 @@ do_update() {
   # a number -- that is what makes the comparison safe to trust everywhere
   # else -- so there is nothing here to compare and the operator naming the
   # version IS the decision.
+  #
+  # refuse(), not die(): nothing has started, and the console reads
+  # update.status. A `failed` written here replaced the record of the update
+  # that put $from in place -- so asking for the version already running (a
+  # double click, a stale tab) made a working install report a failure.
   if [ "$from" != "dev" ]; then
-    version_newer "$target" "$from" || die "$target is not newer than the running $from"
+    version_newer "$target" "$from" || refuse "$target is not newer than the running $from"
   fi
 
   local dir="$RELEASES/$target"
