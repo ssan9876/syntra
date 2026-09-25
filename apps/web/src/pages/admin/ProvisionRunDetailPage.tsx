@@ -15,6 +15,7 @@ import {
 import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 import { ActionState, RunState } from './run-states.js';
+import { SAFETY_THRESHOLDS_ANCHOR, isFirstRunHold, thresholdHints } from './threshold-hints.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -206,6 +207,63 @@ const DRIFT_LABELS: Record<string, string> = {
   account_missing_at_target: 'An account Syntra records and the target does not',
   unexpected_status: 'An account whose status at the target is not what Syntra expects',
 };
+
+/**
+ * Which setting held this run, and where to change it.
+ *
+ * A threshold hold asked a question — "would create 1 of 2 accounts (50.0%),
+ * above the 20% threshold" — and did not say where that 20% lives. It is on
+ * the target's edit form, under Safety thresholds, and on a small directory
+ * one new starter is a large share, so the answer is often "confirm this one"
+ * and sometimes "that percentage is wrong for a target this size". Both are
+ * offered; neither is chosen for the reader.
+ */
+function ThresholdHint({ targetId, blockedReason }: { targetId: string; blockedReason: string | null }) {
+  const hints = thresholdHints(blockedReason);
+  const firstRun = isFirstRunHold(blockedReason);
+  if (hints.length === 0 && !firstRun) return null;
+  return (
+    <div className="mt-3 space-y-2" data-testid="threshold-hint">
+      {firstRun && (
+        <p>
+          This is the target&rsquo;s first run, which a person always confirms
+          whatever the thresholds say. No setting changes that: confirm the run
+          below once the plan looks right.
+        </p>
+      )}
+      {hints.length > 0 && (
+        <>
+          <p>
+            {hints.length === 1 ? 'The setting that held it is' : 'The settings that held it are'}{' '}
+            {hints.map((hint, index) => (
+              <span key={hint.key}>
+                {index > 0 ? (index === hints.length - 1 ? ' and ' : ', ') : ''}
+                <strong>{hint.label}</strong>
+                {hint.threshold !== null ? ` (${hint.threshold}%` : ''}
+                {hint.threshold !== null && hint.share !== null ? `; this run measured ${hint.share}%)` : hint.threshold !== null ? ')' : ''}
+              </span>
+            ))}
+            , under Safety thresholds on the target. A threshold is the largest
+            share of the target a single run may change without a person
+            confirming it.
+          </p>
+          {hints.some((hint) => hint.note) && (
+            <p className="text-sm">{hints.find((hint) => hint.note)!.note}</p>
+          )}
+          <p>
+            If this change is expected, confirm the run below. If the
+            percentage is simply too low for a target this size (on a small
+            directory one new account can be a large share), raise it on the{' '}
+            <Link className="link" to={`/admin/targets/${targetId}#${SAFETY_THRESHOLDS_ANCHOR}`}>
+              target&rsquo;s Safety thresholds
+            </Link>
+            ; later runs are measured against the new value.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function ProvisionRunDetailPage() {
   const { id, runId } = useParams<{ id: string; runId: string }>();
@@ -502,6 +560,9 @@ export function ProvisionRunDetailPage() {
                   <li key={reason}>{reason}</li>
                 ))}
             </ul>
+            {run.requiresConfirmation && (
+              <ThresholdHint targetId={id ?? ''} blockedReason={run.blockedReason} />
+            )}
             {!run.requiresConfirmation && (
               /*
                * No enumeration. `guard.ts` returns

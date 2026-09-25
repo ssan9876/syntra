@@ -96,15 +96,18 @@ export function FormSection({
   title,
   number,
   status,
+  id,
   children,
 }: {
   title: string;
   number?: number | undefined;
   status?: ReactNode;
+  /** An anchor another screen can link to (`…#id`). */
+  id?: string | undefined;
   children: ReactNode;
 }) {
   return (
-    <section className="border-t border-border-subtle pt-5 first:border-t-0 first:pt-0">
+    <section id={id} className="scroll-mt-4 border-t border-border-subtle pt-5 first:border-t-0 first:pt-0">
       <header className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-2.5 text-md font-semibold text-ink">
           {number !== undefined && (

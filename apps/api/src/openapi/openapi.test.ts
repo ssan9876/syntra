@@ -160,6 +160,11 @@ describe('the document', () => {
       // The break-glass banner: every administrator's console shows an
       // emergency activation, whatever permissions they hold.
       'get /api/admin/break-glass/status',
+      // The attention banner, on every console page for every administrator.
+      // Each section is read only when the caller holds the permission for
+      // what it lists (provision.read; an approver permission for change
+      // requests), and is null otherwise.
+      'get /api/admin/attention/summary',
     ]);
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {

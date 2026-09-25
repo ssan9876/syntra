@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -27,6 +27,7 @@ import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
 import { TargetMaintenancePanel } from './TargetMaintenancePanel.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
 import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
+import { SAFETY_THRESHOLDS_ANCHOR } from './threshold-hints.js';
 import {
   BLANK,
   OWNED_CONFIG_KEYS,
@@ -187,6 +188,16 @@ export function TargetDetailPage() {
       ),
     );
   }, [data]);
+
+  // A run held by a threshold links here as `#safety-thresholds`. The browser
+  // only follows a fragment to an element that exists when the page loads,
+  // and this form renders after the target is fetched, so the scroll is done
+  // once the data has arrived.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!data || hash !== `#${SAFETY_THRESHOLDS_ANCHOR}`) return;
+    document.getElementById(SAFETY_THRESHOLDS_ANCHOR)?.scrollIntoView?.({ block: 'start' });
+  }, [data, hash]);
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
@@ -752,6 +763,7 @@ export function TargetDetailPage() {
           </FormSection>
 
           <FormSection
+            id={SAFETY_THRESHOLDS_ANCHOR}
             title="Safety thresholds"
             // A percent to confirm past, not the guard's other refusal.
             // `guard.ts` also withholds confirmation when it cannot compute a

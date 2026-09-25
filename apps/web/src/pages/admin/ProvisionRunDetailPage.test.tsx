@@ -108,6 +108,49 @@ async function noticeHeaded(title: string): Promise<HTMLElement> {
 
 beforeEach(() => vi.restoreAllMocks());
 
+describe('ProvisionRunDetailPage threshold hint', () => {
+  it('names the setting that held the run and links to the target Safety thresholds', async () => {
+    mockFetch(run({
+      status: 'blocked',
+      requiresConfirmation: true,
+      blockedReason: 'would create 1 of 2 accounts (50.0%), above the 20% threshold',
+    }));
+    renderPage();
+    const hint = await screen.findByTestId('threshold-hint');
+    expect(hint).toHaveTextContent('Accounts created');
+    expect(hint).toHaveTextContent('this run measured 50%');
+    expect(hint).toHaveTextContent('(20%');
+    expect(screen.getByRole('link', { name: /Safety thresholds/ })).toHaveAttribute(
+      'href',
+      '/admin/targets/t1#safety-thresholds',
+    );
+  });
+
+  it('says a first run has no setting to change', async () => {
+    mockFetch(run({
+      status: 'blocked',
+      requiresConfirmation: true,
+      blockedReason: 'this target has never had a run applied, so the first run is confirmed by a person whatever the thresholds say',
+    }));
+    renderPage();
+    const hint = await screen.findByTestId('threshold-hint');
+    expect(hint).toHaveTextContent(/first run/);
+    expect(hint).toHaveTextContent(/No setting changes that/);
+    expect(screen.queryByRole('link', { name: /Safety thresholds/ })).toBeNull();
+  });
+
+  it('offers no threshold for a run refused outright', async () => {
+    mockFetch(run({
+      status: 'blocked',
+      requiresConfirmation: false,
+      blockedReason: 'the target returned no accounts at all',
+    }));
+    renderPage();
+    expect(await screen.findByText('This run is blocked')).toBeVisible();
+    expect(screen.queryByTestId('threshold-hint')).toBeNull();
+  });
+});
+
 describe('ProvisionRunDetailPage', () => {
   it('collects confirmation and a reason before retrying an urgent-leaver exception', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
