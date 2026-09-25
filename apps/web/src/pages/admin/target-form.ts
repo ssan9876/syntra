@@ -18,6 +18,8 @@ export interface Target {
   config: Record<string, unknown>;
   enabled: boolean;
   autoApply: boolean;
+  /** Absent from an older API, which is read as off. */
+  autoConfirmRenames?: boolean;
   schedule: string | null;
   enforcementMode: EnforcementMode;
   preHireDays: number;
@@ -87,6 +89,7 @@ export interface Form {
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
+  autoConfirmRenames: boolean;
   enforcementMode: EnforcementMode;
   preHireDays: string;
   entitlementRevocationDelayDays: string;
@@ -128,6 +131,7 @@ export const BLANK: Form = {
   schedule: '',
   enabled: true,
   autoApply: false,
+  autoConfirmRenames: false,
   enforcementMode: 'additive',
   preHireDays: '0',
   entitlementRevocationDelayDays: '0',
@@ -302,6 +306,7 @@ export function formFrom(target: Target): Form {
     schedule: target.schedule ?? '',
     enabled: target.enabled,
     autoApply: target.autoApply,
+    autoConfirmRenames: target.autoConfirmRenames ?? false,
     enforcementMode: target.enforcementMode,
     preHireDays: String(target.preHireDays),
     entitlementRevocationDelayDays: String(target.entitlementRevocationDelayDays),

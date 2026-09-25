@@ -112,6 +112,7 @@ const TARGET_FIELDS = {
   pairedDirectorySourceId: true,
   schedule: true,
   autoApply: true,
+  autoConfirmRenames: true,
   enabled: true,
   enforcementMode: true,
   preHireDays: true,

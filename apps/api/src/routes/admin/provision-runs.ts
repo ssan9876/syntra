@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   acknowledgeDriftRequestSchema,
   applyRunRequestSchema,
+  approveHeldActionRequestSchema,
   cancelRunRequest,
   idParam,
 } from '@syntra/contracts';
@@ -27,6 +28,12 @@ import {
   type Scheduler,
   type Transport,
   type DriftKind,
+  HeldActionNotApprovableError,
+  HeldActionNotFoundError,
+  approveHeldAction,
+  describeHeldActions,
+  heldActionCounts,
+  revokeHeldActionApproval,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
@@ -50,6 +57,9 @@ export interface ProvisionRunRouteOptions {
  * two-id schema for this pair yet; when it does, this is the thing to delete.
  */
 export const runParams = idParam.extend({ runId: z.string().uuid() });
+
+/** A target, a run and one of its actions. */
+export const heldActionParams = runParams.extend({ actionId: z.string().uuid() });
 
 /** How many runs, actions and findings one request may return. */
 const RUN_PAGE = 50;
@@ -126,15 +136,18 @@ export async function registerAdminProvisionRunRoutes(
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => {
       const { id } = idParam.parse(request.params);
-      return {
-        runs: await request.db((tx) =>
-          tx.provisionRun.findMany({
-            where: { targetSystemId: id },
-            orderBy: { startedAt: 'desc' },
-            take: RUN_PAGE,
-          }),
-        ),
-      };
+      return request.db(async (tx) => {
+        const runs = await tx.provisionRun.findMany({
+          where: { targetSystemId: id },
+          orderBy: { startedAt: 'desc' },
+          take: RUN_PAGE,
+        });
+        // Held actions per finished run: changes waiting for somebody's
+        // approval, which a run's status alone (`partially_applied`) cannot
+        // tell apart from a failure.
+        const held = await heldActionCounts(tx, runs.map((run) => run.id));
+        return { runs: runs.map((run) => ({ ...run, heldActions: held.get(run.id) ?? 0 })) };
+      });
     },
   );
 
@@ -197,6 +210,10 @@ export async function registerAdminProvisionRunRoutes(
 
         return {
           ...run,
+          // For a finished run: each held action, whether it can be approved,
+          // and where its approval stands. Empty for any other run, whose
+          // held actions are confirmed on its own Apply.
+          heldActions: await describeHeldActions(tx, run),
           actions: run.actions.map((action) => ({
             ...action,
             person:
@@ -332,6 +349,80 @@ export async function registerAdminProvisionRunRoutes(
   );
 
   /**
+   * Approves one held action of a finished run, then starts a run to act on
+   * it.
+   *
+   * Under PROVISION_MANAGE with `confirm: true` in the body -- exactly what
+   * confirming a run on its own Apply demands, since this is that decision
+   * made after the fact. Nothing is written to the target here. The approval
+   * stands for 24 hours, for exactly this change, and the run enqueued below
+   * (the same job `POST /targets/:id/runs` enqueues) re-reads the target,
+   * re-plans, and applies the change only if it is still the same change.
+   *
+   * The scheduler is checked BEFORE the approval is recorded, so a 503 leaves
+   * nothing standing that nobody asked to run.
+   */
+  app.post(
+    '/targets/:id/runs/:runId/actions/:actionId/approve',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const ref = heldActionParams.parse(request.params);
+      approveHeldActionRequestSchema.parse(request.body ?? {});
+      const scheduler = options.scheduler?.();
+      if (!scheduler) {
+        throw new ProblemError(
+          503,
+          'scheduler-unavailable',
+          'Background jobs are not running',
+          'the approval was not recorded: the run that would act on it could not be enqueued',
+        );
+      }
+      let approval;
+      try {
+        approval = await request.db((tx) =>
+          approveHeldAction(
+            tx,
+            { targetSystemId: ref.id, runId: ref.runId, actionId: ref.actionId },
+            { userId: request.session.userId, sourceIp: request.ip },
+          ),
+        );
+      } catch (cause) {
+        throw heldActionProblem(cause);
+      }
+      // After the commit. A failure to enqueue leaves the approval standing,
+      // which the next scheduled run honours. `requested`, as Run now is: a
+      // person asked for this run, so a plan left `previewed` on the target
+      // is superseded rather than making the approval wait behind it.
+      const jobId = await scheduler.enqueue(
+        PROVISION_JOB,
+        provisionJobPayload(request.tenantId, ref.id, { requested: true }),
+      );
+      return reply.code(202).send({ approval, jobId, runRequested: true });
+    },
+  );
+
+  /** Withdraws an approval no run has used yet. */
+  app.delete(
+    '/targets/:id/runs/:runId/actions/:actionId/approve',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const ref = heldActionParams.parse(request.params);
+      try {
+        const approval = await request.db((tx) =>
+          revokeHeldActionApproval(
+            tx,
+            { targetSystemId: ref.id, runId: ref.runId, actionId: ref.actionId },
+            { userId: request.session.userId, sourceIp: request.ip },
+          ),
+        );
+        return { approval };
+      } catch (cause) {
+        throw heldActionProblem(cause);
+      }
+    },
+  );
+
+  /**
    * Asks a provisioning run to stop, under PROVISION_MANAGE — the permission
    * that starts and applies one.
    *
@@ -426,4 +517,15 @@ export async function registerAdminProvisionRunRoutes(
       return reply.code(204).send();
     },
   );
+}
+
+/** A held-action refusal, as the problem the caller can act on. */
+function heldActionProblem(cause: unknown): unknown {
+  if (cause instanceof HeldActionNotFoundError) {
+    return new ProblemError(404, 'not-found', cause.message);
+  }
+  if (cause instanceof HeldActionNotApprovableError) {
+    return new ProblemError(409, cause.code, 'This action cannot be approved', cause.message);
+  }
+  return cause;
 }

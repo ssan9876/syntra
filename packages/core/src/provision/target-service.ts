@@ -120,6 +120,8 @@ export interface CreateTargetInput {
   pairedDirectorySourceId?: string | null;
   schedule?: string | null;
   autoApply?: boolean;
+  /** Confirm `rename_account` actions by this setting, and nothing else. */
+  autoConfirmRenames?: boolean;
   enabled?: boolean;
   enforcementMode?: 'additive' | 'authoritative';
 }
@@ -156,6 +158,7 @@ const createScalarsSchema = z.object({
    */
   schedule: cronExpression.nullable().optional(),
   autoApply: z.boolean().optional(),
+  autoConfirmRenames: z.boolean().optional(),
   enabled: z.boolean().optional(),
   enforcementMode: z.enum(ENFORCEMENT_MODES).optional(),
 });
@@ -392,6 +395,7 @@ export async function createTarget(
         pairedDirectorySourceId: scalars.pairedDirectorySourceId ?? null,
         schedule: scalars.schedule ?? null,
         autoApply: scalars.autoApply ?? false,
+        autoConfirmRenames: scalars.autoConfirmRenames ?? false,
         enabled: scalars.enabled ?? true,
         enforcementMode: scalars.enforcementMode ?? 'additive',
       },
@@ -419,6 +423,7 @@ export async function createTarget(
           ? { url: config.url as string, tlsMode: config.tlsMode as string }
           : {}),
         enforcementMode: scalars.enforcementMode ?? 'additive',
+        autoConfirmRenames: scalars.autoConfirmRenames ?? false,
       },
     });
 
@@ -490,6 +495,9 @@ export async function updateTarget(
       : { pairedDirectorySourceId: input.pairedDirectorySourceId }),
     ...(input.schedule === undefined ? {} : { schedule: input.schedule }),
     ...(input.autoApply === undefined ? {} : { autoApply: input.autoApply }),
+    ...(input.autoConfirmRenames === undefined
+      ? {}
+      : { autoConfirmRenames: input.autoConfirmRenames }),
     ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
     ...(input.enforcementMode === undefined
       ? {}
@@ -532,6 +540,9 @@ export async function updateTarget(
         ...(config === undefined ? {} : { config: config as never }),
         ...(scalars.schedule === undefined ? {} : { schedule: scalars.schedule }),
         ...(scalars.autoApply === undefined ? {} : { autoApply: scalars.autoApply }),
+        ...(scalars.autoConfirmRenames === undefined
+          ? {}
+          : { autoConfirmRenames: scalars.autoConfirmRenames }),
         ...(scalars.enabled === undefined ? {} : { enabled: scalars.enabled }),
         ...(scalars.enforcementMode === undefined
           ? {}
@@ -597,6 +608,18 @@ export async function updateTarget(
               enforcementMode: {
                 from: before.enforcementMode,
                 to: scalars.enforcementMode,
+              },
+            }),
+        // A from/to pair whenever it was sent, changed or not, like the mode
+        // above. It decides whether a sign-in name changes with nobody asked,
+        // and "who turned that on, and when" must be answerable from the log
+        // rather than inferred from the renames that followed.
+        ...(scalars.autoConfirmRenames === undefined
+          ? {}
+          : {
+              autoConfirmRenames: {
+                from: before.autoConfirmRenames,
+                to: scalars.autoConfirmRenames,
               },
             }),
         ...(input.thresholds === undefined ? {} : { thresholds }),

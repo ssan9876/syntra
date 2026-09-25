@@ -83,6 +83,13 @@ export async function registerAdminIncidentRoutes(
         count: summary.provisionRuns.count,
         items: summary.provisionRuns.items.map((item) => ({ ...item, startedAt: item.startedAt.toISOString() })),
       },
+      heldActions: summary.heldActions && {
+        count: summary.heldActions.count,
+        items: summary.heldActions.items.map((item) => ({
+          ...item,
+          finishedAt: item.finishedAt?.toISOString() ?? null,
+        })),
+      },
       lifecycle: summary.lifecycle && {
         ...summary.lifecycle,
         items: summary.lifecycle.items.map((item) => ({ ...item, updatedAt: item.updatedAt.toISOString() })),

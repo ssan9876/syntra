@@ -20,6 +20,21 @@ export interface AttentionRunItem {
   href: string;
 }
 
+/**
+ * Changes a finished run left waiting for a person's approval, per target: a
+ * rename, a re-enable outside the window. They stop no later run, which is why
+ * they went unseen -- the target looked healthy and the rename never happened.
+ */
+export interface AttentionHeldActionsItem {
+  targetSystemId: string;
+  targetName: string;
+  runId: string;
+  count: number;
+  actionTypes: string[];
+  finishedAt: string | null;
+  href: string;
+}
+
 export interface AttentionLifecycleItem {
   operationId: string;
   kind: string;
@@ -41,6 +56,8 @@ export interface AttentionChangeItem {
 export interface AttentionSummary {
   total: number;
   provisionRuns: { count: number; items: AttentionRunItem[] } | null;
+  /** Absent from an older API, which is read as nothing to show. */
+  heldActions?: { count: number; items: AttentionHeldActionsItem[] } | null;
   lifecycle: { failed: number; awaitingVerification: number; items: AttentionLifecycleItem[] } | null;
   changeRequests: { count: number; items: AttentionChangeItem[] } | null;
 }
@@ -72,6 +89,22 @@ export function runSentence(item: AttentionRunItem): string {
   return `A provisioning run on ${item.targetName} ${what} — ${detail}`;
 }
 
+const HELD_NOUNS: Record<string, [string, string]> = {
+  rename_account: ['rename', 'renames'],
+  enable_account: ['re-enable', 're-enables'],
+  create_account: ['re-create', 're-creates'],
+};
+
+/**
+ * "2 renames on Entra ID are waiting for your approval". Named by type when
+ * there is one type, because "a rename" is the decision and "a change" is not.
+ */
+export function heldActionsSentence(item: AttentionHeldActionsItem): string {
+  const only = item.actionTypes.length === 1 ? HELD_NOUNS[item.actionTypes[0]!] : undefined;
+  const [one, many] = only ?? ['held change', 'held changes'];
+  return `${count(item.count, one, many)} on ${item.targetName} ${item.count === 1 ? 'is' : 'are'} waiting for your approval`;
+}
+
 /** "1 lifecycle operation failed", "2 onboardings wait for read-back verification". */
 export function lifecycleSentences(section: NonNullable<AttentionSummary['lifecycle']>): string[] {
   const lines: string[] = [];
@@ -94,6 +127,7 @@ export function changeRequestSentence(n: number): string {
 export function attentionSignature(summary: AttentionSummary): string {
   return [
     ...(summary.provisionRuns?.items.map((item) => `run:${item.runId}:${item.status}`) ?? []),
+    ...(summary.heldActions?.items.map((item) => `held:${item.runId}:${item.count}`) ?? []),
     `lifecycle:${summary.lifecycle?.failed ?? 0}:${summary.lifecycle?.awaitingVerification ?? 0}`,
     `changes:${summary.changeRequests?.count ?? 0}`,
     `runs:${summary.provisionRuns?.count ?? 0}`,

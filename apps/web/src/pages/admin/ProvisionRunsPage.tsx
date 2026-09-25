@@ -7,6 +7,7 @@ import {
   Panel,
   RefreshStatus,
   SkeletonRows,
+  StateBadge,
   Table,
   TableToolbar,
 } from '@syntra/ui';
@@ -22,6 +23,12 @@ interface Run {
   personsUnprocessable: number;
   blockedReason: string | null;
   error: string | null;
+  /**
+   * Actions this finished run left waiting for somebody's approval. A
+   * `partially_applied` run that is only waiting on a rename looks, by its
+   * status alone, like one that failed. Absent from an older API.
+   */
+  heldActions?: number;
 }
 
 /**
@@ -201,6 +208,13 @@ export function ProvisionRunsPage() {
                         <span title={run.blockedReason ?? run.error ?? undefined}>
                           <RunState status={status} />
                         </span>
+                        {(run.heldActions ?? 0) > 0 && (
+                          <span className="ml-2">
+                            <StateBadge state="attention">
+                              {run.heldActions} held
+                            </StateBadge>
+                          </span>
+                        )}
                       </td>
                       <td className="tabular-nums text-ink">
                         {run.personsEvaluated}

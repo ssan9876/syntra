@@ -199,6 +199,13 @@ export const createTargetRequestSchema = z
      */
     schedule: cronExpression.nullable().optional(),
     autoApply: z.boolean().optional(),
+    /**
+     * Confirm `rename_account` actions on this target without a person, on
+     * scheduled and requested runs alike. Renames only: a re-enable, a
+     * re-create or a run the guard held still waits for somebody. Off by
+     * default, because a rename changes the name people sign in with.
+     */
+    autoConfirmRenames: z.boolean().optional(),
     enabled: z.boolean().optional(),
     enforcementMode: enforcementModeSchema.optional(),
   })
@@ -413,6 +420,20 @@ export const applyRunRequestSchema = z
   })
   .strict();
 export type ApplyRunRequest = z.input<typeof applyRunRequestSchema>;
+
+/**
+ * Approving one held action of a finished run, so the next run applies it.
+ *
+ * `confirm: true`, required and literal, mirroring what confirming a run
+ * demands of its caller: the body is the deliberate act, and a request that
+ * omits it is refused rather than read as consent.
+ */
+export const approveHeldActionRequestSchema = z
+  .object({
+    confirm: z.literal(true),
+  })
+  .strict();
+export type ApproveHeldActionRequest = z.input<typeof approveHeldActionRequestSchema>;
 
 export const acknowledgeDriftRequestSchema = z
   .object({

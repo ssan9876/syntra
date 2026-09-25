@@ -919,6 +919,11 @@ every console page names it, and **Activity → Attention** lists it under
   [Runs that replace a waiting run](#runs-that-replace-a-waiting-run) below; a
   run **held for confirmation** stops everything on its target, so those are
   worth clearing promptly.
+- **Held actions** in each target's latest finished run: a rename, a re-enable
+  outside the window or the re-create of a vanished account that the run left
+  unapplied because it needs a person's confirmation and nobody has approved
+  it yet. They block nothing, which is why they are listed. See
+  [Held actions and renames](#held-actions-and-renames).
 - **Lifecycle operations** that failed, or whose target step waits on
   read-back verification (Employee work).
 - **Privileged change requests** waiting for a second administrator, for
@@ -928,7 +933,7 @@ The banner can be dismissed for the browser session; it comes back when
 something new arrives. It polls every minute. The same data is
 `GET /api/admin/attention/summary`: any signed-in administrator may call it,
 and each section is present only when the caller holds the permission for what
-it lists (`provision.read` for runs and lifecycle work; `tenant.manage`,
+it lists (`provision.read` for runs, held actions and lifecycle work; `tenant.manage`,
 `rbac.manage` or `token.manage` for change requests).
 
 ### Safety thresholds
@@ -986,6 +991,46 @@ evaluates the guard afresh against baselines that only an **applied** run moves
 (whether the target has ever been applied, and the last applied population), so
 a change still over a threshold is held again. A receipt only ever applies its
 own person's actions, from a plan the guard let through.
+
+### Held actions and renames
+
+Some single actions need a person's confirmation even in a run nobody held: a
+**rename** (the sign-in name changes), a **re-enable** of an account disabled
+for longer than *Re-enable without confirmation (days)*, and the **re-create**
+of an account that vanished from the target. A run someone applies from its
+page confirms them with the box beside Apply. A run that applies itself (a
+target with *Apply scheduled runs automatically*, whether the run was
+scheduled or started with Run now) confirms nothing: it applies everything
+else, leaves these `proposed` with "requires an explicit confirmation", and
+ends `partially_applied`. The runs list marks such a run **N held**.
+
+**Approving after the fact.** On a finished run, *Waiting for your approval*
+lists each held action with its before and after. **Approve** asks first, then
+records a standing approval of exactly that change and queues a run. It does
+not replay the old plan: the new run reads the target again, and applies the
+change only if it plans the very same one (same account, same type, same
+before and after). A change that has moved on since, such as a second name
+change, is not covered and the approval lapses. Approvals are used once,
+expire after 24 hours, can be revoked until a run uses them, and never
+confirm a run the safety guard held. Each is audited
+(`provision.action.approved`, `provision.action.approval_revoked`, and
+`provision.action.confirmed_by_approval` on the action it confirmed). API:
+`POST` / `DELETE /api/admin/targets/:id/runs/:runId/actions/:actionId/approve`
+(`provision.manage`, body `{ "confirm": true }`).
+
+**Apply renames automatically.** A per-target setting under *Schedule and
+enforcement*, off by default. When on, every run on that target (scheduled or
+requested) applies `rename_account` actions without asking, and audits each
+as `provision.action.auto_confirmed` by the setting. It covers renames only:
+re-enables, re-creates and threshold holds still wait for a person. A rename
+changes the name the person signs in with. On Active Directory that is the
+`sAMAccountName`, and changing it breaks cached logons, profile paths and
+anything else that stored the old name. Turn it on only where names follow a
+source of truth people expect to change, such as an Entra UPN that follows
+the business email. Renames are planned only when *Rename an account when
+the person's name changes* is on. The checkbox is disabled on a target whose
+adapter cannot rename. Changing the setting is audited on
+`provision.target.update` as `autoConfirmRenames: { from, to }`.
 
 ### Onboarding against an account that already exists
 

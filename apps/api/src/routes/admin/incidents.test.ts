@@ -98,6 +98,6 @@ describe('attention summary', () => {
     // Audit-only: nothing about runs, and not an empty list either.
     const other = await read(auditor);
     expect(other.statusCode).toBe(200);
-    expect(other.json()).toEqual({ total: 0, provisionRuns: null, lifecycle: null, changeRequests: null });
+    expect(other.json()).toEqual({ total: 0, provisionRuns: null, heldActions: null, lifecycle: null, changeRequests: null });
   });
 });

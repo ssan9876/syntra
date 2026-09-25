@@ -52,6 +52,12 @@ import {
   noActiveRequest,
 } from '../jobs/cancellation.js';
 import { cancellableRuns, honourProvisionCancellation } from './run-cancellation.js';
+import {
+  StandingConfirmationLostError,
+  spendStandingConfirmation,
+  standingConfirmationFor,
+  type StandingConfirmation,
+} from './action-approval.js';
 
 /**
  * The longest one backoff may be.
@@ -706,15 +712,34 @@ export async function applyProvisionRun(
       continue;
     }
 
+    // A rename, a re-enable outside the window, or a re-create of a vanished
+    // account. Never auto-applied, and never unlocked by a caller that merely
+    // passed the parameter — but recorded rather than dropped. Ruling P4
+    // exists because a silent skip is how a target looks healthy while doing
+    // nothing, and on an unattended `autoApply` run nobody is watching this
+    // happen.
+    //
+    // Two things stand in for the missing tick, and only for THIS action:
+    // a person's standing approval of exactly this change (matched on its
+    // fingerprint, so a plan that has moved on is not covered), or, for a
+    // `rename_account` alone, the target's `autoConfirmRenames`. Neither is
+    // consulted for the run-level gate above: a run the guard held is held
+    // whatever anybody approved per action. The approval is spent with the
+    // action's intent, in `applyOneAction`'s first step.
+    let standingConfirmation: StandingConfirmation | null = null;
     if (action.requiresConfirmation && !confirmed) {
-      // A rename, a re-enable outside the window, or a re-create of a vanished
-      // account. Never auto-applied, and never unlocked by a caller that
-      // merely passed the parameter — but recorded rather than dropped. Ruling
-      // P4 exists because a silent skip is how a target looks healthy while
-      // doing nothing, and on an unattended `autoApply` run nobody is watching
-      // this happen.
-      deferredIds.push(action.id);
-      continue;
+      standingConfirmation = await withTenant(tenantId, (tx) =>
+        standingConfirmationFor(tx, {
+          targetSystemId: prepared.run.targetSystemId,
+          autoConfirmRenames: prepared.target.autoConfirmRenames,
+          action,
+          now: options.now ?? new Date(),
+        }),
+      );
+      if (standingConfirmation === null) {
+        deferredIds.push(action.id);
+        continue;
+      }
     }
 
     // The heartbeat, at most once a minute, in a transaction of its own that
@@ -750,8 +775,19 @@ export async function applyProvisionRun(
         sleep,
         ...(options.transport === undefined ? {} : { transport: options.transport }),
         ...(options.publicUrl === undefined ? {} : { publicUrl: options.publicUrl }),
+        ...(standingConfirmation === null
+          ? {}
+          : { standingConfirmation, confirmationNow: options.now ?? new Date() }),
       });
     } catch (cause) {
+      // The approval stood when it was read and was revoked, or spent by a
+      // concurrent apply, before the intent committed. The intent rolled back
+      // with the failed spend, so nothing was attempted: this is a deferral,
+      // exactly as though no approval had existed.
+      if (cause instanceof StandingConfirmationLostError) {
+        deferredIds.push(action.id);
+        continue;
+      }
       // A throw out of one action is one action's problem. Left uncaught it
       // abandons every later action in `sequence` order — the disables, the
       // revocations, the archives and, since Ruling P29, the second of a
@@ -972,6 +1008,13 @@ interface ApplyOneOptions {
   sleep: (ms: number) => Promise<void>;
   transport?: Transport;
   publicUrl?: string;
+  /**
+   * What confirms this action in an apply nobody confirmed, when something
+   * does. Spent in step 1's transaction, beside the intent, so an approval is
+   * consumed exactly when the write it approved is committed to being tried.
+   */
+  standingConfirmation?: StandingConfirmation;
+  confirmationNow?: Date;
 }
 
 type ActionOutcome =
@@ -1143,6 +1186,8 @@ async function applyOneAction(
   let result: WriteResult;
   let throttledForMs = 0;
   let throttledAttempts = 0;
+  // Spent once, on the first attempt. A retry is the same confirmed write.
+  let confirmationToSpend = options.standingConfirmation ?? null;
 
   for (;;) {
     const attempt = attempts + 1;
@@ -1150,6 +1195,15 @@ async function applyOneAction(
     // Step 1: mark in_flight and record the INTENT, committed before the call.
     // This is what makes the gap observable.
     await withTenant(tenantId, async (tx) => {
+      if (confirmationToSpend !== null) {
+        // First, so a confirmation that no longer stands throws before
+        // anything is marked, and the whole step rolls back.
+        await spendStandingConfirmation(tx, confirmationToSpend, action, {
+          targetSystemId: options.targetSystemId,
+          actorUserId: options.actorUserId,
+          now: options.confirmationNow ?? new Date(),
+        });
+      }
       await tx.provisionAction.update({
         where: { id: action.id },
         data: { status: 'in_flight' },
@@ -1161,9 +1215,14 @@ async function applyOneAction(
         targetId: action.id,
         outcome: 'success',
         sourceIp: null,
-        payload: { actionType: action.actionType, attempt },
+        payload: {
+          actionType: action.actionType,
+          attempt,
+          ...(confirmationToSpend === null ? {} : { confirmedBy: confirmationToSpend.kind }),
+        },
       });
     });
+    confirmationToSpend = null;
 
     // Step 2: the connector call. No transaction. No connection held.
     result = await options.connector.write(options.config as never, operation);

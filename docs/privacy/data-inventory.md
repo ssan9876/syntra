@@ -88,6 +88,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `PrivacyCase` | person: `personId` | retain | The record that the request was received, verified and handled (accountability, GDPR art. 5(2)). |
 | `Product` | person: `ownerPersonId` | retain | Configuration naming the person as an owner. |
 | `ProvisionAction` | person: `personId`; account: `accountId` | pseudonymize | Kept as the record of what was done to the account; the before and after attribute values and the message are cleared. |
+| `ProvisionActionApproval` | account: `accountId`; user: `approvedByUserId`, `revokedByUserId` | retain | Identifiers and a one-way hash only: which change to an (erased) account a person approved, and when. The values themselves are never stored here. |
 | `ProvisionException` | person: `personId` | pseudonymize | The message names the person and is replaced. |
 | `RecoveryCode` | user: `userId` | delete | Credential material. |
 | `RefreshToken` | user: `userId` | retain | Stored hashed; kept revoked as the evidence that access ended, like sessions. |
@@ -1111,6 +1112,28 @@ Linked to a data subject by person: `personId`; account: `accountId`. Erasure: *
 | `appliedAt` | operational | retained |  |
 | `requiresConfirmation` | operational | retained |  |
 | `createdAt` | operational | retained |  |
+
+Not personal data: `tenantId`.
+
+#### `ProvisionActionApproval`
+
+Linked to a data subject by account: `accountId`; user: `approvedByUserId`, `revokedByUserId`. Erasure: **retain** -- Identifiers and a one-way hash only: which change to an (erased) account a person approved, and when. The values themselves are never stored here.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `id` | identity | retained |  |
+| `targetSystemId` | operational | retained |  |
+| `accountId` | identity | retained |  |
+| `actionType` | operational | retained |  |
+| `fingerprint` | operational | retained |  |
+| `sourceActionId` | operational | retained |  |
+| `approvedByUserId` | identity | retained |  |
+| `approvedAt` | operational | retained |  |
+| `expiresAt` | operational | retained |  |
+| `consumedAt` | operational | retained |  |
+| `consumedByActionId` | operational | retained |  |
+| `revokedAt` | operational | retained |  |
+| `revokedByUserId` | identity | retained |  |
 
 Not personal data: `tenantId`.
 
@@ -2380,7 +2403,7 @@ No personal data. Columns: `id`, `tenantId`, `name`, `functionAId`, `functionBId
 | `adapterSelectionChangedByUserId` | identity |  |  |
 | `deprecationOverrideByUserId` | identity |  |  |
 
-Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
+Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `autoConfirmRenames`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
 
 #### `Tenant`
 

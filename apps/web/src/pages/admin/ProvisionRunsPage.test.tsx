@@ -48,6 +48,17 @@ const renderPage = () =>
 beforeEach(() => vi.restoreAllMocks());
 
 describe('ProvisionRunsPage', () => {
+  it('badges a finished run that left actions waiting for approval', async () => {
+    // `partially_applied` alone reads like a failure; a held rename is a
+    // question for somebody, and the list is where they look first.
+    mockFetch({
+      runs: [run({ id: 'r2', status: 'partially_applied', heldActions: 2 }), run({ heldActions: 0 })],
+    });
+    renderPage();
+    expect(await screen.findByText('2 held')).toBeVisible();
+    expect(screen.getAllByText(/held$/)).toHaveLength(1);
+  });
+
   it('reads a superseded run as superseded rather than as a failure', async () => {
     // Spec section 14's status list has no `superseded`, so
     // `adoptStaleRunsAndStart` records one as `failed` with

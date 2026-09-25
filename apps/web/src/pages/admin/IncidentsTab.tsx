@@ -12,6 +12,7 @@ import { useApiResource } from './hooks.js';
 import {
   ATTENTION_URL,
   changeRequestSentence,
+  heldActionsSentence,
   lifecycleSentences,
   runSentence,
   type AttentionSummary,
@@ -59,7 +60,8 @@ export function IncidentsTab() {
   const moreRuns = (attention.data?.provisionRuns?.count ?? 0) - runs.length;
   const lifecycle = attention.data?.lifecycle ? lifecycleSentences(attention.data.lifecycle) : [];
   const changes = attention.data?.changeRequests?.count ?? 0;
-  const waiting = runs.length > 0 || lifecycle.length > 0 || changes > 0;
+  const held = attention.data?.heldActions?.items ?? [];
+  const waiting = runs.length > 0 || held.length > 0 || lifecycle.length > 0 || changes > 0;
 
   return (
     <>
@@ -100,6 +102,26 @@ export function IncidentsTab() {
                 {moreRuns} more provisioning {moreRuns === 1 ? 'run is' : 'runs are'} waiting; see each target&rsquo;s runs.
               </li>
             )}
+            {held.map((item) => (
+              <li key={`held-${item.runId}`} className="p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StateBadge state="attention">Held action</StateBadge>
+                      <span className="font-medium text-ink">{heldActionsSentence(item)}</span>
+                    </div>
+                    <p className="mt-0.5 max-w-[68ch] text-sm text-muted">
+                      The run applied everything else and finished. These need a person&rsquo;s
+                      confirmation, which an automatic run never gives; approving one queues a
+                      run that applies it if it is still the same change.
+                    </p>
+                  </div>
+                  <Link className="link shrink-0 text-sm" to={item.href}>
+                    Review and approve
+                  </Link>
+                </div>
+              </li>
+            ))}
             {lifecycle.map((line) => (
               <li key={line} className="flex flex-wrap items-start justify-between gap-3 p-4">
                 <span className="font-medium text-ink">{line}</span>

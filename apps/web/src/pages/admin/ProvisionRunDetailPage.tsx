@@ -16,6 +16,7 @@ import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 import { ActionState, RunState } from './run-states.js';
 import { SAFETY_THRESHOLDS_ANCHOR, isFirstRunHold, thresholdHints } from './threshold-hints.js';
+import { HeldActionApprovals, type HeldActionView } from './HeldActionApprovals.js';
 import {
   CancelRunButton,
   CancellationStatus,
@@ -43,6 +44,8 @@ interface Action {
   requiresConfirmation: boolean;
   sequence: number;
   attributedRuleIds: string[];
+  before?: unknown;
+  after?: unknown;
   person: Person | null;
 }
 
@@ -89,6 +92,12 @@ interface Run {
   capabilityRefusal?: string | null;
   actions: Action[];
   exceptions: Exception[];
+  /**
+   * A finished run's held actions: each with whether it can be approved now
+   * and where its approval stands. Empty for a run that has not ended, whose
+   * held actions are confirmed on its own Apply. Absent from an older API.
+   */
+  heldActions?: HeldActionView[];
 }
 
 type Tab = 'person' | 'type' | 'exceptions' | 'drift';
@@ -622,6 +631,16 @@ export function ProvisionRunDetailPage() {
             They were excluded from this plan entirely and their existing access
             was not touched. Read them on the Exceptions tab.
           </Alert>
+        )}
+
+        {id && (run.heldActions ?? []).length > 0 && (
+          <HeldActionApprovals
+            targetId={id}
+            runId={run.id}
+            views={run.heldActions ?? []}
+            actions={run.actions}
+            onChanged={reload}
+          />
         )}
 
         <nav className="flex flex-wrap gap-1 border-b border-border-subtle">

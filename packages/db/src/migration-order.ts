@@ -148,6 +148,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261105010000_application_icons',
   '20261106000000_user_service_account',
   '20261106090000_credential_pickup',
+  '20261106120000_held_action_approvals',
 ];
 
 /**

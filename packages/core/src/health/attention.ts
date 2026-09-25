@@ -1,4 +1,5 @@
 import type { TenantClient } from '@syntra/db';
+import { heldActionsAttention, type HeldActionsAttentionItem } from '../provision/action-approval.js';
 
 /**
  * Work that is waiting for a PERSON, gathered for the console-wide banner and
@@ -58,6 +59,15 @@ export interface AttentionChangeItem {
 export interface AttentionSummary {
   total: number;
   provisionRuns: { count: number; items: AttentionRunItem[] } | null;
+  /**
+   * Actions a finished run left waiting for a person's approval -- a rename,
+   * a re-enable outside the window -- per target, from its latest finished
+   * run. A held RUN stops later runs and is in `provisionRuns`; a held ACTION
+   * inside a run that auto-applied and ended stops nothing, which is exactly
+   * why it went unseen: the target looked healthy and the rename never
+   * happened.
+   */
+  heldActions: { count: number; items: HeldActionsAttentionItem[] } | null;
   lifecycle: { failed: number; awaitingVerification: number; items: AttentionLifecycleItem[] } | null;
   changeRequests: { count: number; items: AttentionChangeItem[] } | null;
 }
@@ -132,6 +142,7 @@ export async function readAttentionSummary(
   now: Date = new Date(),
 ): Promise<AttentionSummary> {
   let provisionRuns: AttentionSummary['provisionRuns'] = null;
+  let heldActions: AttentionSummary['heldActions'] = null;
   let lifecycle: AttentionSummary['lifecycle'] = null;
   let changeRequests: AttentionSummary['changeRequests'] = null;
 
@@ -165,6 +176,13 @@ export async function readAttentionSummary(
         startedAt: run.startedAt,
         href: `/admin/targets/${run.targetSystemId}/runs/${run.id}`,
       })),
+    };
+
+    // Under `provision.read`, like the runs: it is the same run, one level in.
+    const held = await heldActionsAttention(tx, now);
+    heldActions = {
+      count: held.reduce((sum, item) => sum + item.count, 0),
+      items: held.slice(0, ATTENTION_ITEM_LIMIT),
     };
 
     // Lifecycle work is read with `provision.read` too: it is what the
@@ -234,7 +252,8 @@ export async function readAttentionSummary(
 
   const total =
     (provisionRuns?.count ?? 0) +
+    (heldActions?.count ?? 0) +
     (lifecycle ? lifecycle.failed + lifecycle.awaitingVerification : 0) +
     (changeRequests?.count ?? 0);
-  return { total, provisionRuns, lifecycle, changeRequests };
+  return { total, provisionRuns, heldActions, lifecycle, changeRequests };
 }

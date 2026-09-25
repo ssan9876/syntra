@@ -132,6 +132,105 @@ function useConfigurationGaps(targetId: string | null): {
   return gaps;
 }
 
+/**
+ * Whether this target's adapter may rename accounts, read from the same
+ * report the Adapter release panel shows (`GET /targets/:id/adapter`, one row
+ * per capability with the reason it is refused, or null).
+ *
+ * `unknown` for a new target, for a read that failed, and for an older API
+ * without the route: the setting is then offered, because the apply refuses a
+ * rename the adapter cannot perform anyway, and hiding a control on the
+ * strength of a request that did not happen would be a guess. Only a definite
+ * refusal disables it.
+ */
+type RenameSupport =
+  | { state: 'unknown' }
+  | { state: 'supported' }
+  | { state: 'refused'; reason: string };
+
+function useRenameSupport(targetId: string | null): RenameSupport {
+  const [support, setSupport] = useState<RenameSupport>({ state: 'unknown' });
+  useEffect(() => {
+    setSupport({ state: 'unknown' });
+    if (targetId === null) return;
+    let cancelled = false;
+    api<{ capabilities?: { capability: string; refusal: string | null }[] }>(
+      `/api/admin/targets/${targetId}/adapter`,
+    )
+      .then((report) => {
+        if (cancelled || !Array.isArray(report.capabilities)) return;
+        const rename = report.capabilities.find((row) => row.capability === 'rename_account');
+        if (!rename) return;
+        setSupport(
+          rename.refusal === null
+            ? { state: 'supported' }
+            : { state: 'refused', reason: rename.refusal },
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [targetId]);
+  return support;
+}
+
+/**
+ * "Apply renames automatically": confirm `rename_account` without a person.
+ *
+ * What it changes is said beside the box, because the name of the setting
+ * does not: a rename changes the name somebody signs in with. On Active
+ * Directory that is the sAMAccountName, and what breaks is concrete and
+ * outside Syntra -- cached logons, profile paths, and anything that stored
+ * the old name -- so that warning is louder there.
+ */
+function AutoConfirmRenames({
+  type,
+  support,
+  checked,
+  renameEnabled,
+  onChange,
+}: {
+  type: TargetType;
+  support: RenameSupport;
+  checked: boolean;
+  renameEnabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  const refused = support.state === 'refused';
+  return (
+    <div className="sm:col-span-2" data-testid="auto-confirm-renames">
+      <Check
+        name="autoConfirmRenames"
+        checked={checked && !refused}
+        disabled={refused}
+        onChange={onChange}
+        label="Apply renames automatically"
+        warning={
+          type === 'activeDirectory'
+            ? 'On Active Directory a rename changes the sAMAccountName. That breaks cached logons, profile paths and anything else that stored the old name.'
+            : undefined
+        }
+      />
+      <p className="mt-1 pl-6 text-sm text-muted">
+        A rename changes the name the person signs in with. Off by default: each
+        rename then waits on its run for somebody to approve it. When on, runs
+        apply renames without asking, scheduled and requested alike, and each
+        one is recorded in the audit log as confirmed by this setting. Renames
+        only: a re-enable, a re-created account or a run held by a safety
+        threshold still waits for a person.
+        {!renameEnabled &&
+          ' Renames are planned only when “Rename an account when the person’s name changes” is on, under Lifecycle timings.'}
+      </p>
+      {refused && (
+        <p className="mt-1 pl-6 text-sm text-muted">
+          This target cannot rename accounts, so there is nothing to apply: {support.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -174,6 +273,7 @@ export function TargetDetailPage() {
   const [busy, setBusy] = useState<null | 'save' | 'test' | 'run'>(null);
   const [result, setResult] = useState<TestResult | null>(null);
   const gaps = useConfigurationGaps(isNew ? null : targetId);
+  const renameSupport = useRenameSupport(isNew ? null : targetId);
   // The draft the result above was produced from. See `testStale`.
   const [resultFor, setResultFor] = useState<string | null>(null);
 
@@ -288,6 +388,7 @@ export function TargetDetailPage() {
             bindPassword: form.bindPassword,
             schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
             autoApply: form.autoApply,
+            autoConfirmRenames: form.autoConfirmRenames,
             enabled: form.enabled,
             enforcementMode: form.enforcementMode,
           }),
@@ -341,6 +442,7 @@ export function TargetDetailPage() {
           ...(form.bindPassword ? { bindPassword: form.bindPassword } : {}),
           schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
           autoApply: form.autoApply,
+          autoConfirmRenames: form.autoConfirmRenames,
           enabled: form.enabled,
           enforcementMode: form.enforcementMode,
           preHireDays: n.preHireDays,
@@ -772,6 +874,13 @@ export function TargetDetailPage() {
                   ? 'There is no schedule, so no scheduled run will happen for this to apply.'
                   : undefined
               }
+            />
+            <AutoConfirmRenames
+              type={form.type}
+              support={renameSupport}
+              checked={form.autoConfirmRenames}
+              renameEnabled={form.renameEnabled}
+              onChange={(v) => set('autoConfirmRenames', v)}
             />
             <Field
               label="Maximum attempts per action"
