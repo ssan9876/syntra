@@ -855,6 +855,75 @@ export async function applyProvisionRun(
   });
 }
 
+/**
+ * Closes a `previewed` run that planned nothing at all, the way applying it
+ * would have: `applied`, with nothing written to the target.
+ *
+ * For the person-receipt path only. A receipt starts a preview to find out
+ * what one person needs; when the whole target needs nothing, the run it left
+ * `previewed` used to sit there for ever, and because `previewed` is one of
+ * the non-terminal statuses every later receipt and scheduled run treats as
+ * "awaiting review", the target stopped doing anything until somebody opened
+ * an empty plan and pressed apply on it.
+ *
+ * Deliberately narrow, and it re-checks all of it inside the transaction:
+ *
+ * - `previewed` only. A `blocked` run is a question for a person even when it
+ *   is empty (the guard's first-run and empty-target refusals are exactly
+ *   that), and is never closed here.
+ * - No actions and no exceptions on the whole run, not only for the receipt's
+ *   person. An exception is a person whose access is frozen until somebody
+ *   reads it, and closing the run would bury it.
+ * - No cancellation waiting, the same condition the apply's own transition
+ *   uses.
+ *
+ * Does not go through `applyProvisionRun` because every check that one makes
+ * before writing (emergency stops, the maintenance window, the adapter gate,
+ * the credential) exists to guard a WRITE, and there is none. Running them
+ * would only turn "nothing to do" into a refusal that leaves the run blocking.
+ * `lastAppliedRunAt` is not stamped, for the reason the apply gives: a run
+ * that wrote nothing has not written anything at this target.
+ */
+export async function closeEmptyPreviewedRun(
+  tenantId: string,
+  runId: string,
+  reason: string,
+): Promise<boolean> {
+  return withTenant(tenantId, async (tx) => {
+    const [actions, exceptions] = await Promise.all([
+      tx.provisionAction.count({ where: { runId } }),
+      tx.provisionException.count({ where: { runId } }),
+    ]);
+    if (actions > 0 || exceptions > 0) return false;
+    const { count } = await tx.provisionRun.updateMany({
+      where: { id: runId, status: 'previewed', ...noActiveRequest() },
+      data: { status: 'applied', finishedAt: new Date(), lastProgressAt: new Date() },
+    });
+    if (count === 0) return false;
+    await recordEvent(tx, {
+      actorUserId: null,
+      action: 'provision.run.apply',
+      targetType: 'ProvisionRun',
+      targetId: runId,
+      outcome: 'success',
+      sourceIp: null,
+      payload: {
+        status: 'applied',
+        applied: 0,
+        failed: 0,
+        pendingRetry: 0,
+        inFlight: 0,
+        deferred: 0,
+        refused: 0,
+        skipped: 0,
+        emptyPlan: true,
+        reason,
+      },
+    });
+    return true;
+  });
+}
+
 interface ApplyOneOptions {
   connector: TargetConnector<unknown>;
   config: unknown;

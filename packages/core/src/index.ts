@@ -12,6 +12,7 @@ export * from './tenant/offboarding-service.js';
 export * from './tenant/deletion-service.js';
 export * from './health/readiness.js';
 export * from './health/incidents.js';
+export * from './health/attention.js';
 export * from './update/update-service.js';
 export * from './health/version.js';
 export * from './health/metrics.js';

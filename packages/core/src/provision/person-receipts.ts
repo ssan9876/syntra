@@ -4,7 +4,7 @@ import type { MasterKeyProvider } from '../vault/master-key.js';
 import type { Transport } from '../notify/notification-service.js';
 import { readBackTarget, targetConnectorFor, type TargetConnector } from '@syntra/connectors';
 import { previewProvisionRun } from './run-service.js';
-import { applyProvisionRun } from './apply.js';
+import { applyProvisionRun, closeEmptyPreviewedRun } from './apply.js';
 import { ExternalWritesPausedError } from './target-write-stop.js';
 import { AdapterWritesBlockedError } from './adapter-rollout.js';
 import { enqueuePairedSync } from './syntra-user.js';
@@ -183,6 +183,7 @@ async function verifyReceiptAtTarget(
   receiptId: string,
   provider: MasterKeyProvider,
   options: PersonProvisionOptions,
+  readBack: { attempts?: number } = {},
 ): Promise<{ matched: boolean; message: string }> {
   const prepared = await withTenant(tenantId, async (tx) => {
     const receipt = await tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: receiptId } });
@@ -209,6 +210,7 @@ async function verifyReceiptAtTarget(
   const result = await waitForExpectedReadBack(
     () => readBackTarget(connector, prepared.config, prepared.account!.anchor!),
     expected,
+    readBack.attempts === undefined ? {} : { attempts: readBack.attempts },
   );
   if (result.matched) {
     return { matched: true, message: `Target account and entitlement state were confirmed by read-back after ${result.attempts} observation${result.attempts === 1 ? '' : 's'}.` };
@@ -272,12 +274,42 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
       receipt: await tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: receiptId } }),
     }));
     const evidence = plan.receipt.evidence as { accountRequired?: boolean; evaluated?: boolean; notYetStarted?: boolean; exceptions?: unknown[] } | null;
+    // A preview this receipt started that planned nothing for ANYBODY is
+    // closed here, before any of the outcomes below. Left `previewed`, it
+    // counts as "awaiting review" to every later receipt and scheduled run on
+    // this target, which is how one onboarding whose account already existed
+    // stopped every onboarding after it. `closeEmptyPreviewedRun` re-checks
+    // that the run is `previewed` (never `blocked`) and has no actions and no
+    // exceptions at all, so a plan that holds work for somebody else is left
+    // exactly as it was, for a person to apply or for the next run to
+    // supersede.
+    if (run.status === 'previewed') {
+      await closeEmptyPreviewedRun(tenantId, run.id, 'A person provisioning request found nothing to change on this target.');
+    }
     if ((evidence?.exceptions?.length ?? 0) > 0) { await finish('blocked', 'This person has planning exceptions. Review the linked run.'); return; }
     if (!plan.actions.length) {
       if (evidence?.notYetStarted) await finish('pending', 'The start date is outside the provisioning window. Retry when due.');
       else if (!evidence?.evaluated) await finish('blocked', 'This person was not evaluated by the target.');
       else if (!evidence.accountRequired) await finish('no_match', 'No account is required by the evaluated rules. No access-completion claim is made.');
-      else await finish('verification_pending', 'The target plan needed no changes. Confirm the observed account and entitlement state before completing this work.');
+      else {
+        // Nothing to change is a claim about the plan, not about the target:
+        // the account may have been created or adopted by a different run,
+        // and the plan only compares against the inventory that run left.
+        // Read the account back, as the apply path does, before completing
+        // anything. Once: nothing was written, so there is no propagation
+        // delay to wait out, and a mismatch now is a real one.
+        const verification = await verifyReceiptAtTarget(tenantId, receiptId, provider, options, { attempts: 1 })
+          .catch((error: unknown) => ({
+            matched: false,
+            message: `Target read-back failed (${error instanceof Error ? error.message : 'unknown error'}). Manual verification is required.`,
+          }));
+        await finish(
+          verification.matched ? 'applied' : 'verification_pending',
+          verification.matched
+            ? 'The target plan needed no changes, and the existing account and entitlement state were confirmed by read-back.'
+            : `The target plan needed no changes. ${verification.message}`,
+        );
+      }
       return;
     }
     // The exact persisted plan and explicit person filter are both required.

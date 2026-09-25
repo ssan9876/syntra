@@ -896,6 +896,60 @@ Two operational notes:
   `cancelled` rather than `failed` or `partially_applied`, after resolving any
   `in_flight` actions against the target.
 
+## Work held for review
+
+Some work stops on purpose and waits for a person. A banner at the top of
+every console page names it, and **Activity → Attention** lists it under
+*Waiting for a decision*, above what is broken:
+
+- **Provisioning runs awaiting review** (`previewed` or `blocked`): the target,
+  what the run would do and the guard's reason, with a link to the run
+  (`/admin/targets/:id/runs/:runId`). While one waits, later scheduled runs on
+  that target are skipped and person provisioning (onboarding) on it is
+  refused with "Another run is in progress or awaiting review", so these are
+  worth clearing promptly.
+- **Lifecycle operations** that failed, or whose target step waits on
+  read-back verification (Employee work).
+- **Privileged change requests** waiting for a second administrator, for
+  administrators who could decide one.
+
+The banner can be dismissed for the browser session; it comes back when
+something new arrives. It polls every minute. The same data is
+`GET /api/admin/attention/summary`: any signed-in administrator may call it,
+and each section is present only when the caller holds the permission for what
+it lists (`provision.read` for runs and lifecycle work; `tenant.manage`,
+`rbac.manage` or `token.manage` for change requests).
+
+### Safety thresholds
+
+A run is held for confirmation when it would change more than a set share of
+the target in one go: *would create 1 of 2 accounts (50.0%), above the 20%
+threshold*. The run's page names the setting that held it and links to
+**Safety thresholds** on the target's edit form: Accounts created, Accounts
+disabled, Accounts archived (container moves use this one too), Entitlements
+revoked, Syntra logins deactivated, Holders of any one entitlement, and Drop in
+the person population. Either confirm the run, if the change is expected, or raise
+the percentage when it is simply too low for a target that size: on a small
+directory one new starter is a large share. Later runs are measured against
+the new value; the held run keeps its verdict and still needs confirming or
+superseding.
+
+A target's **first** run is always confirmed by a person, whatever the
+thresholds say, and no setting changes that. A run the guard **refused**
+outright (no accounts read from the target, a collapsed person population, an
+axis with no denominator) cannot be confirmed: fix the cause and run again.
+
+### Onboarding against an account that already exists
+
+When a person's account was created or adopted by a different run, their
+onboarding's own preview plans nothing for them. Syntra then reads the account
+back from the target and completes the target step when it matches what
+Syntra records; only a mismatch or an incomplete read-back leaves it waiting
+for manual verification. A preview started for one person that found nothing
+to change anywhere is closed as an empty applied run rather than left
+awaiting review; one that found work for other people is left for a person to
+apply and shows in the banner.
+
 ## Queue recovery
 
 Background work has a row (a sync run, an HR import run, a provisioning run, a

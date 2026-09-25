@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
 import { AdminNav } from './AdminNav.js';
 import { BreakGlassBanner } from './BreakGlassBanner.js';
+import { AttentionBanner } from './AttentionBanner.js';
 import { HeldChangePrompt } from './HeldChangePrompt.js';
 
 /**
@@ -86,9 +87,11 @@ export function AdminApp() {
           over the outer one and silently undo it, which is how the console
           ended up narrow and hugging its rail on a wide monitor. */}
       <div className="w-full">
-          {/* Above every page: emergency access nobody can miss, and the
-              reason prompt every held privileged change goes through. */}
+          {/* Above every page: emergency access nobody can miss, work held
+              for a person's decision, and the reason prompt every held
+              privileged change goes through. */}
           <BreakGlassBanner />
+          <AttentionBanner />
           <HeldChangePrompt />
           <Suspense fallback={<PageLoading />}>
           <Routes>

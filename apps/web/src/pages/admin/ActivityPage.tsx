@@ -6,6 +6,7 @@ import { PageHeader } from './PageHeader.js';
 import { IncidentsTab } from './IncidentsTab.js';
 import { AuditTab } from './AuditTab.js';
 import { ExportsTab } from './ExportsTab.js';
+import { ATTENTION_URL, type AttentionSummary } from './attention.js';
 
 interface Incident {
   id: string;
@@ -27,7 +28,12 @@ interface Incident {
  */
 export function ActivityPage() {
   const incidents = useApiResource<{ incidents: Incident[] }>('/api/admin/incidents');
+  // Work waiting for a decision is counted with what is broken: both are
+  // listed on the Attention tab, and a badge that left one out would say
+  // "nothing" over a list that has something in it.
+  const attention = useApiResource<AttentionSummary>(ATTENTION_URL);
   const rows = incidents.data?.incidents ?? [];
+  const needs = rows.length + (typeof attention.data?.total === 'number' ? attention.data.total : 0);
 
   return (
     <>
@@ -38,7 +44,7 @@ export function ActivityPage() {
       <StatGrid>
         <StatCard
           label="Needs attention"
-          value={rows.length}
+          value={needs}
           tone="danger"
           quietWhenZero
           to="/admin/activity?tab=attention"
@@ -48,7 +54,7 @@ export function ActivityPage() {
       <Tabs
         label="Activity"
         tabs={[
-          { id: 'attention', label: 'Attention', badge: rows.length || undefined, content: <IncidentsTab /> },
+          { id: 'attention', label: 'Attention', badge: needs || undefined, content: <IncidentsTab /> },
           { id: 'all', label: 'All events', content: <AuditTab /> },
           // Beside the log it most often copies. Every export -- the log's,
           // a Governance report's -- is followed, downloaded and revoked here.
