@@ -35,8 +35,10 @@ import { requirePermission } from '../../plugins/require-permission.js';
 export interface ProvisionRunRouteOptions {
   keyProvider: MasterKeyProvider;
   scheduler?: () => Scheduler | null;
-  /** The app's mail transport, so a created account's password can be delivered. */
+  /** The app's mail transport, so a created account's pickup link can be delivered. */
   transport: Transport;
+  /** PUBLIC_URL, which that pickup link is built on. */
+  publicUrl: string;
 }
 
 /**
@@ -258,6 +260,7 @@ export async function registerAdminProvisionRunRoutes(
             ? {}
             : { maintenanceOverrideReason: body.maintenanceOverrideReason }),
           transport: options.transport,
+          publicUrl: options.publicUrl,
         });
       } catch (cause) {
         // The same two refusals, reached by the race the pre-checks above

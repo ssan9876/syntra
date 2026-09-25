@@ -65,6 +65,46 @@ export function targetConnectorCapabilities(type: string): ConnectorCapabilities
   return capabilities[type] ?? unavailable;
 }
 
+/**
+ * Whether a created account's initial password must be changed at first
+ * sign-in, and who decides.
+ *
+ *   configurable  the connector honours `create_account.requirePasswordChange`
+ *                 (Active Directory, by `pwdLastSet = 0`)
+ *   always        the connector forces it and cannot be told otherwise
+ *                 (Entra ID's `forceChangePasswordNextSignIn: true`)
+ *   unsupported   nothing Syntra writes makes the target ask; whatever the
+ *                 target does on its own is its business
+ *
+ * Deliberately NOT a field on `ConnectorCapabilities`. Those are booleans the
+ * adapter lifecycle certifies and the console renders as a yes/no grid; this
+ * is a three-way answer about one detail of one operation, and the only
+ * readers are the account profile form and the wording of the pickup email --
+ * which must not tell somebody they will be asked to choose a new password
+ * when nothing is going to ask them.
+ *
+ * `httpJson` reads as unsupported even for a document that sets such a flag
+ * in its create body: the document is administrator-editable, and promising a
+ * forced change on the strength of a field somebody could delete is the
+ * promise this function exists to stop being made.
+ */
+export type FirstSignInPasswordChange = 'configurable' | 'always' | 'unsupported';
+
+export function firstSignInPasswordChange(type: string): FirstSignInPasswordChange {
+  if (type === 'activeDirectory') return 'configurable';
+  if (type === 'entraId') return 'always';
+  return 'unsupported';
+}
+
+/** Whether a create on this target, under this profile setting, forces a change. */
+export function passwordChangeForcedAtFirstSignIn(
+  type: string,
+  profileRequires: boolean,
+): boolean {
+  const support = firstSignInPasswordChange(type);
+  return support === 'always' || (support === 'configurable' && profileRequires);
+}
+
 /** The attribute names `observedEnabled` reads an enabled state from. */
 const ENABLED_SPELLINGS = new Set(['active', 'enabled', 'accountenabled']);
 

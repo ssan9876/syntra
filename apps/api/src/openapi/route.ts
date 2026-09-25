@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { CatalogRoute } from './route-catalog.js';
 import { buildOpenApiDocument } from './document.js';
-import { ADMIN_ROUTE_DESCRIPTIONS } from './descriptions.js';
+import { ROUTE_DESCRIPTIONS } from './descriptions.js';
 import { registerDeprecationHeaders } from './deprecation.js';
 
 export const OPENAPI_PATH = '/api/openapi.json';
@@ -30,7 +30,7 @@ export const OPENAPI_PATH = '/api/openapi.json';
 export function registerOpenApiRoute(app: FastifyInstance, catalog: CatalogRoute[]): void {
   // On the root instance, before any admin plugin registers, so the hook
   // reaches every route a description can name.
-  registerDeprecationHeaders(app, ADMIN_ROUTE_DESCRIPTIONS);
+  registerDeprecationHeaders(app, ROUTE_DESCRIPTIONS);
 
   let serialized: string | null = null;
   app.get(
@@ -53,5 +53,5 @@ export function registerOpenApiRoute(app: FastifyInstance, catalog: CatalogRoute
  * same build are byte-identical, and a diff between them means a real change.
  */
 export function serializeOpenApiDocument(catalog: readonly CatalogRoute[]): string {
-  return `${JSON.stringify(buildOpenApiDocument(catalog, ADMIN_ROUTE_DESCRIPTIONS), null, 2)}\n`;
+  return `${JSON.stringify(buildOpenApiDocument(catalog, ROUTE_DESCRIPTIONS), null, 2)}\n`;
 }

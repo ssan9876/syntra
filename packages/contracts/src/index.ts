@@ -14,6 +14,7 @@ export * from './webhook.js';
 export * from './protocol.js';
 export * from './protocol-admin.js';
 export * from './provision.js';
+export * from './credential-pickup.js';
 export * from './automate.js';
 export * from './govern.js';
 export * from './exports.js';

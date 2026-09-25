@@ -195,6 +195,7 @@ describe('AccountProfilePage', () => {
       'initialPasswordDelivery',
       'initialPasswordPolicy',
       'maxUniquenessAttempts',
+      'requirePasswordChangeAtFirstSignIn',
       'uniquenessStrategy',
     ]);
   });
@@ -460,5 +461,47 @@ describe('AccountProfilePage', () => {
       }),
     );
     expect(attempts).toHaveFocus();
+  });
+});
+
+describe('AccountProfilePage — password change at first sign-in', () => {
+  const withCapability = (support: string | undefined) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const path = String(input);
+      if (init?.method === 'PUT') return Promise.resolve(json(null, 204));
+      if (path.endsWith('/capabilities')) {
+        return Promise.resolve(json(support === undefined ? {} : { firstSignInPasswordChange: support }));
+      }
+      if (path.endsWith('/profile')) return Promise.resolve(json(STORED));
+      return Promise.resolve(json({ persons: [], total: 0 }));
+    });
+
+  it('offers the setting where the target honours it, and saves it when unticked', async () => {
+    const fetchMock = withCapability('configurable');
+    renderPage();
+
+    const box = await screen.findByRole('checkbox', { name: 'Require a new password at first sign-in' });
+    // Default on: the stored row predates the column.
+    expect(box).toBeChecked();
+    await userEvent.click(box);
+    await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect(JSON.parse(String(put![1]!.body)).requirePasswordChangeAtFirstSignIn).toBe(false);
+  });
+
+  it('shows it fixed on where the target always demands it', async () => {
+    withCapability('always');
+    renderPage();
+    const box = await screen.findByRole('checkbox', { name: /always, on this target/ });
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+  });
+
+  it('does not offer it where the target cannot do it', async () => {
+    withCapability('unsupported');
+    renderPage();
+    await screen.findByDisplayValue('OU=Unplaced,DC=acme,DC=test');
+    expect(screen.queryByRole('checkbox', { name: /new password at first sign-in/ })).toBeNull();
   });
 });

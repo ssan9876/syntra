@@ -48,6 +48,25 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nOpen this link to choose a new password. It works once and expires in 30 minutes.\n\n{{resetUrl}}\n\nIf you did not ask for this, nothing has changed and you can ignore this message.',
     html: '<p>Hello {{displayName}},</p><p>Open this link to choose a new password. It works once and expires in 30 minutes.</p><p><a href="{{resetUrl}}">{{resetUrl}}</a></p><p>If you did not ask for this, nothing has changed and you can ignore this message.</p>',
   },
+  /**
+   * A created account's sign-in details, as a LINK to the password.
+   *
+   * Never the password itself. A mailbox keeps what it is sent for years,
+   * forwards it, indexes it and syncs it to phones; a link that works once and
+   * expires in three days is a credential that stops being one. The page
+   * behind it shows nothing until somebody presses a button, because mail
+   * scanners (Safe Links and its peers) open every link in every message, and
+   * a GET that revealed the password would have been spent by the scanner.
+   *
+   * `intro` says who the account is for -- "you", or the person a manager is
+   * being asked to pass it to -- and `changeNote` only promises a forced
+   * change at first sign-in when the target will actually ask for one.
+   */
+  'account-credential-link': {
+    subject: '{{tenantName}}: sign-in details for a new {{systemName}} account',
+    text: '{{intro}}\n\nSystem: {{systemName}}\nUsername: {{username}}\n\nThe password is not in this message. Open this link and press "Show password" to see it:\n\n{{pickupUrl}}\n\nThe link shows the password once and stops working on {{expiresAt}}. {{changeNote}}\n\nIf you were not expecting this, do not open the link, and tell your administrator.',
+    html: '<p>{{intro}}</p><p>System: <strong>{{systemName}}</strong><br>Username: <code>{{username}}</code></p><p>The password is not in this message. Open this link and press <strong>Show password</strong> to see it:</p><p><a href="{{pickupUrl}}">{{pickupUrl}}</a></p><p>The link shows the password once and stops working on {{expiresAt}}. {{changeNote}}</p><p>If you were not expecting this, do not open the link, and tell your administrator.</p>',
+  },
   'password-reset-upstream': {
     subject: 'Reset your {{tenantName}} password',
     text: 'Hello {{displayName}},\n\nYour password is not held by {{tenantName}}. It is managed by {{provider}}, and that is where you reset it.\n\nIf you are not sure what that means, contact your IT administrator.',

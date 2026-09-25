@@ -14,7 +14,7 @@ These have no default. The API refuses to start without them.
 | `PUBLIC_URL` | The origin users type. The session cookie and the WebAuthn relying party are derived from it, so it has to be the address the browser actually sees, not an internal one. |
 | `SESSION_SECRET` | At least 32 characters, and not the `.env.example` placeholder — the API refuses to start on the literal placeholder value so a copied `.env` nobody edited can't run with a secret that's in the repository. |
 | `MASTER_KEY` | 32 random bytes, base64-encoded. Encrypts every stored credential and signs SAML. Losing it means re-entering every secret; back it up. Generate both this and `SESSION_SECRET` with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`, run twice. Required with the default `MASTER_KEY_PROVIDER=local`; optional when Vault Transit or AWS KMS holds the master key -- see [Key management](#key-management). |
-| `SMTP_URL` | Where outgoing mail (password resets, MFA-added notifications) is sent. |
+| `SMTP_URL` | Where outgoing mail (password resets, MFA-added notifications, new accounts' sign-in links) is sent. Required with the default `MAIL_TRANSPORT=smtp`; not needed when mail goes through Microsoft 365 -- see [Outgoing mail](#outgoing-mail). |
 
 The container path (`docker-compose.yml`) additionally requires:
 
@@ -53,6 +53,70 @@ supported, working configuration.
 | `GOVERN_CHECKPOINT_KEY_ID` | `govern-checkpoint-1` | The id the checkpoint key above is known by. |
 | `GOVERN_ANCHOR_DIR` | unset | A directory on a write-once volume where the weekly Govern anchor receipt is written. Neither this nor `GOVERN_ANCHOR_EMAIL` configured means the anchor job reports `not_configured` and the integrity screen states, in words, that nothing protects against the operator. |
 | `GOVERN_ANCHOR_EMAIL` | unset | An address the weekly anchor receipt is mailed to, instead of or alongside `GOVERN_ANCHOR_DIR`. |
+
+### Outgoing mail
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MAIL_TRANSPORT` | `smtp` | `smtp` sends through `SMTP_URL`. `graph` sends through Microsoft 365 with Microsoft Graph's `sendMail`, and then `SMTP_URL` is not needed. |
+| `MAIL_FROM` | `Syntra <no-reply@syntra.local>` (SMTP); the sender mailbox (Graph) | The From header, as `Name <address>` or a bare address. With Graph, an address other than `MAIL_GRAPH_SENDER` needs Send As rights on it, or Graph refuses the message. |
+| `MAIL_GRAPH_TENANT_ID` | — | Graph only, required. The directory (tenant) id, or a verified domain such as `contoso.onmicrosoft.com`. |
+| `MAIL_GRAPH_CLIENT_ID` | — | Graph only, required. The application (client) id of the app registration. |
+| `MAIL_GRAPH_CLIENT_SECRET` | — | Graph only, required. The app registration's client secret. Keep it with the other secrets, not in a values file or a ConfigMap; it is never logged or audited. |
+| `MAIL_GRAPH_SENDER` | — | Graph only, required. The mailbox mail is sent as: its UPN or primary SMTP address. |
+
+With `MAIL_TRANSPORT=graph` the API refuses to start unless all four `MAIL_GRAPH_*`
+variables are set, and names every missing one. The status page's mail check
+fetches a token and sends nothing.
+
+#### Sending through Microsoft 365
+
+Syntra sends as **one mailbox** and nothing else. Do not add the Graph
+`Mail.Send` application permission to the app registration, and do not grant
+admin consent for it: that grant lets the application send as *every* mailbox
+in the tenant, and Exchange Online's RBAC for Applications only adds to a
+tenant-wide grant, it cannot narrow one. The access comes from Exchange
+instead:
+
+1. **Register an application** in Microsoft Entra ID with a client secret and
+   **no Graph API permissions**. Note its application (client) id, and the
+   **object id of its Enterprise application** (the service principal: Entra
+   ID → Enterprise applications → the app → Object ID). That is not the object
+   id shown on the app registration.
+2. **Create a shared mailbox** for the sender, for example
+   `syntra@contoso.com`. It needs no licence.
+3. **Let the application send as that mailbox only**, in Exchange Online
+   PowerShell (`Connect-ExchangeOnline`):
+
+   ```powershell
+   New-ServicePrincipal -AppId <clientId> -ObjectId <enterprise app object id> -DisplayName "Syntra Mail"
+   New-ManagementScope -Name "Syntra sender" -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'syntra@contoso.com'"
+   New-ManagementRoleAssignment -App <clientId> -Role "Application Mail.Send" -CustomResourceScope "Syntra sender"
+   ```
+
+4. **Check it**:
+
+   ```powershell
+   Test-ServicePrincipalAuthorization -Identity <clientId> -Resource syntra@contoso.com
+   ```
+
+   `InScope` should be `True` for `Application Mail.Send`. Test another mailbox
+   too; it should be `False`.
+
+Then set `MAIL_TRANSPORT=graph`, `MAIL_GRAPH_TENANT_ID`, `MAIL_GRAPH_CLIENT_ID`,
+`MAIL_GRAPH_CLIENT_SECRET` and `MAIL_GRAPH_SENDER=syntra@contoso.com`, and allow
+outbound HTTPS to `login.microsoftonline.com` and `graph.microsoft.com`.
+
+**A 403 from `sendMail`** (`ErrorAccessDenied`) almost always means the
+management scope does not cover `MAIL_GRAPH_SENDER`: a typo in the filter, a
+different primary SMTP address, or a scope created for a different mailbox.
+RBAC for Applications changes **can take up to about two hours** to take
+effect, so a correct setup can still answer 403 for a while after step 3.
+A token error (`invalid_client`, `AADSTS7000215`) is the client secret: wrong,
+expired, or copied as its id rather than its value.
+
+Messages are sent with `saveToSentItems: false`. Some of them carry a one-time
+link, and a Sent Items folder is one more place that would keep it.
 
 ### TRUST_PROXY and proxy notes
 
@@ -1104,6 +1168,33 @@ unsigned — it is served over TLS from the tenant's own host, which
 no per-launch consent screen. `sweepExpiredArtifacts` exists and expiry is
 enforced on read, but nothing runs it on a schedule; the table grows until
 somebody does.
+
+## New accounts' sign-in details
+
+When Provision creates an account, its initial password is sealed into the
+vault. If the account profile's **Delivery** is the person's personal email or
+their manager, that address is sent a **one-time link**, never the password:
+
+- The link (`<PUBLIC_URL>/credential/<token>`) works for 72 hours. Opening it
+  shows the system and the username and nothing else, so a mail scanner such
+  as Safe Links that opens every link cannot spend it. The password appears
+  only when somebody presses **Show password**, and only once.
+- Only a hash of the link is stored, and not the address it was sent to.
+- **Vault only** sends nothing, as before.
+- The message says the person will be asked to choose a new password at first
+  sign-in only when that is true: Entra ID always asks, Active Directory asks
+  when the profile's **Require a new password at first sign-in** is on (the
+  default; it sets `pwdLastSet = 0`), and other targets are told nothing.
+
+**Send login info**, on a person's access page beside each account, sends a
+new link to the profile's recipient, the personal email, the manager or you,
+and withdraws every link nobody has opened. It needs `provision.manage` and a
+console session elevated in the last ten minutes, is refused to API tokens,
+and answers 409 when Syntra holds no initial password for the account. Every
+link sent, opened or refused is in the audit log
+(`provision.credential.sealed` on create, `provision.credential.link_sent` on
+a resend, `provision.credential.picked_up` for each reveal), never with the
+password, the link or the address.
 
 ## Credentials and security notifications
 

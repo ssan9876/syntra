@@ -33,7 +33,7 @@ import {
   scheduleLifecycleMaintenance,
   scheduleWriteStopExpiry,
   schedulePrivilegedAccessSweep,
-  smtpTransport,
+  mailTransport,
   type Config,
   type Scheduler,
   type Transport,
@@ -456,7 +456,7 @@ export async function startSyncScheduler(
     // no transport seals every initial password into the vault and sends it to
     // nobody, which is Ruling P12 reintroduced on the one path where nobody is
     // watching.
-    const transport = options.transport ?? smtpTransport(config.smtpUrl);
+    const transport = options.transport ?? mailTransport(config);
     registerSyncJobs(scheduler, provider);
     registerPersonImportJobs(scheduler, provider);
     // The master key provider is NOT optional: the sender unseals each
@@ -476,7 +476,9 @@ export async function startSyncScheduler(
       publicUrl: config.publicUrl,
     });
     registerKeyRotationJob(scheduler, provider);
-    registerProvisionJobs(scheduler, provider, transport);
+    // `publicUrl` beside the transport: an autoApply create mails a one-time
+    // pickup LINK, and a link needs somewhere to point.
+    registerProvisionJobs(scheduler, provider, transport, { publicUrl: config.publicUrl });
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     registerWriteStopJobs(scheduler);
     // The transport is NOT optional: a break-glass activation that takes

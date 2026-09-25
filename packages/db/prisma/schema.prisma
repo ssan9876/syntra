@@ -219,6 +219,7 @@ model Tenant {
   ruleEntitlements          RuleEntitlement[]
   entitlements              Entitlement[]
   targetAccounts            TargetAccount[]
+  credentialPickups         CredentialPickup[]
   accountEntitlements       AccountEntitlement[]
   provisionRuns             ProvisionRun[]
   personProvisionReceipts   PersonProvisionReceipt[]
@@ -2199,6 +2200,11 @@ model AccountProfile {
   initialPasswordPolicy   Json
   /// 'manager' | 'personalEmail' | 'vaultOnly'
   initialPasswordDelivery String @default("vaultOnly")
+  /// Whether a created account must change its initial password at first
+  /// sign-in. Honoured by a connector that can set it (Active Directory:
+  /// `pwdLastSet = 0`); Entra ID always requires it; ignored elsewhere. The
+  /// pickup email only promises a forced change when this is actually true.
+  requirePasswordChangeAtFirstSignIn Boolean @default(true)
   /// Required whenever attributeTemplates send a sensitive person field.
   sensitiveApprovalReason String?
   sensitiveApprovedByUserId String? @db.Uuid
@@ -2335,11 +2341,46 @@ model TargetAccount {
   updatedAt DateTime @updatedAt
 
   entitlements AccountEntitlement[]
+  credentialPickups CredentialPickup[]
 
   @@unique([tenantId, targetSystemId, personId])
   @@unique([tenantId, targetSystemId, correlationKey])
   @@index([tenantId])
   @@index([targetSystemId, status])
+}
+
+/// A one-time link to a created account's initial password.
+///
+/// The password stays in the vault under `secretName`; this row is the right
+/// to read it ONCE, held by whoever has the link. Only the SHA-256 of the
+/// token is stored, like `PasswordResetToken`, so a database read yields no
+/// usable link. `viewedAt` is set by a conditional update that only one
+/// concurrent reveal can win.
+///
+/// Deliberately holds no recipient address. Where the link was sent is a
+/// fact about the person or their manager that the Person and Contract rows
+/// already hold; copying it here would be a second store of contact data with
+/// its own retention to get wrong. `recipientKind` says which of them it was.
+model CredentialPickup {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @db.Uuid
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetAccountId String        @db.Uuid
+  targetAccount   TargetAccount @relation(fields: [targetAccountId], references: [id], onDelete: Cascade)
+  /// The vault name of the sealed initial password. A name, never the secret.
+  secretName      String
+  tokenHash       String        @unique
+  /// 'personalEmail' | 'manager' | 'admin'
+  recipientKind   String
+  expiresAt       DateTime
+  viewedAt        DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime      @default(now())
+  /// Null when Provision minted it on create; the administrator on a resend.
+  createdByUserId String?       @db.Uuid
+
+  @@index([tenantId])
+  @@index([targetAccountId, createdAt])
 }
 
 /// `origin` separates convergence from drift and is not derivable after the

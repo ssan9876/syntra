@@ -5,7 +5,7 @@ import { loadConfig, memoryTransport } from '@syntra/core';
 import { buildApp } from '../app.js';
 import { TOKEN_DENIED_ROUTES } from '../plugins/bearer-token.js';
 import { pageQuery } from '../routes/admin/list-query.js';
-import { ADMIN_ROUTE_DESCRIPTIONS } from './descriptions.js';
+import { ADMIN_ROUTE_DESCRIPTIONS, PUBLIC_ROUTE_DESCRIPTIONS, ROUTE_DESCRIPTIONS } from './descriptions.js';
 import { deprecationHeaders, honoursNoticePeriod, registerDeprecationHeaders } from './deprecation.js';
 import { operationId, toOpenApiPath } from './document.js';
 import { toJsonSchema } from './json-schema.js';
@@ -77,12 +77,12 @@ describe('route coverage', () => {
 
   it('describes no route that does not exist', () => {
     const registered = new Set(app.routeCatalog.map(key));
-    const stale = ADMIN_ROUTE_DESCRIPTIONS.map(key).filter((route) => !registered.has(route));
+    const stale = ROUTE_DESCRIPTIONS.map(key).filter((route) => !registered.has(route));
     expect(stale).toEqual([]);
   });
 
   it('describes each route once', () => {
-    const keys = ADMIN_ROUTE_DESCRIPTIONS.map(key);
+    const keys = ROUTE_DESCRIPTIONS.map(key);
     expect(keys.filter((route, index) => keys.indexOf(route) !== index)).toEqual([]);
   });
 
@@ -115,7 +115,7 @@ describe('route coverage', () => {
   });
 
   it('gives every description a one-line summary', () => {
-    for (const route of ADMIN_ROUTE_DESCRIPTIONS) {
+    for (const route of ROUTE_DESCRIPTIONS) {
       expect(route.summary.trim(), key(route)).not.toBe('');
       expect(route.summary, key(route)).not.toMatch(/TODO|\n|\.$/);
       expect(route.summary.length, key(route)).toBeLessThanOrEqual(90);
@@ -169,6 +169,8 @@ describe('the document', () => {
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {
         if (unguarded.has(`${method} ${path}`)) continue;
+        // Unauthenticated by design, and published as such -- see below.
+        if (operation['x-syntra-public'] === true) continue;
         const permissions = operation['x-syntra-permission'] as string[];
         expect(permissions.length, `${method} ${path}`).toBeGreaterThan(0);
         for (const permission of permissions) expect(permission).toMatch(/^[a-z]+(\.[a-z_]+)+$/);
@@ -193,6 +195,31 @@ describe('the document', () => {
     expect(
       document.paths['/api/admin/users/{id}/tokens']!.post!['x-syntra-token-allowed'],
     ).toBe(false);
+    // So is sending somebody's one-time password link.
+    expect(
+      document.paths['/api/admin/targets/{id}/accounts/{personId}/send-login-info']!.post![
+        'x-syntra-token-allowed'
+      ],
+    ).toBe(false);
+  });
+
+  it('publishes the unauthenticated routes with no security requirement, and only those', () => {
+    const publicKeys = new Set(
+      PUBLIC_ROUTE_DESCRIPTIONS.map((route) => `${route.method.toLowerCase()} ${toOpenApiPath(route.url)}`),
+    );
+    expect(publicKeys.size).toBeGreaterThan(0);
+    for (const [path, methods] of Object.entries(document.paths)) {
+      for (const [method, operation] of Object.entries(methods)) {
+        const isPublic = publicKeys.has(`${method} ${path}`);
+        expect(operation['x-syntra-public'] === true, `${method} ${path}`).toBe(isPublic);
+        if (isPublic) {
+          // A client generator must not attach a credential to these, and they
+          // never answer 401 or 403.
+          expect(operation.security, `${method} ${path}`).toEqual([]);
+          expect(operation.responses, `${method} ${path}`).not.toHaveProperty('401');
+        }
+      }
+    }
   });
 
   it('has unique operation ids', () => {
@@ -251,7 +278,7 @@ describe('the document', () => {
 
 describe('deprecation', () => {
   it('gives every deprecated operation at least the six months of notice the README promises', () => {
-    for (const route of ADMIN_ROUTE_DESCRIPTIONS) {
+    for (const route of ROUTE_DESCRIPTIONS) {
       if (route.deprecated) expect(honoursNoticePeriod(route.deprecated), key(route)).toBe(true);
     }
     expect(honoursNoticePeriod({ since: '2026-01-31', sunset: '2026-07-31' })).toBe(true);

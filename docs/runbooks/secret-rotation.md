@@ -41,6 +41,7 @@ supported, the page says so.
 | Master key (`MASTER_KEY`, or the Vault Transit / AWS KMS key) | environment, or the KMS | configure old key decrypt-only, `pnpm rekey --yes`, remove old key | None if followed in order: both keys read during the window. See Procedure B |
 | `METRICS_TOKEN` | environment | new value, restart, update scraper | Scrapes 401 until the scraper is updated |
 | `SMTP_URL` credential | environment | new value, restart | Mail queued in the outbox retries under the new credential |
+| `MAIL_GRAPH_CLIENT_SECRET` (Microsoft 365 mail) | environment | add a second secret in Entra, new value, restart, delete the old secret | None if the old secret is deleted only after the restart. See Procedure D |
 | `GOVERN_CHECKPOINT_KEY` / `_ID` | environment | new value and new id, restart | See caveat below |
 | `RELEASE_TOKEN` | environment (`shared/.env`) | revoke in GitHub, new token, no restart needed for the next update | Updates fail with an auth error until replaced |
 | Postgres passwords (`POSTGRES_PASSWORD`, `SYNTRA_APP_PASSWORD`) | environment + database role | `ALTER ROLE`, then environment, restart | Readiness `database` probe fails until both agree |
@@ -205,6 +206,27 @@ Removing the variable altogether unregisters the route; the path then answers
 3. Watch `GET /api/admin/incidents`: a `notification_undelivered` entry means
    the outbox has given up on messages after five attempts. There is no
    console button to send a test mail; the outbox is the test.
+
+### With `MAIL_TRANSPORT=graph`: `MAIL_GRAPH_CLIENT_SECRET`
+
+An app registration may hold two client secrets at once, which is what makes
+this overlap-free.
+
+1. In Microsoft Entra ID, the app registration → **Certificates & secrets** →
+   **New client secret**. Copy its **value** (not its id). Leave the old
+   secret in place.
+2. Replace `MAIL_GRAPH_CLIENT_SECRET` in the environment (or the Kubernetes
+   Secret key `secretKeys.mailGraphClientSecret` names) and restart the API.
+   The cached Graph token belongs to the process, so a restart is what makes
+   the new secret the one in use.
+3. Verify: the status page's mail check (it acquires a token and sends
+   nothing) is healthy, then cause one mail as above. An `invalid_client` /
+   `AADSTS7000215` failure in the log or in `notify.delivery_failed` audit
+   events means the value was copied wrong.
+4. Delete the old secret from the app registration.
+
+Nothing else changes: the Exchange Online management scope and role
+assignment are bound to the application id, not to the secret.
 
 ## Procedure E: a provisioning target credential, including an Entra client secret
 

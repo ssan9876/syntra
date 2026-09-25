@@ -395,6 +395,8 @@ export const accountProfileRequestSchema = z
     attributeTemplates: z.record(z.string(), z.string()),
     initialPasswordPolicy: z.record(z.string(), z.unknown()),
     initialPasswordDelivery: z.enum(['manager', 'personalEmail', 'vaultOnly']),
+    // Optional on the wire; the profile write boundary defaults it to true.
+    requirePasswordChangeAtFirstSignIn: z.boolean().optional(),
     sensitiveApprovalReason: z.string().trim().min(20).max(1000).optional(),
   })
   .strict();

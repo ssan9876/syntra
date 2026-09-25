@@ -55,6 +55,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `CampaignItemReviewer` | person: `personId` | retain | Access-review evidence. |
 | `Contract` | person: `personId` | pseudonymize | Employment details are cleared. Dates, sequence and the HR employment id are kept: lifecycle decisions (departure, grace periods) are computed from the dates, and the id stops a feed from re-creating the contract. |
 | `CoverageGap` | person: `personId` | retain | Snapshot evidence; removed with the snapshot. |
+| `CredentialPickup` | account: `targetAccountId` | delete | Credential material: the right to read an account's initial password once. No recipient address is stored -- only which kind of recipient (the person's personal email, their manager, or an administrator) the one-time link was sent to. |
 | `DataExport` | user: `requestedByUserId` | retain | The record of who took which copy. An access bundle about the person that still holds a file has the file erased (see the erasure procedure). |
 | `DelegatedTaskRun` | user: `subjectUserId`, `runByUserId` | pseudonymize | The submitted form values are cleared. |
 | `DriftFinding` | account: `accountId` | pseudonymize | The detail (target attribute values) is cleared. |
@@ -730,6 +731,25 @@ Linked to a data subject by person: `personId`. Erasure: **retain** -- The conta
 | `movedByUserId` | identity | retained |  |
 | `createdAt` | operational | retained |  |
 | `updatedAt` | operational | retained |  |
+
+Not personal data: `tenantId`.
+
+#### `CredentialPickup`
+
+Linked to a data subject by account: `targetAccountId`. Erasure: **delete** -- Credential material: the right to read an account's initial password once. No recipient address is stored -- only which kind of recipient (the person's personal email, their manager, or an administrator) the one-time link was sent to.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `id` | identity | row deleted |  |
+| `targetAccountId` | identity | row deleted |  |
+| `secretName` | authentication | row deleted |  |
+| `tokenHash` | authentication | row deleted | secret |
+| `recipientKind` | operational | row deleted |  |
+| `expiresAt` | authentication | row deleted |  |
+| `viewedAt` | authentication | row deleted |  |
+| `revokedAt` | authentication | row deleted |  |
+| `createdAt` | operational | row deleted |  |
+| `createdByUserId` | identity | row deleted |  |
 
 Not personal data: `tenantId`.
 
@@ -2129,7 +2149,7 @@ Not personal data: `tenantId`.
 | --- | --- | --- | --- |
 | `sensitiveApprovedByUserId` | identity |  |  |
 
-Not personal data: `id`, `tenantId`, `targetSystemId`, `correlationKeyTemplate`, `uniquenessStrategy`, `maxUniquenessAttempts`, `containerTemplate`, `fallbackContainer`, `attributeTemplates`, `initialPasswordPolicy`, `initialPasswordDelivery`, `sensitiveApprovalReason`, `sensitiveApprovedAt`, `createdAt`, `updatedAt`.
+Not personal data: `id`, `tenantId`, `targetSystemId`, `correlationKeyTemplate`, `uniquenessStrategy`, `maxUniquenessAttempts`, `containerTemplate`, `fallbackContainer`, `attributeTemplates`, `initialPasswordPolicy`, `initialPasswordDelivery`, `requirePasswordChangeAtFirstSignIn`, `sensitiveApprovalReason`, `sensitiveApprovedAt`, `createdAt`, `updatedAt`.
 
 #### `Application`
 

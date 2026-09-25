@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Alert,
   Button,
+  Check,
   ErrorSummary,
   Field,
   FormActions,
@@ -48,7 +49,7 @@ type Delivery = 'manager' | 'personalEmail' | 'vaultOnly';
  * the administrator never typed a null into. The conversion belongs at the one
  * boundary where it can be refused with a message, which is `bodyOf` below.
  *
- * What leaves this page is exactly the eight fields
+ * What leaves this page is exactly the nine fields
  * `accountProfileRequestSchema` accepts, and nothing else: the schema is
  * `.strict()`, and `GET /profile` returns the stored row — `id`, `tenantId`,
  * `targetSystemId`, `createdAt`, `updatedAt` and all — so echoing back what was
@@ -62,6 +63,7 @@ interface Draft {
   attributeTemplates: Record<string, string>;
   passwordLength: string;
   initialPasswordDelivery: Delivery;
+  requirePasswordChangeAtFirstSignIn: boolean;
   sensitiveApprovalReason: string;
   sensitiveApprovedByUserId: string;
   sensitiveApprovedAt: string;
@@ -75,6 +77,7 @@ const EMPTY: Draft = {
   attributeTemplates: { displayName: '%person.givenName% %person.familyName%' },
   passwordLength: '24',
   initialPasswordDelivery: 'vaultOnly',
+  requirePasswordChangeAtFirstSignIn: true,
   sensitiveApprovalReason: '',
   sensitiveApprovedByUserId: '',
   sensitiveApprovedAt: '',
@@ -125,6 +128,9 @@ function draftFrom(stored: Record<string, unknown>): Draft {
     passwordLength: typeof policy.length === 'number' ? String(policy.length) : '',
     initialPasswordDelivery: (stored.initialPasswordDelivery ??
       'vaultOnly') as Delivery,
+    // Only an explicit false turns it off: an older API that does not send
+    // the field is describing a profile whose default is on.
+    requirePasswordChangeAtFirstSignIn: stored.requirePasswordChangeAtFirstSignIn !== false,
     sensitiveApprovalReason: String(stored.sensitiveApprovalReason ?? ''),
     sensitiveApprovedByUserId: String(stored.sensitiveApprovedByUserId ?? ''),
     sensitiveApprovedAt: String(stored.sensitiveApprovedAt ?? ''),
@@ -204,6 +210,9 @@ function bodyOf(
         ...(lengthRaw === '' ? {} : { length }),
       },
       initialPasswordDelivery: draft.initialPasswordDelivery,
+      // Always sent, even where this target ignores it, so a save never
+      // resets a stored `false` to the server's default.
+      requirePasswordChangeAtFirstSignIn: draft.requirePasswordChangeAtFirstSignIn,
       ...(sensitiveAttributeMappings(draft.attributeTemplates).length === 0
         ? {}
         : { sensitiveApprovalReason: draft.sensitiveApprovalReason }),
@@ -283,6 +292,17 @@ function AccountProfileEditor() {
   const { data: persons } = useApiResource<{ persons: PersonRow[]; total: number }>(
     '/api/admin/persons?pageSize=200',
   );
+  // Whether "require a new password at first sign-in" means anything on this
+  // target. Anything but the two known answers hides the control: offering a
+  // setting the connector ignores is a promise the target will not keep.
+  const { data: capabilities } = useApiResource<{ firstSignInPasswordChange?: unknown }>(
+    `/api/admin/targets/${id}/capabilities`,
+  );
+  const passwordChange =
+    capabilities?.firstSignInPasswordChange === 'configurable' ||
+    capabilities?.firstSignInPasswordChange === 'always'
+      ? capabilities.firstSignInPasswordChange
+      : null;
 
   useEffect(() => {
     let active = true;
@@ -676,6 +696,23 @@ function AccountProfileEditor() {
                 { value: 'personalEmail', label: "The person's personal email" },
               ]}
             />
+            {passwordChange !== null && (
+              <Check
+                name="requirePasswordChangeAtFirstSignIn"
+                label={
+                  passwordChange === 'always'
+                    ? 'Require a new password at first sign-in (always, on this target)'
+                    : 'Require a new password at first sign-in'
+                }
+                // Shown ticked and fixed where the connector always demands
+                // it: the truth, rather than a box whose unticking changes
+                // nothing.
+                checked={passwordChange === 'always' || profile.requirePasswordChangeAtFirstSignIn}
+                disabled={passwordChange === 'always'}
+                onChange={(v) => set('requirePasswordChangeAtFirstSignIn', v)}
+                className="sm:col-span-2"
+              />
+            )}
           </FormSection>
 
           {/* In the form, directly above Save, because it is a preview OF this

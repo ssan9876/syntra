@@ -85,6 +85,10 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
   ['person/:personId', 'person'],
   ['placements/:personId', 'person'],
   ['accounts/:personId', 'person'],
+  ['credential-pickup/:token', {
+    static: 'A'.repeat(43),
+    why: 'A one-time link token, not a row id: only its hash is stored, it is looked up inside the tenant the hostname names, and one from another tenant matches nothing.',
+  }],
   ['contracts/:sequence', {
     static: '1',
     why: 'A contract is addressed by its position inside the person the route\'s :id names; that :id is the tenant boundary.',

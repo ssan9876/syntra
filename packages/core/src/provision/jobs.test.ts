@@ -1018,6 +1018,7 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
     registerProvisionJobs(scheduler as never, provider, transport, {
       preview: previewed as never,
       apply: apply as never,
+      publicUrl: 'https://idm.acme.test',
     });
     const handler = scheduler.register.mock.calls.find(([name]) => name === PROVISION_JOB)![1] as (
       payload: unknown,
@@ -1025,7 +1026,9 @@ describe('registerProvisionJobs — what the registration passes, and what arriv
     await handler({ tenantId, targetSystemId: targetId });
 
     expect(apply).toHaveBeenCalledTimes(1);
-    expect(apply.mock.calls[0]![3]).toMatchObject({ transport });
+    // And the public URL beside it: the message is a one-time LINK now, and a
+    // transport with nowhere to point the link at sends nothing.
+    expect(apply.mock.calls[0]![3]).toMatchObject({ transport, publicUrl: 'https://idm.acme.test' });
   });
 
   it('never confirms anything, however the run was blocked', async () => {

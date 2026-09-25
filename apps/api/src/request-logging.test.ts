@@ -27,4 +27,22 @@ describe('request logging', () => {
       await app.close();
     }
   });
+
+  it('never logs a credential pickup token, which rides in the path', async () => {
+    const lines: string[] = [];
+    const app = Fastify({ logger: {
+      serializers: { req: serializeRequest },
+      stream: { write: (line: string) => { lines.push(line); } },
+    } });
+    app.post('/api/credential-pickup/:token/reveal', async () => ({ ok: true }));
+    try {
+      await app.inject({ method: 'POST', url: '/api/credential-pickup/secret-pickup-token/reveal' });
+      const logs = lines.join('');
+      expect(logs).not.toContain('secret-pickup-token');
+      expect(lines.map((line) => JSON.parse(line)).find((line) => line.req)?.req.url)
+        .toBe('/api/credential-pickup/[redacted]/reveal');
+    } finally {
+      await app.close();
+    }
+  });
 });

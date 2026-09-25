@@ -6,6 +6,7 @@ import {
   escapeDnValue,
   escapeFilterValue,
   guidBytes,
+  initialPasswordChanges,
   isAlreadyInRequestedState,
   primaryGroupVerdict,
   splitDn,
@@ -109,6 +110,32 @@ describe('encodeUnicodePwd', () => {
     // would set a password different from the one the caller sealed and
     // delivered.
     expect(encodeUnicodePwd('a"b').toString('utf16le')).toBe('"a"b"');
+  });
+});
+
+describe('initialPasswordChanges', () => {
+  const shape = (changes: ReturnType<typeof initialPasswordChanges>) =>
+    changes.map((c) => ({
+      operation: c.operation,
+      type: c.modification.type,
+      values: c.modification.values.map((v) => (Buffer.isBuffer(v) ? '<buffer>' : String(v))),
+    }));
+
+  it('sets pwdLastSet to zero AFTER the password, in the same modify, when asked', () => {
+    // After, because setting unicodePwd stamps pwdLastSet with the current
+    // time; a zero written first would be overwritten by the change beside it.
+    expect(shape(initialPasswordChanges({ initialPassword: 'Aa1!x', requirePasswordChange: true }))).toEqual([
+      { operation: 'replace', type: 'unicodePwd', values: ['<buffer>'] },
+      { operation: 'replace', type: 'pwdLastSet', values: ['0'] },
+    ]);
+  });
+
+  it('writes the password alone when not asked, or when the caller said nothing', () => {
+    for (const requirePasswordChange of [false, undefined]) {
+      expect(
+        shape(initialPasswordChanges({ initialPassword: 'Aa1!x', requirePasswordChange })).map((c) => c.type),
+      ).toEqual(['unicodePwd']);
+    }
   });
 });
 
