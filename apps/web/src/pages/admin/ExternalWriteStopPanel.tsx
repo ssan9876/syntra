@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Panel, Status } from '@syntra/ui';
+import { Alert, Button, Field, Panel, StateBadge } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 
 function problem(error: unknown) {
@@ -58,19 +58,33 @@ export function ExternalWriteStopPanel({
     } catch (error) { setNotice(problem(error)); }
     finally { setBusy(false); }
   };
-  return <Panel title={title} actions={<Status tone={active ? 'danger' : 'active'}>{active ? 'paused' : 'allowed'}</Status>}>
+  return <Panel title={title} actions={active ? <StateBadge state="blocked">Paused</StateBadge> : <StateBadge state="healthy">Allowed</StateBadge>}>
     <div className="space-y-4 p-4">
       {active ? <Alert tone="danger" title={stoppedTitle}>
         {state.pauseReason ?? 'Emergency stop'} · paused {new Date(state.pausedAt!).toLocaleString()}
         {state.pauseExpiresAt ? ` · expires ${new Date(state.pauseExpiresAt).toLocaleString()}` : ' · no automatic expiry'}
       </Alert> : null}
       <div aria-live="polite">{notice ? <Alert tone="warning">{notice}</Alert> : null}</div>
-      <Field label={active ? 'Reason for resuming' : 'Reason for stopping writes'} value={reason} onChange={setReason} />
-      {!active ? <Field label="Automatic expiry (optional, maximum 30 days)" type="datetime-local" value={expiresAt} onChange={setExpiresAt} /> : null}
       {active
-        ? <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>Request reviewed resume</Button>
-        : <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>Stop external writes</Button>}
-      {active ? <p className="text-sm text-muted">A different administrator must approve the resume. Reads, previews, and evidence remain available.</p> : null}
+        ? <div className="max-w-xl space-y-3">
+          <Field name="reason" label="Reason for resuming" value={reason} onChange={setReason} />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>Request reviewed resume</Button>
+            <p className="text-sm text-muted">A different administrator must approve the resume. Reads, previews, and evidence remain available.</p>
+          </div>
+        </div>
+        // One press, deliberately, where every other destructive control in
+        // the console takes two: this is the incident button, and the
+        // mandatory reason is the second decision. What it gets instead is a
+        // boundary of its own in the danger colour, so it never reads as one
+        // more field in a settings panel.
+        : <div role="group" aria-label="Stop external writes" className="max-w-xl space-y-3 rounded-panel border border-danger/40 p-3">
+          <Field name="reason" label="Reason for stopping writes" value={reason} onChange={setReason} />
+          <Field name="expiresAt" label="Automatic expiry (optional, maximum 30 days)" type="datetime-local" value={expiresAt} onChange={setExpiresAt} />
+          <div className="border-t border-border-subtle pt-3">
+            <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>Stop external writes</Button>
+          </div>
+        </div>}
     </div>
   </Panel>;
 }

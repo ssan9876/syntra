@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Field, Panel, Select, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { ApiError, api } from '../../session/api.js';
 
@@ -59,6 +59,7 @@ export function WorkflowsTab() {
   const [newName, setNewName] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const report = (cause: unknown, fallback: string) =>
     setProblem(
@@ -97,6 +98,7 @@ export function WorkflowsTab() {
         body: JSON.stringify({ name: newName, description: null, enabled: true, stages: [] }),
       });
       setNewName('');
+      toast({ title: `Workflow “${newName.trim()}” created` });
       reload();
     } catch (cause) {
       report(cause, 'That workflow could not be created.');
@@ -111,8 +113,8 @@ export function WorkflowsTab() {
       {problem && <Alert tone="warning">{problem}</Alert>}
 
       <Panel title="Workflows">
-        {loading && <SkeletonRows rows={3} cols={3} />}
-        {!loading && workflows.length === 0 && (
+        {!data && loading && <SkeletonRows rows={3} cols={3} />}
+        {data && workflows.length === 0 && (
           <p className="p-4 text-muted">
             No workflows yet. A product cannot be created without one, so start below.
           </p>
@@ -124,9 +126,11 @@ export function WorkflowsTab() {
                 <p>
                   <span className="font-medium text-ink">{workflow.name}</span>
                   <span className="ml-2">
-                    <Status tone={workflow.enabled ? 'active' : 'neutral'}>
-                      {workflow.enabled ? 'enabled' : 'disabled'}
-                    </Status>
+                    {workflow.enabled ? (
+                      <StateBadge state="healthy">Enabled</StateBadge>
+                    ) : (
+                      <StateBadge state="inactive">Disabled</StateBadge>
+                    )}
                   </span>
                   <span className="ml-2 text-muted">
                     {workflow.productCount} product{workflow.productCount === 1 ? '' : 's'}

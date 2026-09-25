@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Field, Panel, Status, Table } from '@syntra/ui';
+import { Alert, Button, Field, FormActions, StateBadge, Status, Table, useToast, type ComboOption } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
+import { useApiResource } from './hooks.js';
+import { PersonPicker } from './PickerNote.js';
 
 interface ContractSummary {
   sequence: number;
@@ -78,17 +80,40 @@ export function EmployeeMover({
     location: contract.location ?? '',
     costCentre: contract.costCentre ?? '',
     employer: contract.employer ?? '',
-    managerPersonId: contract.managerPersonId ?? '',
   });
+  // The manager is chosen by searching the directory, not by pasting an id.
+  // The current one arrives as an id only, so its name is read once to fill
+  // the box; until it lands the id stands in, which is still the right value.
+  const [manager, setManager] = useState<ComboOption | null>(
+    contract.managerPersonId ? { value: contract.managerPersonId, label: contract.managerPersonId } : null,
+  );
+  const current = useApiResource<{ givenName: string; familyName: string }>(
+    contract.managerPersonId ? `/api/admin/persons/${contract.managerPersonId}` : null,
+  );
+  useEffect(() => {
+    if (!current.data || !contract.managerPersonId) return;
+    const label = `${current.data.givenName} ${current.data.familyName}`;
+    setManager((existing) => (existing && existing.value === contract.managerPersonId ? { ...existing, label } : existing));
+  }, [current.data, contract.managerPersonId]);
   const [preview, setPreview] = useState<MoverPreview | null>(null);
+  /** The draft was edited after the preview on screen was computed. */
+  const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [operationId, setOperationId] = useState<string | null>(null);
+  const toast = useToast();
 
   const change = (field: keyof typeof values, value: string) => {
     setValues((current) => ({ ...current, [field]: value }));
+    if (preview) setStale(true);
     setPreview(null);
-    setMessage('Draft changed. Preview it again before applying.');
+    setMessage('');
+  };
+  const changeManager = (next: ComboOption | null) => {
+    setManager(next);
+    if (preview) setStale(true);
+    setPreview(null);
+    setMessage('');
   };
 
   const review = async () => {
@@ -106,11 +131,12 @@ export function EmployeeMover({
             location: values.location || null,
             costCentre: values.costCentre || null,
             employer: values.employer || null,
-            managerPersonId: values.managerPersonId || null,
+            managerPersonId: manager?.value ?? null,
           },
         }),
       });
       setPreview(result);
+      setStale(false);
       setMessage(result.changes.length ? 'Review the changes below.' : 'No employment changes found.');
     } catch (error) {
       setMessage(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'The change could not be previewed.');
@@ -133,6 +159,7 @@ export function EmployeeMover({
       setMessage(operation.status === 'awaiting_approval'
         ? 'Employment details saved. Target changes wait for a second person to approve them.'
         : 'Employment change completed.');
+      toast({ tone: 'success', title: operation.status === 'awaiting_approval' ? 'Employment change awaiting approval' : 'Employment change applied' });
       onApplied?.();
     } catch (error) {
       setPreview(null);
@@ -150,22 +177,24 @@ export function EmployeeMover({
 
   const access = preview?.access ?? [];
   const unverified = access.some((delta) => delta.unverified);
+  // Not a `Panel`: a panel clips its overflow, and the manager picker's list
+  // is an overlay that has to hang below the box.
   return (
-    <Panel title="Change employment">
+    <section aria-labelledby={`mover-${personId}`} className="rounded-panel border border-border-subtle bg-bg">
+      <header className="rounded-t-panel border-b border-border-subtle bg-surface px-4 py-3">
+        <h2 id={`mover-${personId}`} className="text-md font-semibold text-ink">Change employment</h2>
+      </header>
       <div className="space-y-4 p-4">
-        <p className="text-sm text-muted">
-          Preview a change to contract, department, role, manager or location before applying it. The preview shows what every target would add, keep and remove. A changed employee record invalidates the preview.
-        </p>
         <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="New department" value={values.department} onChange={(value) => change('department', value)} />
-          <Field label="New job title" value={values.jobTitle} onChange={(value) => change('jobTitle', value)} />
-          <Field label="New location" value={values.location} onChange={(value) => change('location', value)} />
-          <Field label="New cost centre" value={values.costCentre} onChange={(value) => change('costCentre', value)} />
-          <Field label="New employer" value={values.employer} onChange={(value) => change('employer', value)} />
-          <Field label="New manager (person ID)" value={values.managerPersonId} onChange={(value) => change('managerPersonId', value)} />
+          <Field name="department" label="New department" value={values.department} onChange={(value) => change('department', value)} />
+          <Field name="jobTitle" label="New job title" value={values.jobTitle} onChange={(value) => change('jobTitle', value)} />
+          <Field name="location" label="New location" value={values.location} onChange={(value) => change('location', value)} />
+          <Field name="costCentre" label="New cost centre" value={values.costCentre} onChange={(value) => change('costCentre', value)} />
+          <Field name="employer" label="New employer" value={values.employer} onChange={(value) => change('employer', value)} />
+          <PersonPicker name="managerPersonId" label="New manager" value={manager} onChange={changeManager} exclude={personId} />
         </div>
         <div aria-live="polite">{message && <Alert tone={message.includes('could not') || message.includes('changed since') ? 'danger' : 'info'}>{message}</Alert>}</div>
-        {operationId ? <Link className="underline" to={`/admin/lifecycle-operations/${operationId}`}>Open the mover operation</Link> : null}
+        {operationId ? <Link className="link" to={`/admin/lifecycle-operations/${operationId}`}>Open the mover operation</Link> : null}
         {preview && preview.changes.length > 0 && (
           <section aria-label="Employment changes" className="space-y-2 text-sm">
             <h3 className="font-medium text-ink">Employment changes</h3>
@@ -201,15 +230,19 @@ export function EmployeeMover({
             {preview.sloMinutes ? <p className="text-muted">Service level: {preview.sloMinutes} minutes from apply.</p> : null}
           </section>
         )}
-        <div className="flex flex-wrap gap-2">
-          <Button loading={busy} onClick={() => void review()}>Preview change</Button>
+        <FormActions
+          status={stale
+            ? <StateBadge state="attention">Preview out of date</StateBadge>
+            : preview && preview.changes.length > 0 ? <StateBadge state="pending">Previewed, not applied</StateBadge> : null}
+        >
+          <Button variant={preview ? 'secondary' : 'primary'} loading={busy} onClick={() => void review()}>Preview change</Button>
           {preview && preview.changes.length > 0 && (
             <Button loading={busy} variant="danger" onClick={() => void apply()}>
               Apply reviewed change
             </Button>
           )}
-        </div>
+        </FormActions>
       </div>
-    </Panel>
+    </section>
   );
 }

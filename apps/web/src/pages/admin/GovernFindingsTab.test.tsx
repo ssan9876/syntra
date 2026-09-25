@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { GovernFindingsTab } from './GovernFindingsTab.js';
 
@@ -77,6 +78,38 @@ describe('GovernFindingsTab', () => {
         <GovernFindingsTab />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByText(/Build a snapshot/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: 'Build a snapshot' })).toHaveAttribute(
+        'href',
+        '/admin/govern?tab=snapshots',
+      ),
+    );
+  });
+
+  it('says an empty filter is a filter, and offers the way back to the open queue', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify({ findings: String(input).includes('status=accepted') ? [] : findings }),
+          { status: 200 },
+        ),
+      ),
+    );
+    render(
+      <MemoryRouter>
+        <GovernFindingsTab />
+      </MemoryRouter>,
+    );
+    await screen.findByText(/Domain Admins/);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accepted' }));
+    expect(await screen.findByText('No accepted findings')).toBeInTheDocument();
+    // Not the day-one empty state: nothing here says to build a snapshot.
+    expect(screen.queryByRole('link', { name: 'Build a snapshot' })).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show open findings' }));
+    expect(await screen.findByText(/Domain Admins/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open' })).toHaveAttribute('aria-pressed', 'true');
   });
 });

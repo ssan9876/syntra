@@ -4,6 +4,8 @@ import { Alert, Button, Field } from '@syntra/ui';
 import { isRateLimited } from '../session/api.js';
 import { useSession } from '../session/SessionProvider.js';
 import { Wordmark } from '../components/Wordmark.js';
+import { useBrand } from '../branding/BrandProvider.js';
+import { SupportLink, supportLinkProps } from '../branding/SupportLink.js';
 import {
   isServerPath,
   routeFor,
@@ -15,6 +17,7 @@ import { LanguagePicker, useT } from '../i18n/LocaleProvider.js';
 
 export function Login() {
   const t = useT();
+  const brand = useBrand();
   const { login } = useSession();
   const navigate = useNavigate();
 
@@ -142,7 +145,19 @@ export function Login() {
           </Link>
         </p>
 
-        <p className="mt-2 text-center text-sm text-muted">{t('login.help')}</p>
+        {/* The tenant's own help desk when it has named one — a place to go
+            beats "contact your IT administrator" for somebody who, at this
+            exact moment, cannot reach anything that would tell them who that
+            is. The generic line stays for a tenant that has not. */}
+        <p className="mt-2 text-center text-sm text-muted">
+          {supportLinkProps(brand.supportUrl) ? (
+            <>
+              {t('login.trouble')} <SupportLink />
+            </>
+          ) : (
+            t('login.help')
+          )}
+        </p>
 
         <p className="mt-4 text-center">
           <LanguagePicker />

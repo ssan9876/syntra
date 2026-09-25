@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Field, Identifier, Panel, SkeletonRows, StateBadge, type State } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -46,23 +46,28 @@ interface Assessment {
 
 const OPEN = new Set(['pending_approval', 'approved']);
 
-const STATUS: Record<DeletionRequest['status'], { label: string; tone: 'warning' | 'danger' | 'neutral' | 'active' }> = {
-  pending_approval: { label: 'awaiting approval', tone: 'warning' },
-  approved: { label: 'approved', tone: 'danger' },
-  executing: { label: 'executing', tone: 'danger' },
-  completed: { label: 'completed', tone: 'neutral' },
-  cancelled: { label: 'cancelled', tone: 'neutral' },
-  expired: { label: 'expired', tone: 'neutral' },
-  invalidated: { label: 'invalidated', tone: 'neutral' },
+/**
+ * The request's state in the console's shared status language. `label` is the
+ * lower-case form used inside a sentence ("Last request cancelled: …"); the
+ * badge capitalises it.
+ */
+const STATUS: Record<DeletionRequest['status'], { label: string; state: State }> = {
+  pending_approval: { label: 'awaiting approval', state: 'pending' },
+  // Approved is the one that should make a reader stop: the tenant is now a
+  // cooling-off period away from being erased.
+  approved: { label: 'approved', state: 'attention' },
+  executing: { label: 'executing', state: 'running' },
+  completed: { label: 'completed', state: 'inactive' },
+  cancelled: { label: 'cancelled', state: 'inactive' },
+  expired: { label: 'expired', state: 'inactive' },
+  invalidated: { label: 'invalidated', state: 'inactive' },
 };
+
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function message(error: unknown): string {
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
   return error instanceof Error ? error.message : 'The request failed.';
-}
-
-function short(digest: string) {
-  return `${digest.slice(0, 12)}…`;
 }
 
 function when(iso: string | null) {
@@ -147,47 +152,54 @@ export function TenantDeletionTab() {
       {notice ? <Alert tone={notice.tone}>{notice.text}</Alert> : null}
     </div>
 
-    <Panel title="Offboarding evidence" actions={assessment ? <Status tone={assessment.deletionReady ? 'active' : 'warning'}>{assessment.deletionReady ? 'ready' : 'blocked'}</Status> : null}>
+    <Panel title="Offboarding evidence" actions={assessment ? (assessment.deletionReady ? <StateBadge state="healthy">Ready</StateBadge> : <StateBadge state="blocked" />) : null}>
       <div className="space-y-4 p-4">
         <div className="flex flex-wrap gap-3">
           <Button loading={busy === 'assess'} onClick={() => void assess()}>Assess tenant</Button>
           <Button variant="secondary" loading={busy === 'export'} disabled={!assessment} onClick={() => void exportData()}>Download export</Button>
         </div>
         {assessment ? <dl className="grid gap-2 text-sm sm:grid-cols-[max-content_1fr]">
-          <dt className="text-muted">Assessment</dt><dd className="font-mono break-all">{short(assessment.digest)}</dd>
+          <dt className="text-muted">Assessment</dt><dd><Identifier value={assessment.digest} truncate /></dd>
           <dt className="text-muted">Legal holds</dt><dd>{assessment.blockers.activeLegalHolds}</dd>
           <dt className="text-muted">Unresolved lifecycle work</dt><dd>{assessment.blockers.unresolvedLifecycleOperations}</dd>
-          <dt className="text-muted">Export</dt><dd className="font-mono break-all">{exportDigest ? short(exportDigest) : '—'}</dd>
+          <dt className="text-muted">Export</dt><dd>{exportDigest ? <Identifier value={exportDigest} truncate /> : '—'}</dd>
         </dl> : null}
       </div>
     </Panel>
 
-    <Panel title="Delete tenant" actions={request ? <Status tone={STATUS[request.status].tone}>{STATUS[request.status].label}</Status> : null}>
+    <Panel title="Delete tenant" actions={request ? <StateBadge state={STATUS[request.status].state}>{capital(STATUS[request.status].label)}</StateBadge> : null}>
       <div className="space-y-4 p-4">
         {request && open ? <dl className="grid gap-2 text-sm sm:grid-cols-[max-content_1fr]">
           <dt className="text-muted">Requested</dt><dd>{when(request.requestedAt)}{ownRequest ? ' (by you)' : ''}</dd>
           {request.reason ? <><dt className="text-muted">Reason</dt><dd>{request.reason}</dd></> : null}
-          <dt className="text-muted">Assessment / export</dt><dd className="font-mono break-all">{short(request.assessmentDigest)} / {short(request.exportDigest)}</dd>
+          <dt className="text-muted">Assessment / export</dt><dd className="flex flex-wrap items-center gap-x-2"><Identifier value={request.assessmentDigest} truncate /> / <Identifier value={request.exportDigest} truncate /></dd>
           {request.status === 'pending_approval'
             ? <><dt className="text-muted">Approve by</dt><dd>{when(request.approvalExpiresAt)}</dd></>
             : <><dt className="text-muted">Executable</dt><dd>{when(request.executeNotBefore)} – {when(request.executeBefore)}</dd></>}
         </dl> : null}
         {request && !open && request.closedReason ? <p className="text-sm text-muted">Last request {STATUS[request.status].label}: {request.closedReason}</p> : null}
 
-        {!open ? <>
+        {/* The step that starts the erasure, bounded in the danger colour so
+            it reads as a different kind of act from the evidence above it.
+            Not a modal: the assessment and export it names by digest are the
+            evidence being signed off, and a dialog would cover them. */}
+        {!open ? <div role="group" aria-label="Request deletion" className="max-w-2xl space-y-3 rounded-panel border border-danger/40 p-3">
           <Field
+            name="reason"
             label="Reason for deleting this tenant"
             value={reason}
             onChange={setReason}
             warning={reason.trim().length > 0 && reason.trim().length < policy.reasonMinLength ? `At least ${policy.reasonMinLength} characters` : undefined}
           />
-          <Button
-            variant="danger"
-            loading={busy === 'request'}
-            disabled={!assessment?.deletionReady || !exportDigest || reason.trim().length < policy.reasonMinLength}
-            onClick={() => void submit()}
-          >Request deletion</Button>
-        </> : null}
+          <div className="border-t border-border-subtle pt-3">
+            <Button
+              variant="danger"
+              loading={busy === 'request'}
+              disabled={!assessment?.deletionReady || !exportDigest || reason.trim().length < policy.reasonMinLength}
+              onClick={() => void submit()}
+            >Request deletion</Button>
+          </div>
+        </div> : null}
 
         {request?.status === 'pending_approval' ? <div className="flex flex-wrap gap-3">
           {ownRequest
@@ -198,16 +210,21 @@ export function TenantDeletionTab() {
 
         {request?.status === 'approved' ? <div className="space-y-3">
           {coolingOff ? <p className="text-sm text-muted">Cooling off until {when(request.executeNotBefore)}. Anyone with this access can still cancel.</p> : null}
-          <Field
-            label="Type DELETE to confirm"
-            value={confirm}
-            onChange={setConfirm}
-            disabled={coolingOff}
-            warning={!coolingOff ? `Erases every person, account and secret in this tenant. Needs a sign-in from the last ${policy.stepUpMaxAgeMinutes} minutes.` : undefined}
-          />
-          <div className="flex flex-wrap gap-3">
-            <Button variant="danger" loading={busy === 'execute'} disabled={coolingOff || confirm !== 'DELETE'} onClick={() => void execute()}>Delete tenant now</Button>
-            <Button variant="secondary" loading={busy === 'cancel'} onClick={() => void act('cancel')}>Cancel request</Button>
+          <div role="group" aria-label="Delete tenant now" className="max-w-2xl space-y-3 rounded-panel border border-danger/40 p-3">
+            <Field
+              name="confirm"
+              label="Type DELETE to confirm"
+              value={confirm}
+              onChange={setConfirm}
+              disabled={coolingOff}
+              autoComplete="off"
+              spellCheck={false}
+              warning={!coolingOff ? `Erases every person, account and secret in this tenant. Needs a sign-in from the last ${policy.stepUpMaxAgeMinutes} minutes.` : undefined}
+            />
+            <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-3">
+              <Button variant="danger" loading={busy === 'execute'} disabled={coolingOff || confirm !== 'DELETE'} onClick={() => void execute()}>Delete tenant now</Button>
+              <Button variant="secondary" loading={busy === 'cancel'} onClick={() => void act('cancel')}>Cancel request</Button>
+            </div>
           </div>
         </div> : null}
       </div>

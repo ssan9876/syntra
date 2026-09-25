@@ -102,7 +102,7 @@ describe('AccountsTab, finding an account', () => {
 
     expect(await screen.findByText(/No account matches/)).toBeVisible();
     expect(
-      screen.getByRole('button', { name: /clear the search/i }),
+      screen.getByRole('button', { name: /reset filters/i }),
     ).toBeVisible();
   });
 
@@ -506,5 +506,50 @@ describe('AccountsTab person picker', () => {
     expect(
       screen.queryByRole('button', { name: 'Continue' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('AccountsTab, the reader’s view of the table', () => {
+  beforeEach(() => {
+    try {
+      globalThis.localStorage?.clear();
+    } catch {
+      /* storage refused */
+    }
+  });
+
+  it('hides an optional column and keeps the name, which cannot be hidden', async () => {
+    mockBoth(users);
+    renderPage();
+    await screen.findByRole('link', { name: 'J Doe' });
+    expect(screen.getByRole('columnheader', { name: 'Login' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText('Columns'));
+    // Only the optional columns are offered: the name and the status are
+    // what the list is for.
+    expect(screen.queryByRole('checkbox', { name: 'Name' })).toBeNull();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Login' }));
+
+    expect(screen.queryByRole('columnheader', { name: 'Login' })).toBeNull();
+    expect(screen.queryByText('jdoe')).toBeNull();
+    expect(screen.getByRole('link', { name: 'J Doe' })).toBeInTheDocument();
+  });
+
+  it('lets the reader switch to compact rows', async () => {
+    mockBoth(users);
+    renderPage();
+    await screen.findByRole('link', { name: 'J Doe' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Compact' }));
+
+    expect(screen.getByRole('button', { name: 'Compact' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('table').className).toMatch(/data-table--tight/);
+  });
+
+  it('labels a locked account as blocked, beside its active state', async () => {
+    mockBoth([{ ...users[0]!, locked: true }]);
+    renderPage();
+    expect(await screen.findByText('Locked out')).toBeInTheDocument();
+    expect(screen.getByText('Locked out').className).toMatch(/danger/);
   });
 });

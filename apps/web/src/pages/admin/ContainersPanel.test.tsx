@@ -113,7 +113,7 @@ describe('ContainersPanel', () => {
     expect(await screen.findByText(`OU=Sales,${BASE_DN}`)).toBeInTheDocument();
     // 'desired' is an ordinary state before the next run, not a fault, and it
     // has to be visible so nobody reads a pending container as a broken one.
-    expect(screen.getByText('desired')).toBeInTheDocument();
+    expect(screen.getByText('Awaiting the next run')).toBeInTheDocument();
   });
 
   it('surfaces an out-of-base refusal on the field', async () => {
@@ -146,6 +146,11 @@ describe('ContainersPanel', () => {
     await userEvent.type(screen.getByLabelText(/container/i), 'CN=Users,DC=acme,DC=test');
     await userEvent.click(screen.getByRole('button', { name: /create container/i }));
 
-    expect(await screen.findByText(/not below the target/i)).toBeInTheDocument();
+    // Against the field itself. (The same words also head the form's error
+    // summary, so the text alone is no longer unique on the page.)
+    const container = screen.getByLabelText(/container/i);
+    await waitFor(() =>
+      expect(container).toHaveAccessibleDescription(/not below the target/i),
+    );
   });
 });

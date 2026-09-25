@@ -101,11 +101,11 @@ describe('MyReviewsPage', () => {
         /has to be decided on its own, with a comment, because this is privileged access/,
       ),
     ).toBeInTheDocument();
-    expect(within(privileged).queryByLabelText('include in bulk')).toBeNull();
+    expect(within(privileged).queryByLabelText('Include in bulk')).toBeNull();
 
     // The control exists on this page — it is this ITEM that does not get it.
     const ordinary = await panelFor('Ben Baker');
-    expect(within(ordinary).getByLabelText('include in bulk')).toBeInTheDocument();
+    expect(within(ordinary).getByLabelText('Include in bulk')).toBeInTheDocument();
   });
 
   it('tells a reviewer the age of the data AND the SLA it breached, before they decide', async () => {
@@ -211,7 +211,7 @@ describe('a selection spanning two campaigns', () => {
     render(<MyReviewsPage />);
     await screen.findByText('Ben Baker');
 
-    for (const box of screen.getAllByLabelText('include in bulk')) {
+    for (const box of screen.getAllByLabelText('Include in bulk')) {
       await userEvent.click(box);
     }
     await userEvent.click(screen.getByRole('button', { name: /Certify selected/ }));
@@ -232,7 +232,7 @@ describe('a selection spanning two campaigns', () => {
     render(<MyReviewsPage />);
     await screen.findByText('Ben Baker');
 
-    for (const box of screen.getAllByLabelText('include in bulk')) {
+    for (const box of screen.getAllByLabelText('Include in bulk')) {
       await userEvent.click(box);
     }
     await userEvent.click(screen.getByRole('button', { name: /Certify selected/ }));

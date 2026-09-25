@@ -154,7 +154,7 @@ test.describe.serial('access, second factors and the console', () => {
 
     await signIn(page, 'jdoe', USER!);
     await expect(page.getByRole('heading', { name: /good day/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /rota planner/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^rota planner/i })).toBeVisible();
     // Assigned to the owner only, so it must not appear here.
     await expect(page.getByRole('button', { name: /expenses/i })).toHaveCount(0);
 
@@ -164,7 +164,7 @@ test.describe.serial('access, second factors and the console', () => {
     // popup opener the portal deliberately does not keep.
     const [opened] = await Promise.all([
       context.waitForEvent('page'),
-      page.getByRole('button', { name: /rota planner/i }).click(),
+      page.getByRole('button', { name: /^rota planner/i }).click(),
     ]);
     await expect(opened).toHaveURL('https://example.com/rota');
     await opened.close();

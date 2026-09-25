@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Field, Panel, Select, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -85,6 +85,7 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   // A read-only supplement to the editor: an older API without the route
   // must not take the page down.
@@ -108,7 +109,10 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
     setNotice(null);
     try {
       await api(`/api/admin/targets/${targetId}/${path}`, { method, body: JSON.stringify(body) });
+      // Inline as well as a toast: a rollback or an override is a receipt
+      // somebody may need to read back after the toast has gone.
       setNotice(done);
+      toast({ tone: 'success', title: done.replace(/\.$/, '') });
       setReason('');
       setRollbackReason('');
       setOverrideReason('');
@@ -128,11 +132,11 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
       title="Adapter release"
       actions={
         effective ? (
-          <Status tone={data.writesBlockedReason ? 'danger' : data.warnings.length > 0 ? 'warning' : 'active'}>
+          <StateBadge state={data.writesBlockedReason ? 'blocked' : data.warnings.length > 0 ? 'attention' : 'healthy'}>
             v{effective.adapterVersion} · {SOURCE_LABEL[data.effective!.source]}
-          </Status>
+          </StateBadge>
         ) : (
-          <Status tone="danger">unresolved</Status>
+          <StateBadge state="blocked">Unresolved</StateBadge>
         )
       }
     >
@@ -157,7 +161,7 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
         </div>
 
         {effective && (
-          <p className="text-sm text-ink-muted">
+          <p className="text-sm text-muted">
             Certification {effective.certification.status}: {effective.certification.evidence}
             {effective.deprecationDate ? ` · deprecated from ${effective.deprecationDate}` : ''}
           </p>
@@ -172,9 +176,9 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
                   <span className="block text-xs text-muted">not advertised by this configuration</span>
                 )}
               </span>
-              <Status tone={entry.refusal === null ? 'active' : 'inactive'}>
+              <StateBadge state={entry.refusal === null ? 'healthy' : 'inactive'}>
                 {entry.refusal === null ? 'allowed' : 'refused'}
-              </Status>
+              </StateBadge>
             </li>
           ))}
         </ul>

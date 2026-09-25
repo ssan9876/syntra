@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
+import { Alert, Button, Check, ErrorSummary, Field, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
 type Scope = 'all' | 'admin';
@@ -88,7 +88,13 @@ export function SettingsSessionsTab() {
   return (
     <form onSubmit={ask} noValidate className="space-y-6">
       <Panel title="Revoke sessions" bodyClassName="space-y-5 p-4">
+        <ErrorSummary
+          errors={failure ? [{ message: failure }] : []}
+          title="Sessions not revoked"
+        />
+
         <Select
+          name="scope"
           label="Sessions to end"
           value={scope}
           onChange={(v) => {
@@ -112,6 +118,7 @@ export function SettingsSessionsTab() {
         />
 
         <Field
+          name="reason"
           label="Reason"
           value={reason}
           onChange={(v) => {
@@ -128,8 +135,11 @@ export function SettingsSessionsTab() {
           }
         />
 
-        <div>
-          <Button type="submit" variant="danger" disabled={!reasonOk || busy}>
+        <div className="border-t border-border-subtle pt-4">
+          {/* `danger-quiet`: this press only asks the question. The filled
+              danger button is the one inside the warning below, which says
+              what it will end before it ends it. */}
+          <Button type="submit" variant="danger-quiet" disabled={!reasonOk || busy}>
             Revoke sessions…
           </Button>
         </div>
@@ -166,7 +176,6 @@ export function SettingsSessionsTab() {
           </Alert>
         )}
 
-        {failure && <Alert tone="danger">{failure}</Alert>}
 
         {/*
           A polite live region, always mounted, so the outcome of an action

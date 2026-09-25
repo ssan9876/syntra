@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 // `AppShell`, which every portal page renders, calls `useSession`, so a page
 // mounted without the provider throws before it renders anything. The plan's
@@ -151,5 +152,30 @@ describe('CatalogPage', () => {
     expect(
       await screen.findByText(/nothing to ask for yet/i),
     ).toBeInTheDocument();
+  });
+
+  it('tells a search that matched nothing apart from an empty catalog, and undoes it', async () => {
+    mockCatalog([
+      {
+        id: 'p1',
+        name: 'Reading room',
+        slug: 'reading-room',
+        description: null,
+        category: null,
+        kind: 'application',
+        durationMode: 'permanent',
+        maxDurationDays: null,
+        needsApproval: false,
+      },
+    ]);
+    renderPage();
+    await screen.findByText('Reading room');
+
+    await userEvent.type(screen.getByLabelText('Search'), 'zzz');
+    expect(await screen.findByText('Nothing matches that search')).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to ask for yet/i)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Clear the search' }));
+    expect(await screen.findByText('Reading room')).toBeInTheDocument();
   });
 });

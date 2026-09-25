@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, StateBadge } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -186,13 +186,13 @@ export function UpdatesPage() {
         </div>
       )}
 
-      {loading && (
+      {!data && loading && (
         <Panel>
           <SkeletonRows rows={3} cols={2} />
         </Panel>
       )}
 
-      {!loading && data && (
+      {data && (
         <div className="space-y-4">
           <Panel title="This deployment">
             <div className="space-y-3 p-4">
@@ -218,7 +218,20 @@ export function UpdatesPage() {
           </Panel>
 
           {progress && (
-            <Panel title="Last update">
+            <Panel
+              title="Last update"
+              actions={
+                progress.running ? (
+                  <StateBadge state="running">In progress</StateBadge>
+                ) : progress.step === 'succeeded' ? (
+                  <StateBadge state="healthy">Complete</StateBadge>
+                ) : progress.step === 'rolled_back' ? (
+                  <StateBadge state="attention">Undone</StateBadge>
+                ) : progress.step === 'failed' ? (
+                  <StateBadge state="blocked">Failed</StateBadge>
+                ) : undefined
+              }
+            >
               <div className="space-y-2 p-4">
                 <p className="text-ink">
                   {STEP_TEXT[progress.step] ?? progress.step}

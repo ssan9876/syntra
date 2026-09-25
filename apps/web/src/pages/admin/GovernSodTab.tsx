@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, Select, SkeletonRows, StateBadge, Status } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -71,7 +71,7 @@ export function GovernSodTab() {
         <Panel
           title="Business functions"
         >
-          {functions.loading && <SkeletonRows rows={3} cols={2} />}
+          {functions.data === null && functions.loading && <SkeletonRows rows={3} cols={2} />}
           {functions.error !== null && <Alert tone="danger">{functions.error}</Alert>}
           {functions.data !== null && functions.data.functions.length === 0 && (
             <Empty title="No business functions yet">
@@ -108,62 +108,45 @@ export function GovernSodTab() {
                   The sentence was describing the control instead of the
                   control describing itself. Naming the type in the label
                   makes it unmissable and deletes the paragraph. */}
-              <label className="text-muted">
-                Business function A
-                <select
-                  aria-label="Business function A"
-                  className="ml-2 rounded border border-border-subtle px-2 py-1 text-ink"
-                  value={functionAId}
-                  onChange={(e) => {
-                    setFunctionAId(e.target.value);
-                    setPreview(null);
-                  }}
-                >
-                  <option value="">choose</option>
-                  {(functions.data?.functions ?? []).map((fn) => (
-                    <option key={fn.id} value={fn.id}>
-                      {fn.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-muted">
-                Business function B
-                <select
-                  aria-label="Business function B"
-                  className="ml-2 rounded border border-border-subtle px-2 py-1 text-ink"
-                  value={functionBId}
-                  onChange={(e) => {
-                    setFunctionBId(e.target.value);
-                    setPreview(null);
-                  }}
-                >
-                  <option value="">choose</option>
-                  {(functions.data?.functions ?? []).map((fn) => (
-                    <option key={fn.id} value={fn.id}>
-                      {fn.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-muted">
-                Severity
-                <select
-                  aria-label="Severity"
-                  className="ml-2 rounded border border-border-subtle px-2 py-1 text-ink"
-                  value={severity}
-                  onChange={(e) => {
-                    setSeverity(e.target.value);
-                    setPreview(null);
-                  }}
-                >
-                  {['low', 'medium', 'high', 'critical'].map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <Select
+                className="w-56"
+                label="Business function A"
+                value={functionAId}
+                onChange={(value) => {
+                  setFunctionAId(value);
+                  setPreview(null);
+                }}
+                options={[
+                  { value: '', label: 'Choose a function' },
+                  ...(functions.data?.functions ?? []).map((fn) => ({ value: fn.id, label: fn.name })),
+                ]}
+              />
+              <Select
+                className="w-56"
+                label="Business function B"
+                value={functionBId}
+                onChange={(value) => {
+                  setFunctionBId(value);
+                  setPreview(null);
+                }}
+                options={[
+                  { value: '', label: 'Choose a function' },
+                  ...(functions.data?.functions ?? []).map((fn) => ({ value: fn.id, label: fn.name })),
+                ]}
+              />
+              <Select
+                className="w-40"
+                label="Severity"
+                value={severity}
+                onChange={(value) => {
+                  setSeverity(value);
+                  setPreview(null);
+                }}
+                options={['low', 'medium', 'high', 'critical'].map((s) => ({
+                  value: s,
+                  label: s.charAt(0).toUpperCase() + s.slice(1),
+                }))}
+              />
               {/* BEFORE the save. A rule that would fire against 400 people is a
                   configuration error, and the person with the console open is
                   who should see it — at that moment, not the 400 people six
@@ -215,7 +198,7 @@ export function GovernSodTab() {
                     <Status tone={SEVERITY_TONE[rule.severity] ?? 'neutral'}>
                       {rule.severity}
                     </Status>
-                    {!rule.enabled && <Status tone="inactive">disabled</Status>}
+                    {!rule.enabled && <StateBadge state="inactive">Disabled</StateBadge>}
                   </p>
                   <p className="text-muted">
                     {rule.functionA.name} against {rule.functionB.name}
@@ -232,7 +215,7 @@ export function GovernSodTab() {
         <Panel
           title="Violations"
         >
-          {violations.loading && <SkeletonRows rows={3} cols={3} />}
+          {violations.data === null && violations.loading && <SkeletonRows rows={3} cols={3} />}
           {violations.error !== null && <Alert tone="danger">{violations.error}</Alert>}
           {violations.data !== null && violations.data.violations.length === 0 && (
             <Empty title="No open violations">
@@ -246,9 +229,13 @@ export function GovernSodTab() {
                   <p className="font-medium text-ink">
                     {v.rule.name}{' '}
                     <Status tone={SEVERITY_TONE[v.severity] ?? 'neutral'}>{v.severity}</Status>
-                    <Status tone={v.status === 'excepted' ? 'inactive' : 'danger'}>
-                      {v.status}
-                    </Status>
+                    {v.status === 'excepted' ? (
+                      <StateBadge state="inactive">Excepted</StateBadge>
+                    ) : (
+                      <StateBadge state="blocked">
+                        {v.status.charAt(0).toUpperCase() + v.status.slice(1)}
+                      </StateBadge>
+                    )}
                   </p>
                   {/* BOTH SIDES, named. A violation that says "Anna violates
                       rule 3" and nothing else is a violation nobody can act on:

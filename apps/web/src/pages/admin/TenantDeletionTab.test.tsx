@@ -45,7 +45,7 @@ describe('TenantDeletionTab', () => {
     expect(submit).toBeDisabled();
 
     await userEvent.click(screen.getByRole('button', { name: 'Assess tenant' }));
-    await screen.findByText('ready');
+    await screen.findByText('Ready');
     await userEvent.click(screen.getByRole('button', { name: 'Download export' }));
     await userEvent.type(screen.getByLabelText('Reason for deleting this tenant'), 'too short');
     expect(submit).toBeDisabled();
@@ -65,7 +65,7 @@ describe('TenantDeletionTab', () => {
     });
     render(<TenantDeletionTab />);
     await userEvent.click(await screen.findByRole('button', { name: 'Assess tenant' }));
-    expect(await screen.findByText('blocked')).toBeVisible();
+    expect(await screen.findByText('Blocked')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Request deletion' })).toBeDisabled();
   });
 

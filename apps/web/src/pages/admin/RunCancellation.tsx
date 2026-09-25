@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Alert, Button } from '@syntra/ui';
+import { Alert, Button, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
 /**
@@ -59,6 +59,7 @@ export function CancelRunButton({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const toast = useToast();
   const confirmRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef(false);
@@ -86,6 +87,13 @@ export function CancelRunButton({
     try {
       await api(path, { method: 'POST', body: JSON.stringify({}) });
       setOpen(false);
+      // The page's `CancellationStatus` is the lasting record; this only
+      // says the click took.
+      toast({
+        title: working.includes(run.status)
+          ? 'Cancellation requested'
+          : `${noun.charAt(0).toUpperCase()}${noun.slice(1)} cancelled`,
+      });
       onChanged();
     } catch (cause) {
       // The server's sentence wins: "already finished" is the common answer,

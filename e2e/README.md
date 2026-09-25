@@ -98,3 +98,19 @@ password into the repository. Seeding a second stack with passwords of its own
 is also the only reliable way to prove a browser run reached *your* build:
 a route that exists in both checkouts answers identically, and a password that
 only one of them knows does not.
+
+## Demo scenarios and the visual suite
+
+`SEED_DEMO=1 pnpm seed` adds lifecycle scenarios on top of the plain seed: a
+hire waiting for directory read-back (Rin Fujimoto), a partially provisioned
+hire with one observed and one failed target (Priya Shah), an overdue
+departure (Sam Roe), and categories on the portal tiles. The two demo targets
+are disabled, so nothing tries to reach a directory. Leave it off for the
+ordinary suite, which counts rows and tiles on the plain seed.
+
+`visual.spec.ts` is a screenshot and keyboard suite over sign-in, the portal,
+the people list, a person record, the employee work queue and a missing-record
+failure, at 1440, 1180 and 390 pixels wide. It skips unless `E2E_VISUAL=1`,
+because the product uses system fonts and a baseline only matches the machine
+that made it. Make baselines with `--update-snapshots` on the machine that
+will check them, against a `SEED_DEMO=1` database.

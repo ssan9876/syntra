@@ -127,6 +127,13 @@ describe('what the fallback must NOT swallow', () => {
     expect(res.headers['content-type']).toContain('application/problem+json');
   });
 
+  it('answers a missing built-in application logo with 404 rather than the page', async () => {
+    // The tile falls back to its monogram on an image error; a 200 of HTML
+    // would leave a broken-image glyph instead.
+    const res = await page('/app-icons/not-a-mark.svg');
+    expect(res.statusCode).toBe(404);
+  });
+
   it('does not treat a write as a page request', async () => {
     const res = await ctx.app.inject({
       method: 'POST',

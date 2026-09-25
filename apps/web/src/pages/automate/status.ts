@@ -1,21 +1,25 @@
-type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary';
+import type { State } from '@syntra/ui';
 
 /**
- * The statuses that mean somebody has to do something are the loud ones.
- * `blocked_no_approver` and `fulfilment_failed` are danger because they are
- * stuck; `awaiting_fulfilment` is primary because it is working.
+ * A request's status in the console's state language (`StateBadge`).
+ *
+ * The two that mean somebody has to do something — nobody can approve it, or
+ * it was approved and could not be applied — are `blocked`. Waiting on an
+ * approver is `pending`: a thing outside the reader's hands. A request that
+ * ended without being granted (refused, withdrawn, expired) is `inactive` —
+ * an outcome, shown and never hidden, not a fault.
  */
-export const REQUEST_TONE: Record<string, Tone> = {
-  pending_approval: 'primary',
-  blocked_no_approver: 'danger',
-  approved: 'primary',
-  awaiting_fulfilment: 'primary',
-  fulfilled: 'active',
-  partially_fulfilled: 'warning',
-  fulfilment_failed: 'danger',
+export const REQUEST_STATE: Record<string, State> = {
+  pending_approval: 'pending',
+  blocked_no_approver: 'blocked',
+  approved: 'pending',
+  awaiting_fulfilment: 'running',
+  fulfilled: 'healthy',
+  partially_fulfilled: 'attention',
+  fulfilment_failed: 'blocked',
   rejected: 'inactive',
-  cancelled: 'neutral',
-  expired: 'warning',
+  cancelled: 'inactive',
+  expired: 'inactive',
 };
 
 export const REQUEST_LABEL: Record<string, string> = {
@@ -31,13 +35,13 @@ export const REQUEST_LABEL: Record<string, string> = {
   expired: 'Expired without a decision',
 };
 
-export const GRANT_TONE: Record<string, Tone> = {
-  scheduled: 'neutral',
-  pending: 'primary',
-  active: 'active',
+export const GRANT_STATE: Record<string, State> = {
+  scheduled: 'pending',
+  pending: 'running',
+  active: 'healthy',
   expired: 'inactive',
   lapsed: 'inactive',
-  revoked: 'neutral',
+  revoked: 'inactive',
 };
 
 export const GRANT_LABEL: Record<string, string> = {

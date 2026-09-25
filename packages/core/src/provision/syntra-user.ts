@@ -142,7 +142,7 @@ export async function claimSyntraUsers(
      */
     const claimed = await tx.$executeRaw`
       UPDATE "User" AS u
-      SET "personId" = a."personId", "updatedAt" = now()
+      SET "personId" = a."personId", "updatedAt" = (now() AT TIME ZONE 'UTC')
       FROM "TargetAccount" AS a
       WHERE u."tenantId" = ${bound}::uuid
         AND a."tenantId" = ${bound}::uuid

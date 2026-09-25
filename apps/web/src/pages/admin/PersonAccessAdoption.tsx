@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field } from '@syntra/ui';
+import { Alert, Button, Field, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -32,6 +32,7 @@ export function Adoption({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const toast = useToast();
 
   // Read when the dialog opens, never on page load: it is a live call to the
   // directory, for a control most visits never touch.
@@ -52,6 +53,8 @@ export function Adoption({
       });
       setOpen(false);
       setReason('');
+      toast({ tone: 'success', title: ifNoCandidate ? 'Conflict reset' : 'Account adopted' });
+      // Kept on the page as well: what happens NEXT outlives the toast.
       setDone(
         ifNoCandidate
           ? 'The account will be created again on the next run.'
@@ -82,7 +85,7 @@ export function Adoption({
 
       {done && (
         <div className="mt-3">
-          <Alert tone="warning">{done}</Alert>
+          <Alert tone="info">{done}</Alert>
         </div>
       )}
 

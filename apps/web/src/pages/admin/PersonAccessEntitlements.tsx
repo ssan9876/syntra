@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Status } from '@syntra/ui';
+import { Field, FilterBar, FilterChips, Segmented, Status, Table, type ActiveFilter } from '@syntra/ui';
 
 /**
  * One rule that asks for a holding **today**, with the contract of this person
@@ -258,3 +259,133 @@ export function RecordedAtGrant({ holding }: { holding: Holding }) {
     </div>
   );
 }
+
+/**
+ * A holding nobody asks for any more: the finding an auditor came for, and
+ * the one reconciliation will propose revoking. The same test `HeldByNow`
+ * uses to say so in the row.
+ */
+function unexplained(holding: Holding): boolean {
+  return holding.currentRules.length === 0
+    && holding.origin !== 'request'
+    && (holding.attributionStale || holding.ruleName !== null);
+}
+
+/** Below this many rows the list is read, not searched, and needs no controls. */
+export const FILTER_FROM = 9;
+
+function matches(holding: Holding, query: string): boolean {
+  if (!query) return true;
+  const needle = query.toLowerCase();
+  return [
+    holding.displayName,
+    ORIGINS[holding.origin] ?? holding.origin,
+    holding.ruleName,
+    holding.grantedByRuleName,
+    ...holding.currentRules.map((rule) => rule.ruleName),
+  ].some((text) => text?.toLowerCase().includes(needle));
+}
+
+/**
+ * One account's entitlements, findable.
+ *
+ * A service account or a long-serving administrator holds a hundred groups,
+ * and the question somebody arrives with is about ONE of them — "why does she
+ * still have Payroll-Admin". The list was a table to read top to bottom. It is
+ * filtered in the browser because the access explanation already returns
+ * every holding of the account: there is no page to fetch, and a round trip
+ * per keystroke would be slower than the list it replaced.
+ *
+ * What is filtered is always on screen as chips, and the count says how much
+ * of the list is hidden, so a filtered table is never mistaken for the whole.
+ */
+export function HoldingsTable({ holdings }: { holdings: Holding[] }) {
+  const [query, setQuery] = useState('');
+  const [origin, setOrigin] = useState('all');
+  const filterable = holdings.length >= FILTER_FROM;
+
+  const counts = new Map<string, number>();
+  for (const holding of holdings) counts.set(holding.origin, (counts.get(holding.origin) ?? 0) + 1);
+  const orphaned = holdings.filter(unexplained).length;
+
+  const shown = holdings.filter((holding) =>
+    matches(holding, query.trim())
+    && (origin === 'all' || (origin === 'unexplained' ? unexplained(holding) : holding.origin === origin)));
+
+  const active: ActiveFilter[] = [
+    ...(query.trim() ? [{ key: 'q', label: `Search: “${query.trim()}”`, onRemove: () => setQuery('') }] : []),
+    ...(origin !== 'all'
+      ? [{ key: 'origin', label: origin === 'unexplained' ? 'Nothing asks for it' : (ORIGINS[origin] ?? origin), onRemove: () => setOrigin('all') }]
+      : []),
+  ];
+
+  return (
+    <>
+      {filterable && (
+        <div className="border-b border-border-subtle px-4 pt-3">
+          <FilterBar
+            trailing={<span className="text-sm text-muted tabular-nums" role="status">{shown.length} of {holdings.length}</span>}
+          >
+            <Field
+              className="w-64"
+              type="search"
+              label="Find entitlement"
+              placeholder="Name or rule"
+              value={query}
+              onChange={setQuery}
+            />
+            <Segmented
+              label="Origin"
+              value={origin}
+              onChange={setOrigin}
+              options={[
+                { value: 'all', label: 'All', count: holdings.length },
+                ...[...counts.entries()].map(([value, count]) => ({ value, label: ORIGIN_SHORT[value] ?? value, count })),
+                ...(orphaned > 0 ? [{ value: 'unexplained', label: 'Nothing asks for it', count: orphaned, tone: 'warning' as const }] : []),
+              ]}
+            />
+          </FilterBar>
+          <FilterChips filters={active} onReset={() => { setQuery(''); setOrigin('all'); }} />
+        </div>
+      )}
+      {shown.length === 0 ? (
+        <div className="p-4 text-muted">No entitlement of this account matches.</div>
+      ) : (
+        <Table>
+          <thead>
+            <tr>
+              <th scope="col">Entitlement</th>
+              <th scope="col">Where it came from</th>
+              {/* Two columns and not one, because they answer two different
+                  questions and the whole defect was answering the first with
+                  the second. The contract lives with the rule it satisfies:
+                  one holding can have several current rules, each satisfied
+                  by a different contract of this person, and a single
+                  contract column could only ever show one of them. */}
+              <th scope="col">Why it is held now</th>
+              <th scope="col">Recorded at the grant</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((holding) => (
+              <tr key={holding.entitlementId}>
+                <td className="text-ink">{holding.displayName}</td>
+                <td>{ORIGINS[holding.origin] ?? holding.origin}</td>
+                <td className="text-ink"><HeldByNow holding={holding} /></td>
+                <td className="text-ink"><RecordedAtGrant holding={holding} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </>
+  );
+}
+
+/** The origin as a filter label: the column says it in full, a button cannot. */
+const ORIGIN_SHORT: Record<string, string> = {
+  rule: 'Rule',
+  request: 'Request',
+  discovered: 'Found at target',
+  manual: 'By hand',
+};

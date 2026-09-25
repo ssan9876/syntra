@@ -58,7 +58,7 @@ function ExportReportButton({ systemId, snapshotId }: { systemId: string; snapsh
         {notice && (
           <Alert tone={notice.tone}>
             {notice.text}{' '}
-            {notice.queued && <Link to="/admin/activity?tab=exports">Follow it in Exports</Link>}
+            {notice.queued && <Link className="link" to="/admin/activity?tab=exports">Follow it in Exports</Link>}
           </Alert>
         )}
       </div>
@@ -208,7 +208,7 @@ export function GovernReportsTab() {
         </form>
       </Panel>
 
-      {loading && <SkeletonRows rows={6} cols={4} />}
+      {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
       {header && (
         <Panel title="What this report is built from">
@@ -255,12 +255,12 @@ export function GovernReportsTab() {
               </Empty>
             </div>
           ) : (
-            <Table>
+            <Table stickyHeader label="Holders">
               <thead>
                 <tr>
-                  <th>Who</th>
-                  <th>Why they are on this list</th>
-                  <th>What they hold</th>
+                  <th scope="col">Who</th>
+                  <th scope="col">Why they are on this list</th>
+                  <th scope="col">What they hold</th>
                 </tr>
               </thead>
               <tbody>

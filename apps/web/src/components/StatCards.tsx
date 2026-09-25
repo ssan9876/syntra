@@ -52,7 +52,9 @@ export function StatCard({ label, value, tone = 'neutral', to, quietWhenZero }: 
     <>
       <div
         className={[
-          'text-2xl font-semibold tabular-nums',
+          // `.figure`: tabular, lining, tracked in. The count is the point of
+          // the card, and a row of them has to align.
+          'figure text-2xl font-semibold tabular-nums',
           quiet ? 'text-muted' : TONES[tone],
         ].join(' ')}
       >
@@ -72,7 +74,10 @@ export function StatCard({ label, value, tone = 'neutral', to, quietWhenZero }: 
       to={to}
       // `border-control` on hover, not a colour change on the figure: the
       // affordance belongs to the card, and 1.4.11 measures the boundary.
-      className={`${shell} block hover:border-border-control hover:bg-surface-2`}
+      // Focus gets the same boundary under the console's global ring, so a
+      // card reached by Tab is as obviously the thing about to open as one
+      // under the pointer.
+      className={`${shell} block hover:border-border-control hover:bg-surface-2 focus-visible:border-border-control focus-visible:bg-surface-2`}
     >
       {body}
     </Link>

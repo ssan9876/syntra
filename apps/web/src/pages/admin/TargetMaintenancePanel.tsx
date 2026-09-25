@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Check, Field, Panel, Status } from '@syntra/ui';
+import { Alert, Button, Check, Field, Panel, StateBadge, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import type { Target } from './target-form.js';
 
@@ -22,7 +22,7 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
   const [duration, setDuration] = useState(String(target.maintenanceWindowDurationMinutes ?? 120));
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     setEnabled(target.maintenanceWindowEnabled === true);
@@ -46,7 +46,6 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
     }
     setBusy(true);
     setProblem(null);
-    setNotice(null);
     try {
       await api(`/api/admin/targets/${target.id}`, {
         method: 'PATCH',
@@ -59,7 +58,7 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
           },
         }),
       });
-      setNotice('Maintenance window saved.');
+      toast({ tone: 'success', title: 'Maintenance window saved' });
       onChanged();
     } catch (cause) {
       setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The maintenance window could not be saved.');
@@ -69,10 +68,19 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
   }
 
   return (
-    <Panel title="Write maintenance window" actions={<Status tone={enabled ? 'warning' : 'neutral'}>{enabled ? 'Window enforced' : 'No window'}</Status>}>
+    <Panel
+      title="Write maintenance window"
+      // Read from the TARGET, not from the unsaved box below: the badge says
+      // what the connector is doing now, and a tick that has not been saved
+      // has not restricted anything yet.
+      actions={
+        target.maintenanceWindowEnabled === true
+          ? <StateBadge state="attention">Window enforced</StateBadge>
+          : <StateBadge state="inactive">No window</StateBadge>
+      }
+    >
       <div className="space-y-4 p-4">
         {problem && <Alert tone="danger">{problem}</Alert>}
-        {notice && <Alert tone="info" aria-live="polite">{notice}</Alert>}
         <Check checked={enabled} onChange={setEnabled} label="Restrict external writes to a UTC maintenance window" />
         <fieldset disabled={!enabled || busy} className="space-y-3 disabled:opacity-60">
           <legend className="mb-2 font-medium text-ink">Allowed UTC days</legend>

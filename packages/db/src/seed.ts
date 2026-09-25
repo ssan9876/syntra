@@ -276,6 +276,94 @@ await withTenant(tenant.id, async (tx) => {
     contractValues: ['Learning'],
   });
 
+  // Opt-in lifecycle scenarios, so the states the console exists to make
+  // legible can be seen without a directory to break: a hire half-provisioned,
+  // a target that failed, a write waiting for read-back, and a departure past
+  // its deadline. Off by default because the end-to-end suite counts rows and
+  // tiles on a plain seed, and a demo that changes those counts would be a
+  // demo that breaks it.
+  //
+  // The two targets are DISABLED. Nothing here is real work, and an enabled
+  // target on a fresh install would have the scheduler try to bind to a
+  // directory that does not exist.
+  if (process.env.SEED_DEMO === '1') {
+    const directory = await tx.targetSystem.create({
+      data: {
+        tenantId: tenant.id,
+        name: 'Active Directory (demo)',
+        config: { url: 'ldaps://dc.demo.invalid:636', tlsMode: 'ldaps' },
+        secretName: 'target/demo-directory',
+        enabled: false,
+      },
+    });
+    const rostering = await tx.targetSystem.create({
+      data: {
+        tenantId: tenant.id,
+        name: 'Rostering (demo)',
+        config: { url: 'ldaps://roster.demo.invalid:636', tlsMode: 'ldaps' },
+        secretName: 'target/demo-rostering',
+        enabled: false,
+      },
+    });
+    const receipt = (
+      personId: string,
+      target: { id: string; name: string },
+      requestKey: string,
+      status: string,
+      message: string | null,
+    ) =>
+      tx.personProvisionReceipt.create({
+        data: { tenantId: tenant.id, personId, targetSystemId: target.id, targetName: target.name, requestKey, status, message },
+      });
+
+    // Waiting for read-back: written, not yet observed. Must never read as done.
+    await receipt(rin.id, directory, '00000000-0000-4000-8000-00000000d001', 'verification_pending',
+      'Waiting for target execution or manual read-back verification.');
+
+    // Partial provisioning: one target observed, one failed.
+    const priya = await createPerson(tx, {
+      givenName: 'Priya',
+      familyName: 'Shah',
+      businessEmail: 'priya.shah@acme.localhost',
+      externalId: 'E1004',
+    });
+    await createContract(tx, priya.id, {
+      sequence: 1,
+      isPrimary: true,
+      startDate: day('2026-09-14'),
+      jobTitle: 'Pharmacist',
+      department: 'Care',
+    });
+    await receipt(priya.id, directory, '00000000-0000-4000-8000-00000000d002', 'applied',
+      'Target state matched after 1 observation.');
+    await receipt(priya.id, rostering, '00000000-0000-4000-8000-00000000d002', 'failed',
+      'The target refused the bind credential. Update the stored credential and retry.');
+
+    // A departure past its deadline, nobody has acknowledged it.
+    await tx.lifecycleOperation.create({
+      data: {
+        tenantId: tenant.id,
+        personId: sam.id,
+        kind: 'offboard',
+        idempotencyKey: 'demo-offboard-sam',
+        inputFingerprint: 'demo',
+        status: 'waiting',
+        priority: 'high',
+        dueAt: day('2026-06-01'),
+      },
+    });
+
+    // Categories and built-in logos, so the portal shows its grouping and its
+    // self-hosted marks. The CRM keeps its monogram: a tile with no logo is a
+    // state the portal must still draw well.
+    await tx.application.update({ where: { id: rota.id }, data: { category: 'Clinical', iconKey: 'rota' } });
+    await tx.application.update({ where: { id: crm.id }, data: { category: 'Clinical' } });
+    await tx.application.update({ where: { id: wiki.id }, data: { category: 'Everyday', iconKey: 'wiki' } });
+    await tx.application.update({ where: { id: finance.id }, data: { category: 'Everyday', iconKey: 'expenses' } });
+
+    console.log('  SEED_DEMO: lifecycle scenarios and portal categories added.');
+  }
+
   console.log(`Seeded tenant ${tenant.slug} (${tenant.primaryDomain}).`);
   console.log('  admin / SEED_ADMIN_PASSWORD  — full administrative access');
   console.log('  jdoe  / SEED_USER_PASSWORD   — ordinary portal user');

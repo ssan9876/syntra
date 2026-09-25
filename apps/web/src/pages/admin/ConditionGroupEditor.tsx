@@ -30,6 +30,8 @@ export interface ConditionGroupEditorProps {
  * for indentation — there is no recursion-depth limit here because
  * `conditionSchema` in `condition.ts` has none either.
  */
+// Every control here says `type="button"`: the editor sits inside forms, and
+// a button that defaults to submit turns "Add condition" into "Save rule".
 export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEditorProps) {
   const indent = { marginLeft: `${depth * 1.25}rem` };
 
@@ -63,18 +65,20 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
+            type="button"
             size="sm"
             onClick={() => onChange({ kind: 'group', combinator: 'all', children: [node] })}
           >
             Group with AND
           </Button>
           <Button
+            type="button"
             size="sm"
             onClick={() => onChange({ kind: 'group', combinator: 'any', children: [node] })}
           >
             Group with OR
           </Button>
-          <Button size="sm" onClick={() => onChange({ kind: 'not', child: node })}>
+          <Button type="button" size="sm" onClick={() => onChange({ kind: 'not', child: node })}>
             Negate
           </Button>
         </div>
@@ -91,7 +95,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
           onChange={(child) => onChange({ kind: 'not', child })}
           depth={depth + 1}
         />
-        <Button size="sm" onClick={() => onChange(node.child)}>
+        <Button type="button" size="sm" onClick={() => onChange(node.child)}>
           Remove NOT, keep the condition inside it
         </Button>
       </div>
@@ -114,6 +118,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
             depth={depth + 1}
           />
           <Button
+            type="button"
             size="sm"
             onClick={() => {
               const children = group.children.filter((_, i) => i !== index);
@@ -125,6 +130,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
         </div>
       ))}
       <Button
+        type="button"
         size="sm"
         onClick={() => onChange({ ...group, children: [...group.children, BLANK_LEAF] })}
       >

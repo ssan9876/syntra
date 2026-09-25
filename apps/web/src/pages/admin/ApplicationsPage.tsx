@@ -1,19 +1,27 @@
 import { useState } from 'react';
+import type { ApplicationIconView } from '@syntra/contracts';
+import { AppLogo } from '../../components/AppLogo.js';
 import { Link } from 'react-router-dom';
 import {
   Alert,
   Button,
   Empty,
+  ErrorSummary,
   Field,
+  FormActions,
+  Identifier,
   Panel,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
+  useToast,
 } from '@syntra/ui';
 // The file, not the package index: the index carries every zod schema.
 import { isLaunchableUrl } from '@syntra/contracts/src/launchable-url.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
 import { StatCard, StatGrid } from '../../components/StatCards.js';
 
@@ -34,6 +42,8 @@ interface Row {
   slug: string;
   type: string;
   visibility: 'assigned' | 'hidden';
+  /** Absent from a server older than self-hosted logos. */
+  icon?: ApplicationIconView;
   status: string;
 }
 
@@ -62,7 +72,9 @@ function CatalogPicker({
   const [chosen, setChosen] = useState<CatalogEntry | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
   const [problem, setProblem] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [secret, setSecret] = useState<{ clientId: string; clientSecret: string } | null>(
     null,
   );
@@ -73,6 +85,7 @@ function CatalogPicker({
     if (!chosen) return;
     setBusy(true);
     setProblem(null);
+    setErrors({});
     try {
       const created = await api<{ clientId?: string; clientSecret?: string }>(
         '/api/admin/applications/from-catalog',
@@ -87,12 +100,19 @@ function CatalogPicker({
         setSecret({ clientId: created.clientId, clientSecret: created.clientSecret });
         return;
       }
+      toast({ tone: 'success', title: `${chosen.name} added` });
       onCreated();
     } catch (cause) {
+      // A variable the server refused is marked against its own box; the
+      // path's last segment is the variable's key, which is the box's name.
+      const marked = formFieldErrors(cause);
+      setErrors(marked);
       setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be created.',
+        Object.keys(marked).length > 0
+          ? null
+          : cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That could not be created.',
       );
     } finally {
       setBusy(false);
@@ -102,18 +122,32 @@ function CatalogPicker({
   if (secret) {
     return (
       <Panel title={`${chosen?.name ?? 'Application'} is registered`}>
-        <div className="space-y-3 p-4">
-          <p className="text-muted">
-            Paste these into the application now. The secret is not shown again.
-          </p>
-          <Field label="Client ID" value={secret.clientId} onChange={() => undefined} readOnly />
+        <div className="space-y-4 p-4">
+          {/* A warning, not a grey caption: this is the one moment the secret
+              can still be copied, and the step after it throws it away. */}
+          <Alert tone="warning" title="The secret is not shown again">
+            Paste both into the application now.
+          </Alert>
+          <dl>
+            <dt className="mb-1.5 font-medium text-ink">Client ID</dt>
+            <dd>
+              <Identifier value={secret.clientId} />
+            </dd>
+          </dl>
           <Field
             label="Client secret"
             value={secret.clientSecret}
             onChange={() => undefined}
             readOnly
+            className="max-w-xl"
           />
-          <Button variant="primary" onClick={onCreated}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              toast({ tone: 'success', title: `${chosen?.name ?? 'Application'} added` });
+              onCreated();
+            }}
+          >
             Done
           </Button>
         </div>
@@ -124,10 +158,28 @@ function CatalogPicker({
   if (chosen) {
     return (
       <Panel title={`Add ${chosen.name}`}>
-        <div className="space-y-4 p-4">
+        <form
+          noValidate
+          className="space-y-4 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void create();
+          }}
+        >
+          <ErrorSummary
+            errors={summaryErrors(
+              errors,
+              Object.fromEntries(chosen.variables.map((v) => [v.key, v.label])),
+              problem,
+            )}
+            {...(Object.keys(errors).length === 0 ? { title: 'Not added' } : {})}
+          />
           {chosen.variables.map((variable) => (
             <Field
               key={variable.key}
+              name={variable.key}
+              error={errors[variable.key]}
+              className="max-w-xl"
               label={variable.label}
               value={values[variable.key] ?? ''}
               onChange={(v) => setValues((current) => ({ ...current, [variable.key]: v }))}
@@ -139,20 +191,10 @@ function CatalogPicker({
             <p className="text-muted">Nothing else is needed.</p>
           )}
 
-          {problem && <Alert tone="danger">{problem}</Alert>}
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="primary" loading={busy} onClick={create}>
-              Add {chosen.name}
-            </Button>
-            <Button variant="secondary" onClick={() => setChosen(null)}>
-              Back
-            </Button>
-            {/*
-              The vendor's own page. An entry is a convenience and that page is
-              the authority, so it is one click away at the moment somebody
-              might doubt a value.
-            */}
+          {/* The vendor's own page. An entry is a convenience and that page
+              is the authority, so it is one click away at the moment somebody
+              might doubt a value. */}
+          <p>
             <a
               className="link text-sm"
               href={chosen.docsUrl}
@@ -161,8 +203,17 @@ function CatalogPicker({
             >
               {chosen.name} SSO documentation
             </a>
-          </div>
-        </div>
+          </p>
+
+          <FormActions>
+            <Button type="button" variant="secondary" onClick={() => setChosen(null)}>
+              Back
+            </Button>
+            <Button type="submit" variant="primary" loading={busy}>
+              Add {chosen.name}
+            </Button>
+          </FormActions>
+        </form>
       </Panel>
     );
   }
@@ -224,10 +275,16 @@ export function ApplicationsPage() {
   const [slugError, setSlugError] = useState<string | null>(null);
   const [launchUrlError, setLaunchUrlError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  /** Every other per-field refusal the server names, against its own box. */
+  const [formFields, setFormFields] = useState<Record<string, string>>({});
+  const toast = useToast();
+
+  const dirty = [name, slug, description, launchUrl, category].some((v) => v !== '');
 
   async function create() {
     setSlugError(null);
     setFormError(null);
+    setFormFields({});
 
     // Checked here too, not only by the API: `z.string().url()` accepts
     // `javascript:`, and this is the URL the portal navigates a signed-in
@@ -260,10 +317,14 @@ export function ApplicationsPage() {
       setDescription('');
       setLaunchUrl('');
       setCategory('');
+      toast({ tone: 'success', title: 'Application saved' });
       reload();
     } catch (cause) {
+      const marked = formFieldErrors(cause);
       if (cause instanceof ApiError && cause.problem.status === 409) {
         setSlugError('That slug is already used.');
+      } else if (Object.keys(marked).length > 0) {
+        setFormFields(marked);
       } else {
         setFormError(
           cause instanceof ApiError
@@ -337,46 +398,96 @@ export function ApplicationsPage() {
 
       {adding && (
         <Panel title="New application">
-          <div className="space-y-4 p-4">
-            <Field label="Name" value={name} onChange={setName} required />
-            <Field
-              label="Slug"
-              value={slug}
-              onChange={setSlug}
-              warning={
-                // Only once they have typed one. An empty field has nothing
-                // to warn about, and a permanent caption under an empty box
-                // is the hint this replaced.
-                slug ? 'This appears in URLs and cannot be changed after the application is created.' : undefined
-              }
-              required
-              {...(slugError ? { error: slugError } : {})}
+          <form
+            noValidate
+            className="space-y-4 p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void create();
+            }}
+          >
+            <ErrorSummary
+              errors={summaryErrors(
+                {
+                  ...formFields,
+                  ...(slugError ? { slug: slugError } : {}),
+                  ...(launchUrlError ? { launchUrl: launchUrlError } : {}),
+                },
+                {
+                  name: 'Name',
+                  slug: 'Slug',
+                  description: 'Description',
+                  category: 'Category',
+                  launchUrl: 'Launch URL',
+                },
+                formError,
+              )}
+              {...(!slugError && !launchUrlError && Object.keys(formFields).length === 0
+                ? { title: 'Not saved' }
+                : {})}
             />
-            <Field label="Description" value={description} onChange={setDescription} />
-            <Field
-              label="Category"
-              value={category}
-              onChange={setCategory}
-            />
-            <Field
-              label="Launch URL"
-              value={launchUrl}
-              onChange={(v) => {
-                setLaunchUrl(v);
-                if (launchUrlError) setLaunchUrlError(null);
-              }}
-              required
-              {...(launchUrlError ? { error: launchUrlError } : {})}
-            />
-            {formError && (
-              <Alert tone="danger">
-                <span>{formError}</span>
-              </Alert>
-            )}
-            <Button variant="primary" loading={busy} onClick={create}>
-              Save application
-            </Button>
-          </div>
+            <div className="grid max-w-4xl gap-4 sm:grid-cols-2">
+              <Field
+                name="name"
+                label="Name"
+                value={name}
+                onChange={setName}
+                required
+                error={formFields.name}
+              />
+              <Field
+                name="slug"
+                label="Slug"
+                value={slug}
+                onChange={setSlug}
+                warning={
+                  // Only once they have typed one. An empty field has nothing
+                  // to warn about, and a permanent caption under an empty box
+                  // is the hint this replaced.
+                  slug ? 'This appears in URLs and cannot be changed after the application is created.' : undefined
+                }
+                required
+                error={slugError ?? formFields.slug}
+              />
+              <Field
+                name="launchUrl"
+                label="Launch URL"
+                value={launchUrl}
+                onChange={(v) => {
+                  setLaunchUrl(v);
+                  if (launchUrlError) setLaunchUrlError(null);
+                }}
+                required
+                placeholder="https://"
+                error={launchUrlError ?? formFields.launchUrl}
+              />
+              <Field
+                name="category"
+                label="Category"
+                value={category}
+                onChange={setCategory}
+                error={formFields.category}
+              />
+              <Field
+                name="description"
+                label="Description"
+                value={description}
+                onChange={setDescription}
+                className="sm:col-span-2"
+                error={formFields.description}
+              />
+            </div>
+            <FormActions
+              status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
+            >
+              <Button type="button" variant="secondary" onClick={() => setAdding(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" loading={busy}>
+                Save application
+              </Button>
+            </FormActions>
+          </form>
         </Panel>
       )}
 
@@ -411,13 +522,18 @@ export function ApplicationsPage() {
                 {data.applications.map((row) => (
                   <tr key={row.id}>
                     <td>
-                      <Link
-                        to={`/admin/applications/${row.id}`}
-                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
-                      >
-                        {row.name}
-                      </Link>
-                      <span className="ml-2 text-sm text-muted">{row.slug}</span>
+                      <span className="flex items-center gap-2.5">
+                        {/* The mark the portal shows, so a list of forty
+                            applications is scanned the way employees see it. */}
+                        <AppLogo name={row.name} src={row.icon?.url ?? null} size="sm" />
+                        <Link
+                          to={`/admin/applications/${row.id}`}
+                          className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                        >
+                          {row.name}
+                        </Link>
+                        <span className="text-sm text-muted">{row.slug}</span>
+                      </span>
                     </td>
                     <td className="max-sm:hidden">{row.type}</td>
                     <td>
@@ -434,9 +550,11 @@ export function ApplicationsPage() {
                         the catalog unauditable — the same rule as an inactive
                         user in the directory.
                       */}
-                      <Status tone={row.status === 'active' ? 'active' : 'inactive'}>
-                        {row.status === 'active' ? 'Active' : 'Retired'}
-                      </Status>
+                      {row.status === 'active' ? (
+                        <StateBadge state="healthy">Active</StateBadge>
+                      ) : (
+                        <StateBadge state="inactive">Retired</StateBadge>
+                      )}
                     </td>
                   </tr>
                 ))}

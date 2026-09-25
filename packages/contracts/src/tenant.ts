@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { isSupportUrl } from "./support-url.js";
+
+export { isSupportUrl };
 
 /**
  * The tenant settings the console may change.
@@ -200,7 +203,7 @@ export type RevokeTenantSessionsRequest = z.infer<typeof revokeTenantSessionsReq
  * a misspelled `brandPrimay` that came back 200 leaves an administrator
  * believing they set a colour they did not.
  *
- * Every field is sent whole and nullable — the form owns all four, and null
+ * Every field is sent whole and nullable — the form owns all of them, and null
  * clears one back to Syntra's own. The real constraints (a readable contrast
  * ratio, a logo that is not an SVG and does not fetch from anywhere) live in
  * `brand-service.ts`: they need arithmetic and they need to be enforced
@@ -212,6 +215,21 @@ export const brandRequest = z
     logo: z.string().max(400_000).nullable().optional(),
     primary: z.string().max(7).nullable().optional(),
     accent: z.string().max(7).nullable().optional(),
+    /**
+     * Where "Get help" goes: an `https:` page or a `mailto:` address, and
+     * nothing else -- see `isSupportUrl`. Checked HERE as well as in the
+     * service because this is the one brand field whose failure is not ugly
+     * but hostile: it is a link on the unauthenticated sign-in page.
+     */
+    supportUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .refine(isSupportUrl, { message: 'Must be an https: or mailto: URL' })
+      .nullable()
+      .optional(),
+    /** The link's words. Null means the page's own "Get help". */
+    supportLabel: z.string().trim().min(1).max(40).nullable().optional(),
   })
   .strict();
 export type BrandRequest = z.infer<typeof brandRequest>;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { OnboardPersonPage } from './OnboardPersonPage.js';
@@ -112,7 +112,7 @@ describe('OnboardPersonPage', () => {
     });
   });
 
-  it('lands on the new person once both are written', async () => {
+  it('ends on a receipt linking the new person once both are written', async () => {
     const user = userEvent.setup();
     mockRoutes({
       '/api/admin/persons': () => json({ id: 'p1' }, 201),
@@ -123,7 +123,33 @@ describe('OnboardPersonPage', () => {
     await fillMinimum(user);
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
 
-    expect(await screen.findByText('person page')).toBeInTheDocument();
+    // A receipt, not a redirect: what was written, each with its state.
+    const receipt = await screen.findByRole('table', { name: 'Receipt' });
+    expect(within(receipt).getByText('Contract')).toBeInTheDocument();
+    expect(within(receipt).getByText('None enabled')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open person' })).toHaveAttribute('href', '/admin/people/p1');
+  });
+
+  it('lists every missing required field before writing anything', async () => {
+    const user = userEvent.setup();
+    const writes: string[] = [];
+    mockRoutes({
+      '/api/admin/persons': () => {
+        writes.push('person');
+        return json({ id: 'p1' }, 201);
+      },
+    });
+
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '' } });
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+
+    const summary = await screen.findByRole('alert');
+    expect(within(summary).getByRole('button', { name: 'Enter a given name' })).toBeInTheDocument();
+    expect(within(summary).getByRole('button', { name: 'Enter a family name' })).toBeInTheDocument();
+    expect(within(summary).getByRole('button', { name: 'Enter a start date' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Given name')).toBeRequired();
+    expect(writes).toEqual([]);
   });
 
   it('keeps the person and names what is missing when the contract is refused', async () => {
@@ -227,8 +253,13 @@ describe('OnboardPersonPage', () => {
       '/api/admin/persons': () => json({ id: 'p1' }, 201),
       '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
       '/api/admin/persons/p1/provision-receipts': (init) => {
-        requested = JSON.parse(String(init?.body));
-        return json({ receipts: [{ id: 'receipt-1', personId: 'p1', targetSystemId: 't1', status: 'pending' }] }, 202);
+        // The POST queues; the receipt then polls the same path with GET and
+        // finds the target read back.
+        if (init?.method === 'POST') {
+          requested = JSON.parse(String(init.body));
+          return json({ receipts: [{ id: 'receipt-1', personId: 'p1', targetSystemId: 't1', targetName: 'AD', status: 'pending', runId: null, message: null, createdAt: '2026-09-24T00:00:00Z' }] }, 202);
+        }
+        return json({ receipts: [{ id: 'receipt-1', personId: 'p1', targetSystemId: 't1', targetName: 'AD', status: 'applied', runId: 'r1', message: null, createdAt: '2026-09-24T00:00:00Z' }] });
       },
     });
 
@@ -237,7 +268,11 @@ describe('OnboardPersonPage', () => {
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
 
     await waitFor(() => expect(requested).toMatchObject({ targetIds: ['t1'] }));
-    expect(await screen.findByText('person page')).toBeInTheDocument();
+    const receipt = await screen.findByRole('table', { name: 'Receipt' });
+    // Planned first, observed only once the target has been read back.
+    const row = within(receipt).getByText('AD').closest('tr') as HTMLElement;
+    expect(await within(row).findByText('Observed')).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: 'Review exact run' })).toHaveAttribute('href', '/admin/targets/t1/runs/r1');
   });
 
   // Exact run correlation and retry behavior live behind the receipt endpoint.
@@ -257,7 +292,7 @@ describe('OnboardPersonPage', () => {
     await fillMinimum(user);
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
 
-    expect(await screen.findByText('person page')).toBeInTheDocument();
+    expect(await screen.findByText('None enabled')).toBeInTheDocument();
   });
 
   it('shows which container the typed department would put them in', async () => {

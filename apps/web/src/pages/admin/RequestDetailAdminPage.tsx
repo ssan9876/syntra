@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Field, Panel, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { PageHeader } from './PageHeader.js';
 import { useApiResource } from './hooks.js';
 import { ApiError, api } from '../../session/api.js';
-import { REQUEST_LABEL, REQUEST_TONE, when } from '../automate/status.js';
+import { REQUEST_LABEL, REQUEST_STATE, when } from '../automate/status.js';
 
 interface Detail {
   id: string;
@@ -48,12 +48,13 @@ interface Detail {
 
 export function RequestDetailAdminPage() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, loading, reload } = useApiResource<Detail>(
+  const { data, error, reload } = useApiResource<Detail>(
     id === undefined ? null : `/api/admin/automate/requests/${id}`,
   );
   const [comment, setComment] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const decide = async (decision: 'approve' | 'reject') => {
     setBusy(true);
@@ -63,6 +64,7 @@ export function RequestDetailAdminPage() {
         method: 'POST',
         body: JSON.stringify({ decision, comment }),
       });
+      toast({ title: decision === 'approve' ? 'Request approved' : 'Request refused' });
       reload();
     } catch (cause) {
       setProblem(
@@ -77,21 +79,27 @@ export function RequestDetailAdminPage() {
 
   return (
     <>
-      <PageHeader title="Request" />
+      <PageHeader
+        title="Request"
+        status={
+          data ? (
+            <StateBadge state={REQUEST_STATE[data.status] ?? 'setup'}>
+              {REQUEST_LABEL[data.status] ?? data.status}
+            </StateBadge>
+          ) : undefined
+        }
+      />
       {error && <Alert tone="danger">{error}</Alert>}
       {problem && <Alert tone="warning">{problem}</Alert>}
-      {loading && (
+      {!data && !error && (
         <Panel>
           <SkeletonRows rows={5} cols={3} />
         </Panel>
       )}
-      {!loading && data && (
+      {data && (
         <>
           <Panel title={data.product?.name ?? 'Requested access'}>
             <div className="space-y-2 p-4">
-              <Status tone={REQUEST_TONE[data.status] ?? 'neutral'}>
-                {REQUEST_LABEL[data.status] ?? data.status}
-              </Status>
               <p className="text-muted">For {data.subjectPersonId}</p>
               {data.requestedByPersonId !== null &&
                 data.requestedByPersonId !== data.subjectPersonId && (

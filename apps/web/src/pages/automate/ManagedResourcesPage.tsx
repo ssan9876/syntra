@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
@@ -27,6 +27,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
   const [personId, setPersonId] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const act = async (
     action: 'grant' | 'revoke',
@@ -47,6 +48,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
         },
       );
       setPersonId('');
+      toast({ title: action === 'grant' ? 'Access given' : 'Access removed' });
       reload();
     } catch (cause) {
       // "That person is outside the audience for this resource" and "ask an
@@ -69,10 +71,10 @@ function ResourcePanel({ resource }: { resource: Managed }) {
       <div className="space-y-3 p-4">
         {error && <Alert tone="danger">{error}</Alert>}
         {problem && <Alert tone="warning">{problem}</Alert>}
-        {loading && <SkeletonRows rows={3} cols={2} />}
-        {!loading && (
+        {!data && loading && <SkeletonRows rows={3} cols={2} />}
+        {data && (
           <ul className="divide-y divide-border-subtle">
-            {(data?.members ?? []).map((member) => (
+            {(data.members ?? []).map((member) => (
               <li
                 key={member.id}
                 className="flex items-center justify-between py-2"
@@ -129,19 +131,19 @@ export function ManagedResourcesPage() {
         </p>
         {error && <Alert tone="danger">{error}</Alert>}
         <div className="mt-6 space-y-6">
-          {loading && (
+          {!data && loading && (
             <Panel>
               <SkeletonRows rows={2} cols={2} />
             </Panel>
           )}
-          {!loading && (data?.resources ?? []).length === 0 && (
+          {data && (data.resources ?? []).length === 0 && (
             <Empty title="You do not manage anything yet">
               An administrator delegates a specific group or application to you,
               and it appears here.
             </Empty>
           )}
-          {!loading &&
-            (data?.resources ?? []).map((resource) => (
+          {data &&
+            (data.resources ?? []).map((resource) => (
               <ResourcePanel key={resource.delegationId} resource={resource} />
             ))}
         </div>

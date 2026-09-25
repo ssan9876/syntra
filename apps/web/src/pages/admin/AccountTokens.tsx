@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Field, Identifier, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 
@@ -46,6 +46,7 @@ export function AccountTokens({ userId }: { userId: string }) {
   const [issued, setIssued] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const tokens = data?.tokens ?? [];
   const mayManage = can('token.manage');
@@ -89,6 +90,7 @@ export function AccountTokens({ userId }: { userId: string }) {
         setFailure('That token could not be revoked.');
         return;
       }
+      toast({ title: 'Token revoked' });
       reload();
     } finally {
       setBusy(false);
@@ -102,12 +104,14 @@ export function AccountTokens({ userId }: { userId: string }) {
 
       {issued && (
         <Alert tone="warning" title="New API token">
-          <code className="mt-1 block break-all font-mono text-sm">{issued}</code>
+          <span className="mt-1 block">
+            <Identifier value={issued} />
+          </span>
           Copy it into the integration now. It is not shown again.
         </Alert>
       )}
 
-      {loading && <SkeletonRows rows={2} />}
+      {!data && loading && <SkeletonRows rows={2} />}
 
       {!loading && tokens.length === 0 && (
         <Empty title="No API tokens">

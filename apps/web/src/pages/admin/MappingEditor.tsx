@@ -1,4 +1,4 @@
-import { Panel, Table } from '@syntra/ui';
+import { Button, Field, Select, Table } from '@syntra/ui';
 
 export type ObjectType = 'user' | 'group' | 'orgUnit';
 
@@ -24,12 +24,12 @@ const TRANSFORMS: { value: MappingRule['transform']; label: string }[] = [
   { value: 'lowercase', label: 'Lowercase' },
 ];
 
-// The same shape as Field's input, one size down. Focus is left to the global
-// :focus-visible rule in index.css, as every other control here does.
-const control =
-  'h-8 w-full rounded-control border border-border-subtle bg-bg px-2 text-ink ' +
-  'transition-colors duration-150 hover:border-border-strong ' +
-  'disabled:bg-surface-2 disabled:text-muted';
+// The shared controls, with their label kept for assistive technology and
+// hidden on screen: in a table the column header already names the cell, and
+// a label repeated in every row is a label nobody reads. The cells used to be
+// hand-written with `border-subtle` round them, which at 1.44:1 fails 1.4.11
+// as the edge of something somebody has to find and type into.
+const cell = 'min-w-32 [&>label]:sr-only';
 
 /**
  * The rule the server enforces, stated where the choice is made.
@@ -84,41 +84,26 @@ export function MappingEditor({
     ]);
 
   return (
-    <Panel
-      title="Attribute mappings"
-      actions={
-        onSeed && (
-          <span className="flex items-center gap-2 text-sm text-muted">
-            Start from
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onSeed('activeDirectory')}
-              className="rounded-control border border-border-control px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
-            >
-              Active Directory
-            </button>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onSeed('openLdap')}
-              className="rounded-control border border-border-control px-2 py-1 font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
-            >
-              OpenLDAP
-            </button>
-          </span>
-        )
-      }
-      bodyClassName="divide-y divide-border-subtle"
-    >
+    <div className="space-y-5 sm:col-span-2">
+      {onSeed && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+          Start from
+          <Button size="sm" type="button" disabled={disabled} onClick={() => onSeed('activeDirectory')}>
+            Active Directory
+          </Button>
+          <Button size="sm" type="button" disabled={disabled} onClick={() => onSeed('openLdap')}>
+            OpenLDAP
+          </Button>
+        </div>
+      )}
       {(['user', 'group', 'orgUnit'] as const).map((objectType) => {
         const indexed = rules
           .map((rule, index) => ({ rule, index }))
           .filter((entry) => entry.rule.objectType === objectType);
 
         return (
-          <section key={objectType} className="px-4 py-4">
-            <h3 className="font-medium text-ink">{TYPE_LABEL[objectType]}</h3>
+          <section key={objectType} aria-label={TYPE_LABEL[objectType]}>
+            <h4 className="font-medium text-ink">{TYPE_LABEL[objectType]}</h4>
             {objectType === 'user' && (
               <p className="mt-1 text-sm text-muted">
                 Exactly one user mapping is the correlation key: the attribute a
@@ -132,22 +117,14 @@ export function MappingEditor({
                 Nothing mapped, so nothing of this kind is synced.
               </p>
             ) : (
-              <div className="mt-3"><Table>
+              <div className="mt-3"><Table tight>
                 <thead>
                   <tr>
-                    <th scope="col" className="pb-1.5 pr-3">
-                      Directory attribute
-                    </th>
-                    <th scope="col" className="pb-1.5 pr-3">
-                      Syntra field
-                    </th>
-                    <th scope="col" className="pb-1.5 pr-3">
-                      Transform
-                    </th>
-                    <th scope="col" className="pb-1.5 pr-3">
-                      Correlation key
-                    </th>
-                    <th scope="col" className="pb-1.5">
+                    <th scope="col">Directory attribute</th>
+                    <th scope="col">Syntra field</th>
+                    <th scope="col">Transform</th>
+                    <th scope="col">Correlation key</th>
+                    <th scope="col">
                       <span className="sr-only">Remove</span>
                     </th>
                   </tr>
@@ -155,67 +132,45 @@ export function MappingEditor({
                 <tbody>
                   {indexed.map(({ rule, index }, position) => (
                     <tr key={index}>
-                      <td className="pr-3 align-middle">
-                        <input
-                          aria-label={`${TYPE_LABEL[objectType]} directory attribute ${
-                            position + 1
-                          }`}
+                      <td className="align-middle">
+                        <Field
+                          label={`${TYPE_LABEL[objectType]} directory attribute ${position + 1}`}
+                          name={`mapping-${objectType}-${position + 1}-attribute`}
                           value={rule.sourceAttribute}
                           disabled={disabled}
-                          onChange={(e) =>
-                            replace(index, { sourceAttribute: e.target.value })
-                          }
-                          className={control}
+                          onChange={(value) => replace(index, { sourceAttribute: value })}
+                          className={cell}
                         />
                       </td>
-                      <td className="pr-3 align-middle">
-                        <select
-                          aria-label={`${TYPE_LABEL[objectType]} Syntra field ${
-                            position + 1
-                          }`}
+                      <td className="align-middle">
+                        {/* A field the server would refuse is not offered.
+                            `status`, `sourceId` and the rest are Syntra's, and
+                            a mapping onto them is how directory content would
+                            deactivate an account past the guard. */}
+                        <Select
+                          label={`${TYPE_LABEL[objectType]} Syntra field ${position + 1}`}
                           value={rule.targetField}
                           disabled={disabled}
-                          onChange={(e) =>
-                            replace(index, { targetField: e.target.value })
-                          }
-                          className={control}
-                        >
-                          {/* A field the server would refuse is not offered.
-                              `status`, `sourceId` and the rest are Syntra's,
-                              and a mapping onto them is how directory content
-                              would deactivate an account past the guard. */}
-                          {(assignableFields?.[objectType] ?? [rule.targetField]).map(
-                            (field) => (
-                              <option key={field} value={field}>
-                                {field}
-                              </option>
-                            ),
+                          onChange={(value) => replace(index, { targetField: value })}
+                          options={(assignableFields?.[objectType] ?? [rule.targetField]).map(
+                            (field) => ({ value: field, label: field }),
                           )}
-                        </select>
+                          className={cell}
+                        />
                       </td>
-                      <td className="pr-3 align-middle">
-                        <select
-                          aria-label={`${TYPE_LABEL[objectType]} transform ${
-                            position + 1
-                          }`}
+                      <td className="align-middle">
+                        <Select
+                          label={`${TYPE_LABEL[objectType]} transform ${position + 1}`}
                           value={rule.transform}
                           disabled={disabled}
-                          onChange={(e) =>
-                            replace(index, {
-                              transform: e.target
-                                .value as MappingRule['transform'],
-                            })
+                          onChange={(value) =>
+                            replace(index, { transform: value as MappingRule['transform'] })
                           }
-                          className={control}
-                        >
-                          {TRANSFORMS.map((t) => (
-                            <option key={t.value} value={t.value}>
-                              {t.label}
-                            </option>
-                          ))}
-                        </select>
+                          options={TRANSFORMS}
+                          className={cell}
+                        />
                       </td>
-                      <td className="pr-3 align-middle">
+                      <td className="align-middle">
                         <input
                           type="radio"
                           name={`correlation-${objectType}`}
@@ -229,16 +184,16 @@ export function MappingEditor({
                         />
                       </td>
                       <td className="align-middle text-right">
-                        <button
+                        <Button
+                          size="sm"
                           type="button"
+                          variant="ghost"
                           disabled={disabled}
-                          onClick={() =>
-                            onChange(rules.filter((_, i) => i !== index))
-                          }
-                          className="rounded-control px-2 py-1 text-sm text-muted transition-colors hover:bg-surface-2 hover:text-danger disabled:opacity-55"
+                          onClick={() => onChange(rules.filter((_, i) => i !== index))}
+                          aria-label={`Remove ${TYPE_LABEL[objectType].toLowerCase()} mapping ${position + 1}`}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -246,17 +201,18 @@ export function MappingEditor({
               </Table></div>
             )}
 
-            <button
+            <Button
+              size="sm"
               type="button"
               disabled={disabled}
               onClick={() => add(objectType)}
-              className="mt-3 rounded-control border border-border-control px-2.5 py-1 text-sm font-medium text-ink transition-colors hover:bg-surface-2 disabled:opacity-55"
+              className="mt-3"
             >
               Add a {objectType === 'orgUnit' ? 'unit' : objectType} mapping
-            </button>
+            </Button>
           </section>
         );
       })}
-    </Panel>
+    </div>
   );
 }

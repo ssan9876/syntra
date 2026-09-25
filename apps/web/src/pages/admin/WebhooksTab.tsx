@@ -4,15 +4,20 @@ import {
   Button,
   Check,
   Empty,
+  ErrorSummary,
   Field,
+  FormActions,
+  FormSection,
   Panel,
   RowActions,
   SkeletonRows,
   Status,
   Table,
+  useToast,
 } from '@syntra/ui';
 import { DeleteButton } from './DeleteButton.js';
-import { fieldErrors, useApiResource } from './hooks.js';
+import { useApiResource } from './hooks.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 import { ApiError, api } from '../../session/api.js';
 
 /**
@@ -125,6 +130,7 @@ export function WebhooksTab() {
   const [openDeliveries, setOpenDeliveries] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const toast = useToast();
 
   const endpoints = data?.endpoints ?? [];
 
@@ -265,6 +271,12 @@ export function WebhooksTab() {
                                   method: 'PUT',
                                   body: JSON.stringify({ enabled: !endpoint.enabled }),
                                 });
+                                toast({
+                                  tone: 'success',
+                                  title: endpoint.enabled
+                                    ? `${endpoint.name} paused`
+                                    : `${endpoint.name} resumed`,
+                                });
                               })
                             }
                           >
@@ -386,6 +398,7 @@ function EndpointForm({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const dirty = name !== '' || url !== '' || events.length > 0;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -402,11 +415,14 @@ function EndpointForm({
       );
       onCreated(created.endpoint, created.secret);
     } catch (cause) {
-      setFields(fieldErrors(cause));
+      const marked = formFieldErrors(cause);
+      setFields(marked);
       setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+        Object.keys(marked).length > 0
+          ? null
+          : cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That could not be saved.',
       );
     } finally {
       setBusy(false);
@@ -421,32 +437,49 @@ function EndpointForm({
   return (
     <div className="mb-4">
       <Panel>
-      <form onSubmit={submit} noValidate className="space-y-5 p-5">
-        <div className="grid gap-4 sm:grid-cols-2">
+      <form onSubmit={submit} noValidate className="space-y-6 p-4">
+        <ErrorSummary
+          errors={summaryErrors(fields, { name: 'Name', url: 'Address', events: 'Send' }, problem)}
+          {...(Object.keys(fields).length === 0 ? { title: 'Not created' } : {})}
+        />
+
+        <FormSection title="Endpoint">
           <Field
+            name="name"
             label="Name"
             value={name}
             onChange={setName}
             required
             autoFocus
-            {...(fields.name ? { error: fields.name } : {})}
+            error={fields.name}
           />
           <Field
+            name="url"
             label="Address"
             value={url}
             onChange={setUrl}
             required
             placeholder="https://"
-            {...(fields.url ? { error: fields.url } : {})}
+            error={fields.url}
           />
-        </div>
+        </FormSection>
 
-        <fieldset>
-          <legend className="font-medium text-ink">Send</legend>
-          {/* Nothing ticked means everything, which is what the server does
-              with an empty list. Said here as an option rather than left as a
-              rule somebody has to know. */}
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {/* Nothing ticked means everything, which is what the server does with
+            an empty list. Said as the section's state — beside its title,
+            where a reader deciding whether to tick anything is looking —
+            rather than as a sentence under the boxes. */}
+        <FormSection
+          title="Send"
+          status={
+            <span className="text-muted">
+              {events.length === 0
+                ? 'Everything'
+                : `${events.length} of ${GROUPS.length}`}
+            </span>
+          }
+        >
+          <fieldset className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+            <legend className="sr-only">Send</legend>
             {GROUPS.map((group) => (
               <Check
                 key={group.key}
@@ -455,24 +488,19 @@ function EndpointForm({
                 label={group.label}
               />
             ))}
-          </div>
-          {events.length === 0 && (
-            <p className="mt-3 text-sm text-muted">
-              Nothing ticked sends everything.
-            </p>
-          )}
-        </fieldset>
+          </fieldset>
+        </FormSection>
 
-        {problem && <Alert tone="danger">{problem}</Alert>}
-
-        <div className="flex gap-2">
-          <Button type="submit" variant="primary" loading={busy}>
-            Create and show secret
-          </Button>
+        <FormActions
+          status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
+        >
           <Button type="button" variant="secondary" onClick={onCancel}>
             Cancel
           </Button>
-        </div>
+          <Button type="submit" variant="primary" loading={busy}>
+            Create and show secret
+          </Button>
+        </FormActions>
       </form>
       </Panel>
     </div>
@@ -497,8 +525,10 @@ function Deliveries({
     `/api/admin/webhooks/${endpointId}/deliveries`,
   );
   const [busy, setBusy] = useState<string | null>(null);
+  /** A refused retry. It had no catch, so a 403 read as a dead button. */
+  const [retryProblem, setRetryProblem] = useState<string | null>(null);
 
-  if (loading) return <SkeletonRows rows={3} cols={3} />;
+  if (loading && !data) return <SkeletonRows rows={3} cols={3} />;
   if (error) return <Alert tone="danger">{error}</Alert>;
 
   const deliveries = data?.deliveries ?? [];
@@ -509,7 +539,8 @@ function Deliveries({
   }
 
   return (
-    <div className="p-3">
+    <div className="space-y-3 p-3">
+      {retryProblem && <Alert tone="danger">{retryProblem}</Alert>}
       <Table tight>
         <thead>
           <tr>
@@ -553,6 +584,7 @@ function Deliveries({
                     disabled={busy === delivery.id}
                     onClick={async () => {
                       setBusy(delivery.id);
+                      setRetryProblem(null);
                       try {
                         await api(
                           `/api/admin/webhooks/${endpointId}/deliveries/${delivery.id}/retry`,
@@ -560,6 +592,12 @@ function Deliveries({
                         );
                         reload();
                         onChanged();
+                      } catch (cause) {
+                        setRetryProblem(
+                          cause instanceof ApiError
+                            ? (cause.problem.detail ?? cause.problem.title)
+                            : 'That delivery could not be sent again.',
+                        );
                       } finally {
                         setBusy(null);
                       }

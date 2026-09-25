@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { EmployeeOffboarding } from './EmployeeOffboarding.js';
@@ -31,10 +31,13 @@ describe('EmployeeOffboarding', () => {
     }) as never);
     render(<MemoryRouter><EmployeeOffboarding personId="p1" personName="Maya Okafor" onChanged={changed} /></MemoryRouter>);
     await userEvent.click(screen.getByRole('button', { name: 'End employment' }));
-    expect(await screen.findByText(/disable grace 1 day/)).toBeVisible();
+    const target = await screen.findByRole('row', { name: /AD Active 1 day/ });
+    expect(within(target).getByText('After 30 days')).toBeVisible();
     await userEvent.type(screen.getByLabelText('Reason'), 'Employment ended');
     await userEvent.click(screen.getByRole('button', { name: 'End employment now' }));
-    expect(await screen.findByText(/Directory unavailable/)).toBeVisible();
+    const failed = await screen.findByRole('row', { name: /maya-ad/ });
+    expect(within(failed).getByText('Failed')).toBeVisible();
+    expect(within(failed).getByText('Directory unavailable.')).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open offboarding operation' })).toHaveAttribute('href', '/admin/lifecycle-operations/00000000-0000-4000-8000-000000000001');
     expect(bodies).toEqual([{ reason: 'Employment ended', revision: 'a'.repeat(64), urgent: false }]);
     expect(changed).toHaveBeenCalledOnce();

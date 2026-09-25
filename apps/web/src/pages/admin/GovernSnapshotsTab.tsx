@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, Table, useToast } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { RunState } from './run-states.js';
 
 interface SnapshotRow {
   id: string;
@@ -15,81 +16,93 @@ interface SnapshotRow {
   error: string | null;
 }
 
-type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary';
-const TONE: Record<string, Tone> = { building: 'primary', complete: 'active', failed: 'danger' };
-
 export function GovernSnapshotsTab() {
   const { data, error, loading, reload } = useApiResource<{ snapshots: SnapshotRow[] }>(
     '/api/admin/govern/snapshots',
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const [building, setBuilding] = useState(false);
+  const toast = useToast();
   // Narrowed once: a 200 without its collection must render an empty table,
   // not blank the console.
   const snapshots = data?.snapshots ?? [];
+
+  const build = () => {
+    setBuilding(true);
+    void api('/api/admin/govern/snapshots', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'manual' }),
+    })
+      .then(() => {
+        setActionError(null);
+        toast({ title: 'Snapshot started' });
+        reload();
+      })
+      .catch((cause: unknown) =>
+        setActionError(
+          cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'Could not build a snapshot.',
+        ),
+      )
+      .finally(() => setBuilding(false));
+  };
 
   return (
     <>
       {/* The action sits with the table it acts on. One header above
           several tabs would need a word saying which tab its button
           applied to. */}
-      <div className="mb-4 flex justify-end">
-        <Button
-            onClick={() => {
-              void api('/api/admin/govern/snapshots', {
-                method: 'POST',
-                body: JSON.stringify({ kind: 'manual' }),
-              })
-                .then(() => {
-                  setActionError(null);
-                  reload();
-                })
-                .catch((cause: unknown) =>
-                  setActionError(
-                    cause instanceof ApiError
-                      ? (cause.problem.detail ?? cause.problem.title)
-                      : 'Could not build a snapshot.',
-                  ),
-                );
-            }}
-          >
+      {/* On an empty list the empty state carries this button instead. */}
+      {!(data && snapshots.length === 0) && (
+        <div className="mb-4 flex justify-end">
+          <Button loading={building} onClick={build}>
             Build a snapshot now
           </Button>
-      </div>
+        </div>
+      )}
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
 
       <Panel>
-        {loading && <SkeletonRows rows={6} cols={5} />}
-        {!loading && (data?.snapshots.length ?? 0) === 0 && (
+        {!data && loading && <SkeletonRows rows={6} cols={5} />}
+        {data && snapshots.length === 0 && (
           <div className="p-6">
-            <Empty title="No snapshots yet">
+            <Empty
+              title="No snapshots yet"
+              action={
+                <Button variant="primary" loading={building} onClick={build}>
+                  Build a snapshot now
+                </Button>
+              }
+            >
               Build one and the inventory, the coverage register and the standing findings
               appear on their own.
             </Empty>
           </div>
         )}
-        {!loading && snapshots.length > 0 && (
-          <Table>
+        {snapshots.length > 0 && (
+          <Table stickyHeader label="Snapshots">
             <thead>
               <tr>
-                <th>As of</th>
-                <th>Status</th>
-                <th>Holdings</th>
-                <th>Nobody can explain</th>
-                <th>Coverage gaps</th>
+                <th scope="col">As of</th>
+                <th scope="col">Status</th>
+                <th scope="col">Holdings</th>
+                <th scope="col">Nobody can explain</th>
+                <th scope="col">Coverage gaps</th>
               </tr>
             </thead>
             <tbody>
               {snapshots.map((s) => (
                 <tr key={s.id}>
                   <td>
-                    <Link className="text-primary" to={`/admin/govern/snapshots/${s.id}`}>
+                    <Link className="link" to={`/admin/govern/snapshots/${s.id}`}>
                       {new Date(s.asOf).toLocaleString()}
                     </Link>
                   </td>
                   <td>
-                    <Status tone={TONE[s.status] ?? 'neutral'}>{s.status}</Status>
+                    <RunState status={s.status} />
                   </td>
                   <td>
                     {/* A `building` or `failed` snapshot is invisible to every

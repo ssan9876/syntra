@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
-import { REQUEST_LABEL, REQUEST_TONE, when } from './status.js';
+import { REQUEST_LABEL, REQUEST_STATE, when } from './status.js';
 
 interface Detail {
   id: string;
@@ -45,11 +45,12 @@ const CANCELLABLE = ['pending_approval', 'blocked_no_approver'];
 
 export function RequestDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, loading, reload } = useApiResource<Detail>(
+  const { data, error, reload } = useApiResource<Detail>(
     id === undefined ? null : `/api/portal/automate/requests/${id}`,
   );
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const cancel = async () => {
     setBusy(true);
@@ -58,6 +59,7 @@ export function RequestDetailPage() {
       await api(`/api/portal/automate/requests/${id}/cancel`, {
         method: 'POST',
       });
+      toast({ title: 'Request withdrawn' });
       reload();
     } catch (cause) {
       setProblem(
@@ -74,12 +76,12 @@ export function RequestDetailPage() {
     <AppShell>
       <div className="mx-auto w-full max-w-3xl px-6 py-8">
         {error && <Alert tone="danger">{error}</Alert>}
-        {loading && (
+        {!data && !error && (
           <Panel>
             <SkeletonRows rows={5} cols={2} />
           </Panel>
         )}
-        {!loading && data && (
+        {data && (
           <>
             <Panel
               title={data.product?.name ?? 'Requested access'}
@@ -93,9 +95,9 @@ export function RequestDetailPage() {
             >
               <div className="space-y-2 p-4">
                 {problem && <Alert tone="warning">{problem}</Alert>}
-                <Status tone={REQUEST_TONE[data.status] ?? 'neutral'}>
+                <StateBadge state={REQUEST_STATE[data.status] ?? 'setup'}>
                   {REQUEST_LABEL[data.status] ?? data.status}
-                </Status>
+                </StateBadge>
                 {data.statusReason && (
                   <p className="text-muted">{data.statusReason}</p>
                 )}

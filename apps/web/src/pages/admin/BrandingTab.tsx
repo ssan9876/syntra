@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Field, Panel, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
+import { supportLinkProps } from '../../branding/SupportLink.js';
 import { useApiResource } from './hooks.js';
 
 /**
@@ -21,6 +22,8 @@ interface Brand {
   logo: string | null;
   primary: string | null;
   accent: string | null;
+  supportUrl: string | null;
+  supportLabel: string | null;
 }
 
 /** 256 KB, matching `MAX_LOGO_BYTES`. Checked here so the refusal is instant. */
@@ -34,6 +37,8 @@ export function BrandingTab() {
   const [logo, setLogo] = useState<string | null>(null);
   const [primary, setPrimary] = useState('');
   const [accent, setAccent] = useState('');
+  const [supportUrl, setSupportUrl] = useState('');
+  const [supportLabel, setSupportLabel] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -56,6 +61,8 @@ export function BrandingTab() {
     setLogo(data.logo);
     setPrimary(data.primary ?? '');
     setAccent(data.accent ?? '');
+    setSupportUrl(data.supportUrl ?? '');
+    setSupportLabel(data.supportLabel ?? '');
   }, [data]);
 
   function chooseLogo(file: File) {
@@ -89,6 +96,8 @@ export function BrandingTab() {
           logo,
           primary: primary === '' ? null : primary,
           accent: accent === '' ? null : accent,
+          supportUrl: supportUrl.trim() === '' ? null : supportUrl.trim(),
+          supportLabel: supportLabel.trim() === '' ? null : supportLabel.trim(),
         }),
       });
       setSaved(true);
@@ -171,6 +180,32 @@ export function BrandingTab() {
             onChange={setAccent}
           />
 
+          {/* The same check the server and the sign-in page run, so a
+              `javascript:` or plain-http address is flagged as it is typed
+              rather than after a round trip. */}
+          <Field
+            label="Support link"
+            type="url"
+            value={supportUrl}
+            onChange={setSupportUrl}
+            placeholder="https://help.example.com or mailto:it@example.com"
+            spellCheck={false}
+            maxLength={2048}
+            error={
+              supportUrl.trim() !== '' && !supportLinkProps(supportUrl)
+                ? 'Use an https:// address or a mailto: address.'
+                : undefined
+            }
+          />
+          <Field
+            label="Support link text"
+            value={supportLabel}
+            onChange={setSupportLabel}
+            placeholder="Get help"
+            maxLength={40}
+            disabled={supportUrl.trim() === ''}
+          />
+
           {saveError && <Alert tone="danger">{saveError}</Alert>}
           {saved && !saveError && <Alert>Branding saved.</Alert>}
 
@@ -180,7 +215,14 @@ export function BrandingTab() {
         </Panel>
 
         <Panel title="What people will see" bodyClassName="p-4">
-          <SignInPreview name={name} logo={logo} primary={primary} accent={accent} />
+          <BrandPreview
+            name={name}
+            logo={logo}
+            primary={primary}
+            accent={accent}
+            supportUrl={supportUrl}
+            supportLabel={supportLabel}
+          />
         </Panel>
       </div>
     </>
@@ -239,65 +281,118 @@ function ColourField({
 }
 
 /**
- * The sign-in card, drawn with the values in the form rather than the ones
- * that are saved.
+ * The sign-in card and the top of the portal, drawn with the values in the
+ * form rather than the ones that are saved.
  *
  * Inline styles, not theme classes: these colours are not in the theme yet,
  * and the point of a preview is to show what they will look like BEFORE they
- * are.
+ * are. Both surfaces, because they are the two a tenant's staff actually see —
+ * a colour that works on a button can still be wrong as the portal's current
+ * tab, and a help link is only reassuring once you can see where it sits.
  */
-function SignInPreview({
+function BrandPreview({
   name,
   logo,
   primary,
   accent,
+  supportUrl,
+  supportLabel,
 }: {
   name: string;
   logo: string | null;
   primary: string;
   accent: string;
+  supportUrl: string;
+  supportLabel: string;
 }) {
   const hex = (value: string) => (/^#[0-9a-fA-F]{6}$/.test(value) ? value : null);
   const brandPrimary = hex(primary);
   const brandAccent = hex(accent);
+  const linkStyle = brandAccent ? { color: brandAccent } : undefined;
+  const linkClass = brandAccent ? 'underline' : 'text-accent underline';
+  // Drawn only when it would be drawn for real: an address the sign-in page
+  // would refuse to link does not appear here either.
+  const help = supportLinkProps(supportUrl) ? supportLabel.trim() || 'Get help' : null;
+  const displayName = name.trim() === '' ? 'Syntra' : name;
+
+  const mark = logo ? (
+    <img src={logo} alt="" className="h-7 w-auto max-w-40 object-contain" />
+  ) : (
+    <span className="text-md font-semibold tracking-tight text-ink">{displayName}</span>
+  );
 
   return (
-    <div className="rounded-control border border-border bg-surface-2 p-8">
-      <div className="mx-auto max-w-sm rounded-control border border-border bg-bg p-6 shadow-sm">
-        <div className="mb-6 flex items-center gap-2.5">
-          {logo ? (
-            <img src={logo} alt="" className="h-7 w-auto max-w-40 object-contain" />
-          ) : (
-            <span className="text-md font-semibold tracking-tight text-ink">
-              {name.trim() === '' ? 'Syntra' : name}
+    <div className="space-y-5">
+      <figure>
+        <figcaption className="mb-1.5 text-sm font-medium text-muted">Sign-in page</figcaption>
+        <div className="rounded-control border border-border bg-surface-2 p-8">
+          <div className="mx-auto max-w-sm rounded-control border border-border bg-bg p-6 shadow-sm">
+            <div className="mb-6 flex items-center gap-2.5">{mark}</div>
+
+            <p className="mb-1.5 font-medium text-ink">Username</p>
+            <div className="mb-4 h-9 rounded-control border border-border-control bg-surface-2" />
+            <p className="mb-1.5 font-medium text-ink">Password</p>
+            <div className="mb-5 h-9 rounded-control border border-border-control bg-surface-2" />
+
+            <div
+              className={`flex h-9 items-center justify-center rounded-control font-medium ${
+                brandPrimary ? '' : 'bg-primary text-bg'
+              }`}
+              style={
+                brandPrimary
+                  ? { backgroundColor: brandPrimary, color: 'var(--color-bg)' }
+                  : undefined
+              }
+            >
+              Sign in
+            </div>
+
+            <p className="mt-4 text-sm">
+              <span className={linkClass} style={linkStyle}>
+                Forgotten your password?
+              </span>
+            </p>
+          </div>
+          <p className="mt-3 text-center text-sm text-muted">
+            {help ? (
+              <>
+                Trouble signing in?{' '}
+                <span className={linkClass} style={linkStyle}>
+                  {help}
+                </span>
+              </>
+            ) : (
+              'Trouble signing in? Contact your IT administrator.'
+            )}
+          </p>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption className="mb-1.5 text-sm font-medium text-muted">Portal</figcaption>
+        <div className="overflow-hidden rounded-control border border-border bg-bg">
+          <div className="flex h-12 items-center border-b border-border-subtle px-4">{mark}</div>
+          <div className="flex gap-4 border-b border-border-subtle bg-surface-2 px-4 text-sm font-medium">
+            <span
+              className={`-mb-px border-b-2 py-2 ${brandPrimary ? '' : 'border-primary text-primary'}`}
+              style={
+                brandPrimary ? { borderColor: brandPrimary, color: brandPrimary } : undefined
+              }
+            >
+              Applications
             </span>
-          )}
+            <span className="py-2 text-muted">Request access</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-4 px-4 py-4">
+            <span className="text-lg font-semibold tracking-tight text-ink">Good day, Ada</span>
+            {help && (
+              <span className={`text-sm ${linkClass}`} style={linkStyle}>
+                {help}
+              </span>
+            )}
+          </div>
         </div>
-
-        <p className="mb-1.5 font-medium text-ink">Username</p>
-        <div className="mb-4 h-9 rounded-control border border-border-control bg-surface-2" />
-        <p className="mb-1.5 font-medium text-ink">Password</p>
-        <div className="mb-5 h-9 rounded-control border border-border-control bg-surface-2" />
-
-        <div
-          className={`flex h-9 items-center justify-center rounded-control font-medium ${
-            brandPrimary ? '' : 'bg-primary text-bg'
-          }`}
-          style={
-            brandPrimary
-              ? { backgroundColor: brandPrimary, color: 'var(--color-bg)' }
-              : undefined
-          }
-        >
-          Sign in
-        </div>
-
-        <p className="mt-4 text-sm">
-          <span className="underline" style={brandAccent ? { color: brandAccent } : undefined}>
-            Forgotten your password?
-          </span>
-        </p>
-      </div>
+      </figure>
     </div>
   );
 }

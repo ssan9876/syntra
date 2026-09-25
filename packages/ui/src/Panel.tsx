@@ -21,16 +21,34 @@ export function Panel({
   actions,
   children,
   bodyClassName = '',
+  clip = true,
 }: {
   title?: string;
   actions?: ReactNode;
   children: ReactNode;
   bodyClassName?: string;
+  /**
+   * Clips content to the rounded corners — a table head or a hovered row
+   * otherwise pokes square corners through the panel's edge. Turn it off for
+   * a panel holding something that must escape it: an `AsyncCombobox` list
+   * drawn inside a clipping panel is cut off at the panel's bottom edge, and a
+   * picker whose results cannot be seen is a picker that does not work.
+   *
+   * `overflow: clip`, not `hidden`. Both cut the corners; `hidden` also makes
+   * the panel a scroll container, and a sticky `FormActions` inside it then
+   * sticks to the panel — which does not scroll — rather than to the page.
+   */
+  clip?: boolean;
 }) {
   return (
-    <section className="overflow-hidden rounded-panel border border-border-subtle bg-bg">
+    <section
+      className={[
+        'rounded-panel border border-border-subtle bg-bg',
+        clip ? 'overflow-clip' : '',
+      ].join(' ')}
+    >
       {(title || actions) && (
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle bg-surface px-4 py-3">
+        <header className="rounded-t-panel flex flex-wrap items-center justify-between gap-3 border-b border-border-subtle bg-surface px-4 py-3">
           {title && <h2 className="text-md font-semibold text-ink">{title}</h2>}
           {actions && <div className="flex items-center gap-2">{actions}</div>}
         </header>

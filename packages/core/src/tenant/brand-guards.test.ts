@@ -5,6 +5,7 @@ import {
   MAX_LOGO_BYTES,
   assertColourUsable,
   assertLogoUsable,
+  assertSupportUrlUsable,
   contrastRatio,
   readableOn,
 } from './brand-service.js';
@@ -88,5 +89,30 @@ describe('readableOn', () => {
     // is theirs; the legibility is not.
     expect(readableOn('#111827')).toBe('#ffffff');
     expect(readableOn('#fde047')).toBe('#000000');
+  });
+});
+
+describe('assertSupportUrlUsable', () => {
+  it.each(['https://help.acme.test/it', 'mailto:help@acme.test', 'mailto:help@acme.test?subject=Sign-in'])(
+    'takes %s',
+    (url) => {
+      expect(() => assertSupportUrlUsable(url)).not.toThrow();
+    },
+  );
+
+  it.each([
+    'javascript:alert(1)',
+    'JAVASCRIPT:alert(1)',
+    'java\tscript:alert(1)',
+    'data:text/html,<script>',
+    'http://help.acme.test/',
+    'mailto:',
+    'mailto:not-an-address',
+    'https://',
+    '/help',
+  ])('refuses %s', (url) => {
+    // Rendered on the unauthenticated sign-in page, so a scheme that runs
+    // script, or a plain-http page that can be swapped in transit, is refused.
+    expect(() => assertSupportUrlUsable(url)).toThrow(BrandRefusedError);
   });
 });

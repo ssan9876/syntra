@@ -1,13 +1,11 @@
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { Adoption } from './PersonAccessAdoption.js';
 import { Placement } from './PersonAccessPlacement.js';
 import {
-  HeldByNow,
-  ORIGINS,
-  RecordedAtGrant,
+  HoldingsTable,
   accountStatus,
   type Access,
 } from './PersonAccessEntitlements.js';
@@ -105,49 +103,7 @@ export function PersonAccessPage() {
                   This account holds nothing Syntra can see.
                 </div>
               ) : (
-                <Table>
-                  <thead>
-                    <tr>
-                      <th scope="col">
-                        Entitlement
-                      </th>
-                      <th scope="col">
-                        Where it came from
-                      </th>
-                      {/* Two columns and not one, because they answer two
-                          different questions and the whole defect was
-                          answering the first with the second. The contract
-                          lives with the rule it satisfies: one holding can
-                          have several current rules, each satisfied by a
-                          different contract of this person, and a single
-                          contract column could only ever show one of them. */}
-                      <th scope="col">
-                        Why it is held now
-                      </th>
-                      <th scope="col">
-                        Recorded at the grant
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {account.entitlements.map((holding) => (
-                      <tr key={holding.entitlementId}>
-                        <td className="text-ink">
-                          {holding.displayName}
-                        </td>
-                        <td>
-                          {ORIGINS[holding.origin] ?? holding.origin}
-                        </td>
-                        <td className="text-ink">
-                          <HeldByNow holding={holding} />
-                        </td>
-                        <td className="text-ink">
-                          <RecordedAtGrant holding={holding} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <HoldingsTable holdings={account.entitlements} />
               )}
             </Panel>
           ))}

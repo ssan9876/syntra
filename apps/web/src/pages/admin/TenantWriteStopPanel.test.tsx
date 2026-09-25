@@ -39,7 +39,7 @@ describe('TenantWriteStopPanel', () => {
     expect(await screen.findByText('All provisioning writes are stopped for every target in this tenant')).toBeVisible();
     expect(screen.getByText(/Suspected compromised administrator/)).toBeVisible();
     expect(screen.getByText(/no automatic expiry/)).toBeVisible();
-    expect(screen.getByText('paused')).toBeVisible();
+    expect(screen.getByText('Paused')).toBeVisible();
     expect(screen.getByText(/different administrator must approve/i)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Request reviewed resume' })).toBeDisabled();
   });
@@ -51,7 +51,7 @@ describe('TenantWriteStopPanel', () => {
     }));
     render(<TenantWriteStopPanel />);
     expect(await screen.findByRole('button', { name: 'Stop external writes' })).toBeVisible();
-    expect(screen.getByText('allowed')).toBeVisible();
+    expect(screen.getByText('Allowed')).toBeVisible();
   });
 
   it('surfaces the four-eyes refusal from the server', async () => {

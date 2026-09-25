@@ -1,5 +1,15 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  Field,
+  Identifier,
+  Panel,
+  Select,
+  SkeletonRows,
+  StateBadge,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 
@@ -73,7 +83,7 @@ export function ContainersPanel({ unit }: { unit: { id: string; name: string } }
       {error && <Alert tone="danger">{error}</Alert>}
       {removeError && <Alert tone="danger">{removeError}</Alert>}
 
-      {loading && <SkeletonRows rows={2} cols={2} />}
+      {!data && loading && <SkeletonRows rows={2} cols={2} />}
 
       {!loading && materialised.length === 0 && (
         <div className="px-4 pb-4">
@@ -92,12 +102,16 @@ export function ContainersPanel({ unit }: { unit: { id: string; name: string } }
               className="flex flex-wrap items-center gap-x-3 py-1.5"
             >
               <span className="text-muted">{c.targetName}</span>
-              <code className="text-ink">{c.dn}</code>
+              <Identifier value={c.dn} />
               {/* `desired` means the target has not confirmed it yet, which is
                   the ordinary state before the next run rather than a fault. */}
-              <Status tone={c.state === 'desired' ? 'neutral' : 'active'}>
-                {c.state}
-              </Status>
+              {c.state === 'desired' ? (
+                <StateBadge state="pending">Awaiting the next run</StateBadge>
+              ) : (
+                <StateBadge state="healthy">
+                  {c.state.charAt(0).toUpperCase() + c.state.slice(1)}
+                </StateBadge>
+              )}
               <span className="ml-auto">
                 <Button
                   size="sm"
@@ -143,6 +157,7 @@ export function ContainersPanel({ unit }: { unit: { id: string; name: string } }
               <Field
                 label="Container"
                 value={v.dn ?? ''}
+                name="dn"
                 onChange={(x) => set('dn', x)}
                 error={errs.dn}
                 placeholder={`OU=${unit.name},…`}

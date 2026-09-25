@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -33,6 +33,7 @@ export function TargetMigrationPanel({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const toast = useToast();
 
   // A document-driven target that is not Microsoft Entra has no migration.
   // The API's refusal is expected there, so it does not become a broken panel.
@@ -54,6 +55,7 @@ export function TargetMigrationPanel({
         method: 'POST',
         body: JSON.stringify({ revision: data!.revision }),
       });
+      toast({ tone: 'success', title: 'Adapter migration applied' });
       onApplied();
     } catch (cause) {
       setProblem(cause instanceof Error ? cause.message : 'The migration could not be applied.');
@@ -66,7 +68,7 @@ export function TargetMigrationPanel({
   return (
     <Panel
       title="Connector migration"
-      actions={<Status tone="warning">preview required</Status>}
+      actions={<StateBadge state="attention">Preview required</StateBadge>}
     >
       <div className="space-y-4 p-4">
         {problem && <Alert tone="danger">{problem}</Alert>}

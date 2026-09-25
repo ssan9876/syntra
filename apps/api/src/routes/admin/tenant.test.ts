@@ -870,6 +870,70 @@ describe('the tenant brand', () => {
     expect(JSON.stringify(event!.payload)).toContain('set');
   });
 
+  it('saves an https support page and a label', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const res = await putBrand(cookie, {
+      supportUrl: 'https://help.acme.test/it',
+      supportLabel: 'IT service desk',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({
+      supportUrl: 'https://help.acme.test/it',
+      supportLabel: 'IT service desk',
+    });
+  });
+
+  it('saves a mailto support address', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const res = await putBrand(cookie, { supportUrl: 'mailto:help@acme.test' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ supportUrl: 'mailto:help@acme.test' });
+  });
+
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html;base64,PHNjcmlwdD4=',
+    // Plain http is a help page an on-path attacker can replace, on the one
+    // screen that asks for a password.
+    'http://help.acme.test/',
+    'ftp://help.acme.test/',
+    'help.acme.test',
+  ])('refuses %s as a support link', async (supportUrl) => {
+    // Rendered as a link on the UNAUTHENTICATED sign-in page: anything other
+    // than https or mailto is somewhere nobody should be sent from there.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    const res = await putBrand(cookie, { supportUrl });
+    expect(res.statusCode).toBe(400);
+    expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({ supportUrl: null });
+  });
+
+  it('drops the label when the link is cleared', async () => {
+    // Words that go nowhere are not a link.
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const cookie = await adminCookie();
+    await putBrand(cookie, { supportUrl: 'mailto:help@acme.test', supportLabel: 'Help' });
+    await putBrand(cookie, { supportUrl: null, supportLabel: 'Help' });
+    expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({
+      supportUrl: null,
+      supportLabel: null,
+    });
+  });
+
+  it('records the support link in the audit payload', async () => {
+    await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    await putBrand(await adminCookie(), { supportUrl: 'https://help.acme.test/' });
+    const event = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findFirst({
+        where: { action: 'tenant.brand_updated' },
+        orderBy: { occurredAt: 'desc' },
+      }),
+    );
+    expect(event!.payload).toMatchObject({ supportUrl: 'https://help.acme.test/' });
+  });
+
   it('clears back to Syntra on a null', async () => {
     await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
     const cookie = await adminCookie();

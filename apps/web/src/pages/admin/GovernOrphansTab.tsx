@@ -1,5 +1,16 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Field, Panel, SkeletonRows } from '@syntra/ui';
+import { Link } from 'react-router-dom';
+import {
+  Alert,
+  Button,
+  buttonClasses,
+  Empty,
+  Field,
+  Identifier,
+  Panel,
+  SkeletonRows,
+  useToast,
+} from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -24,6 +35,7 @@ export function GovernOrphansTab() {
   // moved its own reason inline.
   const [denying, setDenying] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  const toast = useToast();
 
   const deny = async (proposalId: string) => {
     try {
@@ -34,6 +46,7 @@ export function GovernOrphansTab() {
       setActionError(null);
       setDenying(null);
       setReason('');
+      toast({ title: 'Denial recorded' });
       reload();
     } catch (cause) {
       setActionError(
@@ -53,21 +66,28 @@ export function GovernOrphansTab() {
       {actionError && <Alert tone="danger">{actionError}</Alert>}
 
       <Panel>
-        {loading && <SkeletonRows rows={5} cols={3} />}
-        {!loading && proposals.length === 0 && (
+        {!data && loading && <SkeletonRows rows={5} cols={3} />}
+        {data && proposals.length === 0 && (
           <div className="p-6">
-            <Empty title="No accounts waiting for an owner">
+            <Empty
+              title="No accounts waiting for an owner"
+              action={
+                <Link to="/admin/govern?tab=snapshots" className={buttonClasses('secondary')}>
+                  Build a snapshot
+                </Link>
+              }
+            >
               Build a snapshot and any account in a target system with no linked person is
               proposed here, with the evidence behind the guess.
             </Empty>
           </div>
         )}
-        {!loading && proposals.length > 0 && (
+        {proposals.length > 0 && (
           <ul className="divide-y divide-border-subtle">
             {proposals.map((p) => (
               <li key={p.id} className="p-4">
                 <p className="font-medium text-ink">
-                  {p.accountRef} in {p.systemId} → {p.proposedName}
+                  <Identifier value={p.accountRef} /> in {p.systemId} → {p.proposedName}
                 </p>
                 <p className="text-muted">
                   {Math.round(p.confidence * 100)}% — {p.because}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import { Alert, Button, Check, Empty, Panel, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
 
@@ -49,6 +49,7 @@ export function MyReviewsPage() {
   // rows and disabling all of them while one is being decided would make a
   // twenty-item review a twenty-round-trip queue.
   const [deciding, setDeciding] = useState<string | null>(null);
+  const toast = useToast();
 
   const items = data?.items ?? [];
   // Grouped by subject AND by resource at the reviewer's choice; the decisions
@@ -82,6 +83,7 @@ export function MyReviewsPage() {
     })
       .then(() => {
         setActionError(null);
+        toast({ title: decision === 'certify' ? 'Kept' : 'Marked for removal' });
         reload();
       })
       .catch((cause: unknown) =>
@@ -142,6 +144,10 @@ export function MyReviewsPage() {
               .map((r) => r.reason)
               .join('; ')}`,
       );
+      const certified = results.reduce((sum, r) => sum + r.certified, 0);
+      // Refusals stay inline above, where they are read; the toast only says
+      // how many took.
+      toast({ title: `${certified} item${certified === 1 ? '' : 's'} certified` });
       setSelected(new Set());
       reload();
     } catch (cause) {
@@ -167,9 +173,9 @@ export function MyReviewsPage() {
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
-      {loading && <SkeletonRows rows={6} cols={4} />}
+      {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
-      {!loading && items.length === 0 && (
+      {data && items.length === 0 && (
         <Empty title="Nothing is waiting for you">
           When a review names you, it arrives here and in your inbox.
         </Empty>
@@ -229,9 +235,9 @@ export function MyReviewsPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         {item.riskFlags.map((flag) => (
-                          <Status key={flag} tone="warning">
-                            {flag.replace(/_/g, ' ')}
-                          </Status>
+                          <StateBadge key={flag} state="attention">
+                            {flag.charAt(0).toUpperCase() + flag.slice(1).replace(/_/g, ' ')}
+                          </StateBadge>
                         ))}
                       </div>
                     </div>
@@ -257,19 +263,16 @@ export function MyReviewsPage() {
 
                     <div className="flex items-center gap-2">
                       {reason === null && item.campaign.allowBulkCertify && (
-                        <label className="flex items-center gap-1.5 text-muted">
-                          <input
-                            type="checkbox"
-                            checked={selected.has(item.id)}
-                            onChange={(e) => {
-                              const next = new Set(selected);
-                              if (e.target.checked) next.add(item.id);
-                              else next.delete(item.id);
-                              setSelected(next);
-                            }}
-                          />
-                          include in bulk
-                        </label>
+                        <Check
+                          checked={selected.has(item.id)}
+                          onChange={(on) => {
+                            const next = new Set(selected);
+                            if (on) next.add(item.id);
+                            else next.delete(item.id);
+                            setSelected(next);
+                          }}
+                          label="Include in bulk"
+                        />
                       )}
                       <Button
                         size="sm"

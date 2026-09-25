@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table, buttonClasses } from '@syntra/ui';
+import { Link } from 'react-router-dom';
+import {
+  Alert,
+  Button,
+  Empty,
+  Identifier,
+  Panel,
+  SkeletonRows,
+  StateBadge,
+  Table,
+  buttonClasses,
+  useToast,
+  type State,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
@@ -35,11 +48,11 @@ const KIND: Record<string, string> = {
   dsar_bundle: 'Access bundle',
 };
 
-const TONE: Record<ExportRow['status'], 'neutral' | 'active' | 'warning' | 'danger' | 'inactive'> = {
-  queued: 'neutral',
-  running: 'warning',
-  ready: 'active',
-  failed: 'danger',
+const STATE: Record<ExportRow['status'], State> = {
+  queued: 'pending',
+  running: 'running',
+  ready: 'healthy',
+  failed: 'blocked',
   revoked: 'inactive',
   expired: 'inactive',
 };
@@ -89,6 +102,7 @@ export function ExportsTab() {
   const [announcement, setAnnouncement] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const toast = useToast();
   const previous = useRef<Map<string, ExportRow['status']>>(new Map());
 
   const rows = useMemo(() => data?.exports ?? [], [data]);
@@ -117,6 +131,7 @@ export function ExportsTab() {
     try {
       await api(`/api/admin/exports/${row.id}/revoke`, { method: 'POST', body: JSON.stringify({}) });
       setAnnouncement(describeChange({ ...row, status: 'revoked' }));
+      toast({ title: 'Export revoked', body: 'Its file has been erased.' });
       reload();
     } catch (cause) {
       setProblem(
@@ -156,12 +171,24 @@ export function ExportsTab() {
 
           {data && rows.length === 0 && (
             <div className="p-6">
-              <Empty title="No exports">Export the audit log from its search, or an access report from Governance.</Empty>
+              <Empty
+                title="No exports"
+                action={
+                  <Link to="/admin/activity?tab=all" className={buttonClasses('secondary')}>
+                    Export the audit log
+                  </Link>
+                }
+                secondaryAction={
+                  <Link to="/admin/govern?tab=reports" className="link">
+                    Export an access report
+                  </Link>
+                }
+              />
             </div>
           )}
 
           {data && rows.length > 0 && (
-            <Table>
+            <Table stickyHeader label="Exports">
               <thead>
                 <tr>
                   <th scope="col">Export</th>
@@ -187,7 +214,7 @@ export function ExportsTab() {
                   <tr key={row.id}>
                     <td className="text-ink">{KIND[row.kind] ?? row.kind}</td>
                     <td>
-                      <Status tone={TONE[row.status]}>{LABEL[row.status]}</Status>
+                      <StateBadge state={STATE[row.status]}>{LABEL[row.status]}</StateBadge>
                       {row.status === 'failed' && row.error && <div className="mt-1 text-sm text-danger">{row.error}</div>}
                     </td>
                     <td className="whitespace-nowrap">{when(row.requestedAt)}</td>
@@ -195,7 +222,7 @@ export function ExportsTab() {
                     <td className="tabular-nums max-lg:hidden">{row.rowCount ?? '—'}</td>
                     <td className="tabular-nums max-lg:hidden">{size(row.byteLength)}</td>
                     <td className="max-xl:hidden">
-                      {row.sha256 ? <code title={row.sha256}>{row.sha256.slice(0, 12)}…</code> : '—'}
+                      {row.sha256 ? <Identifier value={row.sha256} truncate /> : '—'}
                     </td>
                     <td>
                       <div className="flex justify-end gap-2">

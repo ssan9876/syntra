@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 
@@ -42,6 +42,7 @@ export function DeleteButton({
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const headingId = useId();
 
   const close = () => {
     restoreFocus.current = true;
@@ -114,18 +115,33 @@ export function DeleteButton({
   }
 
   return (
-    <div className="space-y-2">
-      <Alert tone="danger" title={`Delete this ${label}?`}>
-        {warning}
-      </Alert>
+    // The destructive step drawn as its own bounded region, in the danger
+    // colour, so that where the ordinary controls on a record stop and the
+    // one that cannot be undone begins is a line on the screen rather than a
+    // difference in button tint. Inline rather than a modal on purpose: the
+    // record the reader is about to destroy is the evidence they are checking
+    // the name against, and a dialog would cover it.
+    <div
+      role="group"
+      aria-labelledby={headingId}
+      className="space-y-3 rounded-panel border border-danger/40 bg-bg p-3 text-left"
+    >
+      <div>
+        <p id={headingId} className="font-semibold text-danger">
+          Delete this {label}?
+        </p>
+        <p className="mt-0.5 text-ink">{warning}</p>
+      </div>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <Field
         label={`To confirm, type ${confirmWord}`}
         value={typed}
         onChange={setTyped}
         ref={confirmRef}
+        autoComplete="off"
+        spellCheck={false}
       />
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2 border-t border-border-subtle pt-3">
         <Button
           variant="danger"
           disabled={typed !== confirmWord || busy}

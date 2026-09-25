@@ -597,7 +597,7 @@ export async function executeTenantDeletion(
         data: {
           status: TENANT_DELETED_STATUS, name: 'Deleted tenant', slug: `deleted-${tenantId}`,
           primaryDomain: null, additionalDomains: [], brandName: null, brandLogo: null,
-          brandPrimary: null, brandAccent: null,
+          brandPrimary: null, brandAccent: null, brandSupportUrl: null, brandSupportLabel: null,
         },
       });
 

@@ -315,3 +315,70 @@ describe('PoliciesPage', () => {
     expect(screen.queryByRole('button', { name: /Remove Netherlands/i })).toBeNull();
   });
 });
+describe('the new-rule form', () => {
+  it('labels the impact figure out of date as soon as the rule changes', async () => {
+    // The count sits beside the fields it was computed from. Read after the
+    // address range was widened, "matches 12 of 40" describes a rule that no
+    // longer exists — so it is marked, not silently left standing.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) =>
+        String(url).includes('/rules/impact')
+          ? json({
+              totalActiveUsers: 40,
+              matchedUsers: 12,
+              usersNeedingEnrolment: 0,
+              unevaluatedConditions: [],
+            })
+          : json(policy),
+      ),
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Everyone');
+    await userEvent.click(screen.getByRole('button', { name: /check who this affects/i }));
+    await screen.findByText(/matches 12 of 40 active users/i);
+    expect(screen.queryByText('Out of date')).toBeNull();
+
+    await userEvent.type(screen.getByLabelText('Source addresses'), '10.0.0.0/8');
+
+    expect(screen.getByText('Out of date')).toBeInTheDocument();
+    // The old figure stays readable while they decide whether to check again.
+    expect(screen.getByText(/matches 12 of 40 active users/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+  });
+
+  it('summarises a field refusal at the top and links it to the field', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init?: RequestInit) =>
+        init?.method === 'POST'
+          ? json(
+              {
+                status: 400,
+                title: 'Validation failed',
+                errors: [{ path: 'ipRanges.0', message: 'not an address or CIDR' }],
+              },
+              400,
+            )
+          : json(policy),
+      ),
+    );
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Bad rule');
+    await userEvent.type(screen.getByLabelText('Source addresses'), '10.0.0.0/33');
+    await userEvent.click(screen.getByRole('button', { name: /save rule/i }));
+
+    // The list index is dropped from the path, so the message lands on the
+    // box the list is typed into — and the summary names that box.
+    const link = await screen.findByRole('button', {
+      name: 'Source addresses: not an address or CIDR',
+    });
+    expect(screen.getByLabelText('Source addresses')).toHaveAttribute('aria-invalid', 'true');
+    await userEvent.click(link);
+    expect(screen.getByLabelText('Source addresses')).toHaveFocus();
+  });
+});

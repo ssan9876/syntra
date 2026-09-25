@@ -235,6 +235,63 @@ describe('ApplicationSso', () => {
     expect(await screen.findByText('newsecret123')).toBeInTheDocument();
   });
 
+  it('keeps a rotated secret on screen through the re-read that follows the save', async () => {
+    // Every reload used to unmount both panels until it settled, so the
+    // secret — "not shown again" — vanished the moment the save's re-read
+    // started. The re-read is held open here, the way a real network holds
+    // it; a mock that answers in a microtask settles before React renders the
+    // loading state at all, and would never show the bug.
+    const user = userEvent.setup();
+    let release: () => void = () => {};
+    let reads = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method === 'PUT') return json({ clientSecret: 'newsecret123' });
+      if (url.endsWith('/saml')) return json({ title: 'Not configured', status: 404 }, 404);
+      if (url.endsWith('/oidc')) {
+        reads += 1;
+        if (reads > 1) await new Promise<void>((resolve) => (release = resolve));
+        return json(oidcClient());
+      }
+      return json({ saml: [], oidc: [], sets: [] });
+    });
+    renderPanel();
+
+    await user.click(await screen.findByLabelText(/issue a new client secret/i));
+    await user.click(screen.getByRole('button', { name: /save openid connect/i }));
+
+    await waitFor(() => expect(reads).toBe(2));
+    // Mid-reload: the panel, and the secret, are still there.
+    expect(await screen.findByText('newsecret123')).toBeInTheDocument();
+    release();
+    await waitFor(() => expect(screen.getByText('newsecret123')).toBeInTheDocument());
+  });
+
+  it('summarises a refused list item against the box it was typed in', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      saml: samlConfig(),
+      write: () =>
+        json(
+          {
+            title: 'Invalid',
+            status: 400,
+            errors: [{ path: 'acsUrls.1', message: 'must be an https URL' }],
+          },
+          400,
+        ),
+    });
+    renderPanel();
+
+    await user.click(await screen.findByRole('button', { name: /save saml settings/i }));
+    const link = await screen.findByRole('button', {
+      name: 'Assertion consumer URLs: must be an https URL',
+    });
+    await user.click(link);
+    expect(screen.getByLabelText(/assertion consumer urls/i)).toHaveFocus();
+  });
+
   it('shows the server’s refusal rather than a generic failure', async () => {
     const user = userEvent.setup();
     mockApi({

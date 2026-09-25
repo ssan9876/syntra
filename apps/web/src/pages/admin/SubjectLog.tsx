@@ -1,4 +1,4 @@
-import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Empty, Panel, SkeletonRows, StateBadge, Table } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 
@@ -135,7 +135,7 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
           a reader of any part of it, and a clean chain is not evidence about
           this subject. */}
 
-      {loading && <SkeletonRows rows={5} cols={4} />}
+      {!data && loading && <SkeletonRows rows={5} cols={4} />}
 
       {!loading && !error && events.length === 0 && (
         <div className="p-6">
@@ -143,7 +143,7 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
         </div>
       )}
 
-      {!loading && !error && events.length > 0 && (
+      {!error && events.length > 0 && (
         <Table>
           <thead>
             <tr>
@@ -161,11 +161,13 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
                 <td className="whitespace-nowrap">{when(event.occurredAt)}</td>
                 <td className="text-ink">{event.action}</td>
                 <td>
-                  <Status
-                    tone={event.outcome === 'success' ? 'active' : 'danger'}
-                  >
-                    {event.outcome}
-                  </Status>
+                  {event.outcome === 'success' ? (
+                    <StateBadge state="healthy">Success</StateBadge>
+                  ) : (
+                    <StateBadge state="blocked">
+                      {event.outcome.charAt(0).toUpperCase() + event.outcome.slice(1)}
+                    </StateBadge>
+                  )}
                 </td>
                 <td className="max-w-[28ch] truncate max-lg:hidden">
                   {summarize(event.payload)}

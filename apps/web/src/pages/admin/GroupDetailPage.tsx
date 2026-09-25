@@ -8,8 +8,10 @@ import {
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
@@ -51,7 +53,7 @@ interface MemberRow {
  */
 export function GroupDetailPage() {
   const { id } = useParams();
-  const { data, error, loading, reload } = useApiResource<GroupDetail>(
+  const { data, error, reload } = useApiResource<GroupDetail>(
     `/api/admin/groups/${id}`,
   );
   // Its error state is deliberately ignored, as on the account record: a
@@ -84,10 +86,13 @@ export function GroupDetailPage() {
   const [addUserId, setAddUserId] = useState('');
   const [memberProblem, setMemberProblem] = useState<string | null>(null);
 
+  const toast = useToast();
+
   const changeMembership = async (userId: string, method: 'POST' | 'DELETE') => {
     setMemberProblem(null);
     try {
       await api(`/api/admin/groups/${id}/members/${userId}`, { method });
+      toast({ title: method === 'POST' ? 'Added to the group' : 'Removed from the group' });
       setAddUserId('');
       reloadMembers();
     } catch (cause) {
@@ -102,7 +107,8 @@ export function GroupDetailPage() {
   };
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (loading || !data) {
+  // Skeleton only before the first answer; an edit reloads the record.
+  if (!data) {
     return (
       <Panel>
         <SkeletonRows rows={4} cols={3} />
@@ -122,6 +128,13 @@ export function GroupDetailPage() {
     <>
       <PageHeader
         title={data.name}
+        status={
+          data.status === 'active' ? (
+            <StateBadge state="healthy">Active</StateBadge>
+          ) : (
+            <StateBadge state="inactive">Inactive</StateBadge>
+          )
+        }
         actions={
           // Only for a locally managed group. A directory owns the name and
           // description of a group it syncs and rewrites them on every run, so
@@ -144,22 +157,9 @@ export function GroupDetailPage() {
               <span className="font-normal text-muted">None</span>
             ),
           },
-          {
-            label: 'Status',
-            value:
-              data.status === 'active' ? (
-                <Status tone="active">Active</Status>
-              ) : (
-                <span className="flex flex-wrap items-center gap-2">
-                  <Status tone="inactive">Inactive</Status>
-                  {data.statusReason && (
-                    <span className="font-normal text-muted">
-                      {data.statusReason}
-                    </span>
-                  )}
-                </span>
-              ),
-          },
+          ...(data.status !== 'active' && data.statusReason
+            ? [{ label: 'Why inactive', value: data.statusReason }]
+            : []),
           {
             label: 'Managed by',
             value: local ? (
@@ -198,12 +198,14 @@ export function GroupDetailPage() {
                 <Field
                   label="Name"
                   value={v.name ?? ''}
+                  name="name"
                   onChange={(x) => set('name', x)}
                   error={errs.name}
                 />
                 <Field
                   label="Description"
                   value={v.description ?? ''}
+                  name="description"
                   onChange={(x) => set('description', x)}
                   error={errs.description}
                 />
@@ -228,12 +230,14 @@ export function GroupDetailPage() {
                 </Empty>
               </div>
             ) : (
-              <Table>
+              <Table stickyHeader label="Members">
                 <thead>
                   <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Login</th>
-                    <th scope="col" />
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

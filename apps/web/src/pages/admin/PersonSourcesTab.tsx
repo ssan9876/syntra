@@ -4,6 +4,7 @@ import {
   Empty,
   Panel,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
   buttonClasses,
@@ -89,9 +90,9 @@ export function PersonSourcesTab() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={6} />}
+          {!data && loading && <SkeletonRows rows={4} cols={6} />}
 
-          {!loading && sources.length === 0 && (
+          {data && sources.length === 0 && (
             <div className="p-6">
               <Empty
                 title="No HR feeds yet"
@@ -112,7 +113,7 @@ export function PersonSourcesTab() {
             </div>
           )}
 
-          {!loading && sources.length > 0 && (
+          {sources.length > 0 && (
             <Table>
               <thead>
                 <tr>
@@ -132,7 +133,12 @@ export function PersonSourcesTab() {
                 {sources.map((source) => (
                   <tr key={source.id}>
                     <td>
-                      <Link to={`/admin/person-sources/${source.id}`}>{source.name}</Link>
+                      <Link
+                        to={`/admin/person-sources/${source.id}`}
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
+                      >
+                        {source.name}
+                      </Link>
                     </td>
                     <td className="max-sm:hidden">{fileOf(source)}</td>
                     <td>
@@ -142,11 +148,12 @@ export function PersonSourcesTab() {
                     <td>{when(source.lastRunAt)}</td>
                     <td>
                       {!source.enabled ? (
-                        <Status tone="neutral">Disabled</Status>
+                        <StateBadge state="inactive">Disabled</StateBadge>
                       ) : !pinned(source) ? (
-                        <Status tone="danger">Host key not accepted</Status>
+                        // Cannot read a file until somebody accepts the key.
+                        <StateBadge state="blocked">Host key not accepted</StateBadge>
                       ) : (
-                        <Status tone="active">Enabled</Status>
+                        <StateBadge state="healthy">Enabled</StateBadge>
                       )}
                     </td>
                   </tr>

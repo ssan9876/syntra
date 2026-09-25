@@ -2,6 +2,8 @@ import { useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
+  ColumnPicker,
+  DensityToggle,
   Empty,
   Field,
   ListControls,
@@ -9,9 +11,14 @@ import {
   Panel,
   Select,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
+  TableToolbar,
   buttonClasses,
+  useDensity,
+  useHiddenColumns,
+  type ColumnDef,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
@@ -56,6 +63,19 @@ interface PersonRow {
 }
 
 /**
+ * The account table's columns. The name is the way into the record and the
+ * status is what the list is scanned for, so neither can be hidden; the rest
+ * are the reader's to trim on a narrow console.
+ */
+const COLUMNS: ColumnDef[] = [
+  { id: 'name', label: 'Name', required: true },
+  { id: 'login', label: 'Login' },
+  { id: 'email', label: 'Email' },
+  { id: 'managedBy', label: 'Managed by' },
+  { id: 'status', label: 'Status', required: true },
+];
+
+/**
  * The accounts, as a list and nothing else.
  *
  * Every control that used to live on a row is now on the account's own screen,
@@ -89,6 +109,10 @@ export function AccountsTab() {
   const pageSize = params.get('pageSize');
   if (pageSize) query.set('pageSize', pageSize);
   const qs = query.toString();
+
+  const [density, setDensity] = useDensity('accounts');
+  const [hidden, setHidden] = useHiddenColumns('accounts');
+  const shows = (column: string) => !hidden.has(column);
 
   const { data, error, loading, reload } = useApiResource<{
     users: UserRow[];
@@ -211,6 +235,7 @@ export function AccountsTab() {
             <Field
               label="Login"
               value={v.login ?? ''}
+              name="login"
               onChange={(x) => set('login', x)}
               error={errs.login}
               placeholder="mokafor"
@@ -218,6 +243,7 @@ export function AccountsTab() {
             <Field
               label="Email"
               value={v.email ?? ''}
+              name="email"
               onChange={(x) => set('email', x)}
               error={errs.email}
               type="email"
@@ -226,6 +252,7 @@ export function AccountsTab() {
             <Field
               label="Display name"
               value={v.displayName ?? ''}
+              name="displayName"
               onChange={(x) => set('displayName', x)}
               error={errs.displayName}
               placeholder="Maya Okafor"
@@ -233,6 +260,7 @@ export function AccountsTab() {
             <Select
               label="Person"
               value={v.personId ?? ''}
+              name="personId"
               onChange={(x) => set('personId', x)}
               error={errs.personId}
               options={[
@@ -257,6 +285,7 @@ export function AccountsTab() {
             <Select
               label="Org unit"
               value={v.orgUnitId ?? ''}
+              name="orgUnitId"
               onChange={(x) => set('orgUnitId', x)}
               error={errs.orgUnitId}
               options={[
@@ -311,20 +340,41 @@ export function AccountsTab() {
         </div>
       )}
 
+      {!error && data && users.length > 0 && (
+        <TableToolbar>
+          <ColumnPicker columns={COLUMNS} hidden={hidden} onChange={setHidden} />
+          <DensityToggle value={density} onChange={setDensity} />
+        </TableToolbar>
+      )}
+
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={6} cols={4} />}
+          {/* Skeleton only before the first answer. A search or a page
+              change keeps the previous rows on screen until the next arrive. */}
+          {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
-          {!loading && users.length === 0 && total === 0 && !filtered && (
+          {data && users.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
-              <Empty title="No users yet">
+              <Empty
+                title="No users yet"
+                action={
+                  <Link to="/admin/sources/new" className={buttonClasses('primary')}>
+                    Connect a directory
+                  </Link>
+                }
+                secondaryAction={
+                  <Link to="/admin/users?tab=people" className="link">
+                    Start from a person instead
+                  </Link>
+                }
+              >
                 Users appear here once they are created, or once a directory
                 synchronization brings them in.
               </Empty>
             </div>
           )}
 
-          {!loading && users.length === 0 && total === 0 && filtered && (
+          {data && users.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
                 title={`No account matches ${q || status}`}
@@ -334,7 +384,7 @@ export function AccountsTab() {
                     className={buttonClasses('secondary')}
                     onClick={() => update({ q: '', status: '', page: '' })}
                   >
-                    Clear the search
+                    Reset filters
                   </button>
                 }
               >
@@ -348,7 +398,7 @@ export function AccountsTab() {
               directory is not, so the unfiltered empty state would say "No
               users yet" over thousands of accounts -- and the pager it used to
               be gated with was the only way back. */}
-          {!loading && users.length === 0 && total > 0 && (
+          {data && users.length === 0 && total > 0 && (
             <div className="p-6">
               <Empty
                 title={`Page ${page} is past the end`}
@@ -365,16 +415,18 @@ export function AccountsTab() {
             </div>
           )}
 
-          {!loading && users.length > 0 && (
-            <Table>
+          {users.length > 0 && (
+            <Table stickyHeader label="Accounts" density={density}>
               <thead>
                 <tr>
                   <th scope="col">Name</th>
-                  <th scope="col">Login</th>
-                  <th scope="col" className="max-sm:hidden">
-                    Email
-                  </th>
-                  <th scope="col">Managed by</th>
+                  {shows('login') && <th scope="col">Login</th>}
+                  {shows('email') && (
+                    <th scope="col" className="max-sm:hidden">
+                      Email
+                    </th>
+                  )}
+                  {shows('managedBy') && <th scope="col">Managed by</th>}
                   <th scope="col">Status</th>
                 </tr>
               </thead>
@@ -392,8 +444,9 @@ export function AccountsTab() {
                         {user.displayName}
                       </Link>
                     </td>
-                    <td>{user.login}</td>
-                    <td className="max-sm:hidden">{user.email}</td>
+                    {shows('login') && <td>{user.login}</td>}
+                    {shows('email') && <td className="max-sm:hidden">{user.email}</td>}
+                    {shows('managedBy') && (
                     <td>
                       {!user.sourceId ? (
                         <span className="text-muted">Syntra</span>
@@ -410,6 +463,7 @@ export function AccountsTab() {
                         </span>
                       )}
                     </td>
+                    )}
                     <td>
                       {/*
                         Inactive accounts stay listed and labelled. Hiding a
@@ -418,12 +472,14 @@ export function AccountsTab() {
                       */}
                       {user.status === 'active' ? (
                         <span className="flex flex-wrap items-center gap-2">
-                          <Status tone="active">Active</Status>
-                          {user.locked && <Status tone="warning">Locked out</Status>}
+                          <StateBadge state="healthy">Active</StateBadge>
+                          {/* Blocked, not a caution: a locked account cannot
+                              sign in until somebody unlocks it. */}
+                          {user.locked && <StateBadge state="blocked">Locked out</StateBadge>}
                         </span>
                       ) : (
                         <span className="flex flex-wrap items-center gap-2">
-                          <Status tone="inactive">Inactive</Status>
+                          <StateBadge state="inactive">Inactive</StateBadge>
                           {user.statusReason && (
                             <span className="text-sm text-muted">
                               {user.statusReason}
@@ -441,7 +497,7 @@ export function AccountsTab() {
       )}
 
       {/* Not gated on the rows: see PeopleTab. */}
-      {!error && !loading && (
+      {!error && data && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

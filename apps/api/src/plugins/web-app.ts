@@ -120,6 +120,10 @@ export async function registerWebApp(
       if (
         isServerPath(pathname) ||
         pathname.startsWith(`/${ASSETS}/`) ||
+        // The same for the built-in application logos: a key with no file is
+        // a missing image, and an HTML page in its place is a broken-image
+        // glyph instead of the monogram the tile falls back to on a 404.
+        pathname.startsWith('/app-icons/') ||
         (request.method !== 'GET' && request.method !== 'HEAD')
       ) {
         return reply.status(404).type('application/problem+json').send({

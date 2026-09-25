@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Empty,
+  Panel,
+  RefreshStatus,
+  SkeletonRows,
+  Table,
+  TableToolbar,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
+import { RunState } from './run-states.js';
 
 interface Run {
   id: string;
@@ -26,13 +36,6 @@ const displayStatus = (run: Run) =>
     ? 'superseded'
     : run.status;
 
-const tone = (status: string): 'active' | 'warning' | 'danger' | 'neutral' => {
-  if (status === 'applied') return 'active';
-  if (status === 'blocked') return 'warning';
-  if (status === 'failed') return 'danger';
-  return 'neutral';
-};
-
 /** How long to keep looking for a run that has been queued but not yet started. */
 const POLL_MS = 2000;
 const POLL_LIMIT = 10;
@@ -41,6 +44,8 @@ export function ProvisionRunsPage() {
   const { id } = useParams<{ id: string }>();
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,10 +64,12 @@ export function ProvisionRunsPage() {
   // timer on every render if they had.
   const reload = useCallback(() => {
     const seq = ++requestSeq.current;
+    setRefreshing(true);
     void api<{ runs: Run[] }>(`/api/admin/targets/${id}/runs`)
       .then((body) => {
         if (seq !== requestSeq.current) return;
         setRuns(body.runs);
+        setUpdatedAt(new Date());
         if (body.runs.length > seen.current) {
           seen.current = body.runs.length;
           setWaiting(0);
@@ -75,6 +82,7 @@ export function ProvisionRunsPage() {
       .finally(() => {
         if (seq !== requestSeq.current) return;
         setLoading(false);
+        setRefreshing(false);
       });
   }, [id]);
   useEffect(reload, [reload]);
@@ -122,14 +130,9 @@ export function ProvisionRunsPage() {
       <PageHeader
         title="Runs"
         actions={
-          <>
-            <Button onClick={reload} disabled={busy}>
-              Refresh
-            </Button>
-            <Button variant="primary" onClick={onRun} loading={busy}>
-              Run now
-            </Button>
-          </>
+          <Button variant="primary" onClick={onRun} loading={busy}>
+            Run now
+          </Button>
         }
       />
 
@@ -137,12 +140,25 @@ export function ProvisionRunsPage() {
         {notice && <Alert tone="info">{notice}</Alert>}
         {problem && <Alert tone="danger">{problem}</Alert>}
 
+        <div>
+        {!loading && (
+          <TableToolbar>
+            <RefreshStatus updatedAt={updatedAt} onRefresh={reload} refreshing={refreshing || busy} />
+          </TableToolbar>
+        )}
         <Panel>
           {loading && <SkeletonRows rows={4} cols={4} />}
 
           {!loading && runs.length === 0 && (
             <div className="p-6">
-              <Empty title="No runs yet">
+              <Empty
+                title="No runs yet"
+                action={
+                  <Button variant="primary" onClick={onRun} loading={busy}>
+                    Run a preview
+                  </Button>
+                }
+              >
                 A run evaluates every person against this target&apos;s rules and
                 proposes what it would change. Nothing is written until the plan
                 is reviewed.
@@ -151,7 +167,7 @@ export function ProvisionRunsPage() {
           )}
 
           {!loading && runs.length > 0 && (
-            <Table>
+            <Table stickyHeader label="Provisioning runs">
               <thead>
                 <tr>
                   <th scope="col">
@@ -183,14 +199,14 @@ export function ProvisionRunsPage() {
                       </td>
                       <td>
                         <span title={run.blockedReason ?? run.error ?? undefined}>
-                          <Status tone={tone(status)}>{status}</Status>
+                          <RunState status={status} />
                         </span>
                       </td>
                       <td className="tabular-nums text-ink">
                         {run.personsEvaluated}
                       </td>
                       <td
-                        className={`px-4 py-2.5 tabular-nums ${
+                        className={`tabular-nums ${
                           run.personsUnprocessable > 0
                             ? 'font-semibold text-danger'
                             : 'text-muted'
@@ -205,6 +221,7 @@ export function ProvisionRunsPage() {
             </Table>
           )}
         </Panel>
+        </div>
 
         <Link
           to={`/admin/targets/${id}`}

@@ -705,7 +705,7 @@ export async function automateSettings(tx: TenantClient) {
   const tenantId = await currentTenant(tx);
   await tx.$executeRaw`
     INSERT INTO "AutomateSettings" ("id", "tenantId", "updatedAt")
-    VALUES (gen_random_uuid(), ${tenantId}::uuid, now())
+    VALUES (gen_random_uuid(), ${tenantId}::uuid, (now() AT TIME ZONE 'UTC'))
     ON CONFLICT ("tenantId") DO NOTHING
   `;
   return tx.automateSettings.findUniqueOrThrow({ where: { tenantId } });

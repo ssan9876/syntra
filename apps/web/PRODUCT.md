@@ -37,6 +37,13 @@ the room is lit, not because light is safe.
   audit chain: the interface reports it prominently. An identity system that
   quietly loses a person is worse than one that refuses the file.
 - **Speed over choreography.** Users are mid-task. No page-load sequences.
+- **Certainty about people, not systems.** The two questions an administrator
+  must be able to answer from one person's page: can this person start work,
+  and has their access ended everywhere Syntra manages. A saved record or a
+  queued job is not an answer; an observed target state is.
+- **Works at the size of a real directory.** Designed around a 400-person
+  organisation, but pickers and searches ask the server rather than filtering
+  a sample, so a directory of several thousand is not a different product.
 
 ## What it is not
 

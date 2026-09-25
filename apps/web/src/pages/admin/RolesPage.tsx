@@ -4,14 +4,20 @@ import {
   Button,
   Check,
   Empty,
+  ErrorSummary,
   Field,
+  FormActions,
+  FormSection,
   Panel,
   Select,
   SkeletonRows,
   Status,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { DeleteButton } from './DeleteButton.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
 import { StatCard, StatGrid } from '../../components/StatCards.js';
 
@@ -72,7 +78,22 @@ export function RolesPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
+  /**
+   * The editor's own refusal, kept apart from `problem`. That one is for the
+   * list's controls — grant, revoke — and belongs at the top of the page; a
+   * refused SAVE belongs in the form that was refused, at the top of it,
+   * focused, where the sticky save bar has just been pressed.
+   */
+  const [formProblem, setFormProblem] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  /** What the editor opened with, for "Unsaved changes". */
+  const [opened, setOpened] = useState<{ name: string; description: string; permissions: string[] }>({
+    name: '',
+    description: '',
+    permissions: [],
+  });
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
   /** Which role's grant picker is open, and who is selected in it. */
   const [granting, setGranting] = useState<string | null>(null);
   const [grantee, setGrantee] = useState('');
@@ -120,7 +141,14 @@ export function RolesPage() {
     setChosen(new Set(role.permissions));
     setName(role.name);
     setDescription(role.description ?? '');
+    setOpened({
+      name: role.name,
+      description: role.description ?? '',
+      permissions: [...role.permissions],
+    });
     setProblem(null);
+    setFormProblem(null);
+    setFormErrors({});
   };
 
   /**
@@ -142,7 +170,10 @@ export function RolesPage() {
     setChosen(new Set());
     setName('');
     setDescription('');
+    setOpened({ name: '', description: '', permissions: [] });
     setProblem(null);
+    setFormProblem(null);
+    setFormErrors({});
   };
 
   const toggle = (permission: string, on: boolean) => {
@@ -155,7 +186,8 @@ export function RolesPage() {
   const save = async () => {
     if (!form) return;
     setBusy(true);
-    setProblem(null);
+    setFormProblem(null);
+    setFormErrors({});
     try {
       const body = JSON.stringify({
         name,
@@ -172,6 +204,10 @@ export function RolesPage() {
         ? // The COLLECTION. Posting to a role's own path would edit it.
           api('/api/admin/roles', { method: 'POST', body })
         : api(`/api/admin/roles/${form.id}`, { method: 'PATCH', body }));
+      toast({
+        tone: 'success',
+        title: form.id === null ? `${name.trim()} created` : `${name.trim()} saved`,
+      });
       setForm(null);
       reload();
     } catch (cause) {
@@ -179,10 +215,14 @@ export function RolesPage() {
       // -- "that would leave nobody able to administer roles" -- is one the
       // reader can act on, and flattening it to "something went wrong" leaves
       // them pressing Save again.
-      setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That role could not be saved.',
+      const marked = formFieldErrors(cause);
+      setFormErrors(marked);
+      setFormProblem(
+        Object.keys(marked).length > 0
+          ? null
+          : cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That role could not be saved.',
       );
     } finally {
       setBusy(false);
@@ -285,19 +325,12 @@ export function RolesPage() {
     }
   };
 
-  const remove = async (role: RoleRow) => {
-    setProblem(null);
-    try {
-      await api(`/api/admin/roles/${role.id}`, { method: 'DELETE' });
-      reload();
-    } catch (cause) {
-      setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That role could not be deleted.',
-      );
-    }
-  };
+  const dirty =
+    form !== null &&
+    (name !== opened.name ||
+      description !== opened.description ||
+      chosen.size !== opened.permissions.length ||
+      opened.permissions.some((p) => !chosen.has(p)));
 
   return (
     <>
@@ -328,30 +361,68 @@ export function RolesPage() {
       {problem && <Alert tone="warning">{problem}</Alert>}
 
       {form && (
-        <div className="mb-6">
+        // The form wraps the panel rather than sitting inside it so the save
+        // bar can be sticky: the permission list runs to several screens, and
+        // `Panel` clips its overflow, which would pin the bar to the panel.
+        <form
+          noValidate
+          className="mb-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (chosen.size > 0 && name.trim() !== '') void save();
+          }}
+        >
           <Panel
-            title={form.id === null ? 'New role' : `Edit ${name}`}
-            {...(form.builtIn
-              ? {
-                  description:
-                    'A built-in role. Its permissions are editable — that is how a permission added by an upgrade reaches the person who needs it — but it cannot be deleted.',
-                }
-              : {})}
+            title={form.id === null ? 'New role' : `Edit ${opened.name}`}
+            // A fact about the role, labelled as one. This was a sentence
+            // passed as a `description` the panel never rendered.
+            actions={form.builtIn ? <Status tone="neutral">Built in, cannot be deleted</Status> : null}
+            bodyClassName="space-y-8 p-4"
           >
-            <div className="space-y-4 p-4">
-              <Field label="Name" value={name} onChange={setName} />
+            <ErrorSummary
+              errors={summaryErrors(
+                formErrors,
+                { name: 'Name', description: 'Description', permissions: 'Permissions' },
+                formProblem,
+              )}
+              {...(Object.keys(formErrors).length === 0 ? { title: 'Not saved' } : {})}
+            />
+
+            <FormSection title="Role">
+              <Field
+                name="name"
+                label="Name"
+                value={name}
+                onChange={setName}
+                error={formErrors.name}
+              />
               {/* The API has stored one since the role table existed and
                   nothing ever set it. Survivable while there was one built-in
                   role whose name said everything; not once there are four
                   narrow ones whose names do not. */}
               <Field
+                name="description"
                 label="Description"
                 value={description}
                 onChange={setDescription}
                 maxLength={1000}
+                error={formErrors.description}
               />
-              <fieldset aria-label="Permissions" className="space-y-4">
-                <legend className="mb-1.5 font-medium text-ink">Permissions</legend>
+            </FormSection>
+
+            <FormSection
+              title="Permissions"
+              status={
+                <span className="text-muted tabular-nums">
+                  {chosen.size} of {data?.catalog.length ?? 0} chosen
+                </span>
+              }
+            >
+              {/* The visible heading is the section's; the fieldset keeps its
+                  own accessible name so the group of boxes is still announced
+                  as "Permissions" by whoever tabs into it. */}
+              <fieldset aria-label="Permissions" className="grid gap-6 sm:col-span-2 sm:grid-cols-2">
+                <legend className="sr-only">Permissions</legend>
                 {/* Grouped by module, because twenty-four dotted keys in one
                     flat list is a list you can read but not choose from:
                     picking a narrow set means knowing from memory that
@@ -375,27 +446,35 @@ export function RolesPage() {
                   </fieldset>
                 ))}
               </fieldset>
-              <div className="flex gap-2">
-                <Button
-                  variant="primary"
-                  loading={busy}
-                  // `roleBody` requires at least one: a role granting nothing
-                  // is indistinguishable from a mistake, and deleting it is
-                  // how you say that. Refused here rather than by a round
-                  // trip, because the empty fieldset that caused it is on
-                  // screen.
-                  disabled={chosen.size === 0 || name.trim() === ''}
-                  onClick={save}
-                >
-                  {form.id === null ? 'Create' : 'Save'}
-                </Button>
-                <Button variant="secondary" onClick={() => setForm(null)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
+            </FormSection>
           </Panel>
-        </div>
+
+          <FormActions
+            sticky
+            status={
+              chosen.size === 0 ? (
+                // Why Save is disabled, beside it. `roleBody` requires at
+                // least one: a role granting nothing is indistinguishable from
+                // a mistake, and deleting it is how you say that.
+                <span className="text-warning">Choose at least one permission</span>
+              ) : dirty ? (
+                <span className="text-muted">Unsaved changes</span>
+              ) : null
+            }
+          >
+            <Button type="button" variant="secondary" onClick={() => setForm(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={busy}
+              disabled={chosen.size === 0 || name.trim() === ''}
+            >
+              {form.id === null ? 'Create' : 'Save'}
+            </Button>
+          </FormActions>
+        </form>
       )}
 
       <Panel>
@@ -436,7 +515,7 @@ export function RolesPage() {
                     {role.permissions.length === 1 ? '' : 's'}
                   </span>
                 </span>
-                <span className="ml-auto flex items-center gap-2">
+                <span className="ml-auto flex flex-wrap items-start justify-end gap-2">
                   <Button size="sm" variant="secondary" onClick={() => open(role)}>
                     Edit
                   </Button>
@@ -444,10 +523,24 @@ export function RolesPage() {
                       permission backfill targets, and RoleAssignment cascades
                       from Role — so the control is not offered rather than
                       offered and refused. */}
+                  {/* Typed confirmation, like every other delete in the console:
+                      this one also takes the role off everybody holding it,
+                      because RoleAssignment cascades from Role. */}
                   {!role.builtIn && (
-                    <Button size="sm" variant="ghost" onClick={() => remove(role)}>
-                      Delete
-                    </Button>
+                    <DeleteButton
+                      path={`/api/admin/roles/${role.id}`}
+                      label="role"
+                      confirmWord={role.name}
+                      warning={
+                        role.assignmentCount === 0
+                          ? 'Nobody holds it, so nobody loses anything.'
+                          : `${role.assignmentCount} ${role.assignmentCount === 1 ? 'holder loses' : 'holders lose'} every permission it grants.`
+                      }
+                      onDeleted={() => {
+                        toast({ tone: 'success', title: `${role.name} deleted` });
+                        reload();
+                      }}
+                    />
                   )}
                 </span>
                 </div>

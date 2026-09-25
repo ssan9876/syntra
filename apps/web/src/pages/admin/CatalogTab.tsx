@@ -1,5 +1,15 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import {
+  Alert,
+  buttonClasses,
+  Empty,
+  Panel,
+  SkeletonRows,
+  StateBadge,
+  Status,
+  Table,
+  type State,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
 interface ProductRow {
@@ -12,6 +22,14 @@ interface ProductRow {
   grants: { id: string }[];
 }
 
+/** A draft is not yet a product anyone can ask for; a retired one is off on purpose. */
+const PRODUCT_STATE: Record<string, State> = {
+  active: 'healthy',
+  draft: 'setup',
+  retired: 'inactive',
+  archived: 'inactive',
+};
+
 export function CatalogTab() {
   const { data, error, loading } = useApiResource<{ products: ProductRow[] }>(
     '/api/admin/automate/products',
@@ -22,25 +40,35 @@ export function CatalogTab() {
       {/* The action sits with the table it acts on. One header above
           several tabs would need a word saying which tab its button
           applied to. */}
-      <div className="mb-4 flex justify-end">
-        <Link to="/admin/automate/products/new" className="text-primary">
+      {/* On an empty catalog the empty state carries this instead. */}
+      {(data?.products ?? []).length > 0 && (
+        <div className="mb-4 flex justify-end">
+          <Link to="/admin/automate/products/new" className={buttonClasses('primary')}>
             New product
           </Link>
-      </div>
+        </div>
+      )}
       {error && <Alert tone="danger">{error}</Alert>}
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={5} cols={4} />}
-          {!loading && (data?.products ?? []).length === 0 && (
+          {!data && loading && <SkeletonRows rows={5} cols={4} />}
+          {data && (data.products ?? []).length === 0 && (
             <div className="p-6">
-              <Empty title="No products yet">
+              <Empty
+                title="No products yet"
+                action={
+                  <Link to="/admin/automate/products/new" className={buttonClasses('primary')}>
+                    New product
+                  </Link>
+                }
+              >
                 A product is one thing somebody may ask for. Until one is
                 published and given an audience, the catalog is empty for
                 everybody.
               </Empty>
             </div>
           )}
-          {!loading && (data?.products ?? []).length > 0 && (
+          {data && (data.products ?? []).length > 0 && (
             <Table>
               <thead>
                 <tr>
@@ -58,35 +86,31 @@ export function CatalogTab() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {data!.products.map((product) => (
+              <tbody>
+                {data.products.map((product) => (
                   <tr key={product.id}>
-                    <td className="py-3">
+                    <td>
                       <Link
                         to={`/admin/automate/products/${product.id}`}
-                        className="text-ink hover:text-primary"
+                        className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
                       >
                         {product.name}
                       </Link>
                     </td>
-                    <td className="py-3">{product.kind}</td>
-                    <td className="py-3">
+                    <td>{product.kind}</td>
+                    <td>
                       {/* A product with no audience is visible to nobody, and
                           the list says so rather than leaving a blank cell. */}
                       {product.audienceCondition === null ? (
-                        <Status tone="warning">Nobody</Status>
+                        <StateBadge state="attention">Nobody</StateBadge>
                       ) : (
                         <Status tone="neutral">An audience rule</Status>
                       )}
                     </td>
-                    <td className="py-3">
-                      <Status
-                        tone={
-                          product.status === 'active' ? 'active' : 'neutral'
-                        }
-                      >
-                        {product.status}
-                      </Status>
+                    <td>
+                      <StateBadge state={PRODUCT_STATE[product.status] ?? 'setup'}>
+                        {product.status.charAt(0).toUpperCase() + product.status.slice(1)}
+                      </StateBadge>
                     </td>
                   </tr>
                 ))}

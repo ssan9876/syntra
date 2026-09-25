@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Field, ToastProvider } from '@syntra/ui';
 import { RecordPanel } from './RecordPanel.js';
 import { GroupsPage } from './GroupsPage.js';
 import { OrgUnitsPage } from './OrgUnitsPage.js';
@@ -415,5 +416,114 @@ describe('RecordPanel confirmable refusals', () => {
     expect(
       screen.queryByText('They already have an account.'),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * What the reader is told once a save lands, and when it does not.
+ *
+ * Rendered inside a `ToastProvider`: without one `useToast` is a no-op, which
+ * is right for a page in isolation and would make this test assert nothing.
+ */
+describe('RecordPanel confirmation and error summary', () => {
+  function renderForm(response: () => Response, props: { method?: 'POST' | 'PATCH'; savedTitle?: string } = {}) {
+    vi.stubGlobal('fetch', vi.fn(async () => response()));
+    const onCreated = vi.fn();
+    render(
+      <MemoryRouter>
+        <ToastProvider>
+          <RecordPanel
+            title="New group"
+            submitLabel="New group"
+            path="/api/admin/groups"
+            onCreated={onCreated}
+            build={(v) => ({ name: v.name ?? '' })}
+            {...props}
+            fields={(v, set, errors) => (
+              <Field
+                name="name"
+                label="Name"
+                value={v.name ?? ''}
+                onChange={(value) => set('name', value)}
+                error={errors.name}
+              />
+            )}
+          />
+        </ToastProvider>
+      </MemoryRouter>,
+    );
+    return onCreated;
+  }
+
+  it('confirms a save with a toast, since the form closes on success', async () => {
+    const onCreated = renderForm(() => json({ id: 'g9' }, 201), { savedTitle: 'Group created' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Payroll');
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+    expect(await screen.findByRole('status')).toHaveTextContent('Group created');
+  });
+
+  it('defaults the confirmation to the kind of save', async () => {
+    renderForm(() => json({ id: 'g9' }), { method: 'PATCH' });
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+
+    expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+  });
+
+  it('says the form has changed before it is saved', async () => {
+    renderForm(() => json({}));
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+    await userEvent.type(screen.getByLabelText('Name'), 'P');
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('lists a field refusal at the top, naming the field, and links to it', async () => {
+    renderForm(() =>
+      json(
+        {
+          type: 'https://syntra.dev/problems/validation',
+          title: 'Validation failed',
+          status: 400,
+          errors: [{ path: 'name', message: 'A group with that name exists' }],
+        },
+        400,
+      ),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'Existing');
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+
+    const summary = await screen.findByRole('alert');
+    expect(summary).toHaveTextContent('Fix these before saving');
+    // It takes focus, so the reader who pressed Save is taken to it.
+    expect(summary).toHaveFocus();
+    // Against the field too, in the field's own words.
+    expect(screen.getByText('A group with that name exists')).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Name: A group with that name exists' }),
+    );
+    expect(screen.getByLabelText('Name')).toHaveFocus();
+  });
+
+  it('puts a refusal with no field in the same summary', async () => {
+    renderForm(() =>
+      json({ title: 'Forbidden', status: 403, detail: 'Requires directory.write' }, 403),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+    await userEvent.click(screen.getByRole('button', { name: 'New group' }));
+
+    const summary = await screen.findByRole('alert');
+    expect(summary).toHaveTextContent('Not saved');
+    expect(summary).toHaveTextContent('Requires directory.write');
   });
 });

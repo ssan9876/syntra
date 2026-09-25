@@ -26,7 +26,14 @@ describe('GET /api/branding', () => {
     // silent fallback for what is simply the default.
     const res = await get();
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ name: null, logo: null, primary: null, accent: null });
+    expect(res.json()).toEqual({
+      name: null,
+      logo: null,
+      primary: null,
+      accent: null,
+      supportUrl: null,
+      supportLabel: null,
+    });
   });
 
   it('needs no session', async () => {
@@ -44,6 +51,19 @@ describe('GET /api/branding', () => {
     expect(await get().then((r) => r.json())).toMatchObject({
       name: 'Acme',
       primary: '#2563eb',
+    });
+  });
+
+  it('returns the support destination, which the sign-in page links to', async () => {
+    // Read without a session because that is exactly who needs it: somebody
+    // who cannot sign in.
+    await prisma.tenant.update({
+      where: { id: ctx.tenantId },
+      data: { brandSupportUrl: 'mailto:help@acme.test', brandSupportLabel: 'IT service desk' },
+    });
+    expect(await get().then((r) => r.json())).toMatchObject({
+      supportUrl: 'mailto:help@acme.test',
+      supportLabel: 'IT service desk',
     });
   });
 

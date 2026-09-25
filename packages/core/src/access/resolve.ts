@@ -85,6 +85,8 @@ export async function resolveApplicationsForUser(tx: TenantClient, userId: strin
   return tx.application.findMany({
     where: { id: { in: [...ids] }, visibility: 'assigned' },
     orderBy: { name: 'asc' },
+    // A tile needs the logo's URL, not its bytes. See `APPLICATION_OMIT`.
+    omit: { iconImage: true },
   });
 }
 

@@ -8,7 +8,7 @@ import {
   Pager,
   Panel,
   SkeletonRows,
-  Status,
+  StateBadge,
   Table,
   buttonClasses,
 } from '@syntra/ui';
@@ -156,6 +156,7 @@ export function GroupsPage() {
             <Field
               label="Name"
               value={v.name ?? ''}
+              name="name"
               onChange={(x) => set('name', x)}
               error={errs.name}
               placeholder="Ward Nurses"
@@ -163,6 +164,7 @@ export function GroupsPage() {
             <Field
               label="Description"
               value={v.description ?? ''}
+              name="description"
               onChange={(x) => set('description', x)}
               error={errs.description}
             />
@@ -172,9 +174,9 @@ export function GroupsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={3} />}
+          {!data && loading && <SkeletonRows rows={4} cols={3} />}
 
-          {!loading && groups.length === 0 && total === 0 && !filtered && (
+          {data && groups.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
               <Empty title="No groups yet">
                 Create a group to grant the same access to several people at
@@ -183,7 +185,7 @@ export function GroupsPage() {
             </div>
           )}
 
-          {!loading && groups.length === 0 && total === 0 && filtered && (
+          {data && groups.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
                 title={`No group matches ${q || status}`}
@@ -193,7 +195,7 @@ export function GroupsPage() {
                     className={buttonClasses('secondary')}
                     onClick={() => update({ q: '', status: '', page: '' })}
                   >
-                    Clear the search
+                    Reset filters
                   </button>
                 }
               >
@@ -206,7 +208,7 @@ export function GroupsPage() {
               once the groups it named are gone. The rows are empty and the
               tenant is not, so the unfiltered state would say "No groups yet"
               over thousands of them. */}
-          {!loading && groups.length === 0 && total > 0 && (
+          {data && groups.length === 0 && total > 0 && (
             <div className="p-6">
               <Empty
                 title={`Page ${page} is past the end`}
@@ -226,8 +228,8 @@ export function GroupsPage() {
           {/* `Table`, as every other list in the product uses. The
               hand-written list here carried its own padding, which is exactly
               how the console came to have several row heights. */}
-          {!loading && groups.length > 0 && (
-            <Table>
+          {groups.length > 0 && (
+            <Table stickyHeader label="Groups">
               <thead>
                 <tr>
                   <th scope="col">Name</th>
@@ -255,13 +257,13 @@ export function GroupsPage() {
                     <td className="max-sm:hidden">{group.description ?? '—'}</td>
                     <td>
                       {group.status === 'active' ? (
-                        <Status tone="active">Active</Status>
+                        <StateBadge state="healthy">Active</StateBadge>
                       ) : (
                         // LABELLED, not hidden. A deactivated group keeps its
                         // members and grants nothing, and an administrator
                         // needs to see that it is still there and why.
                         <span className="flex flex-wrap items-center gap-2">
-                          <Status tone="inactive">Inactive</Status>
+                          <StateBadge state="inactive">Inactive</StateBadge>
                           {group.statusReason && (
                             <span className="text-sm text-muted">
                               {group.statusReason}
@@ -280,7 +282,7 @@ export function GroupsPage() {
 
       {/* Not gated on the rows: the count is the answer to "how many are
           there", and on a page past the end the pager is the way back. */}
-      {!error && !loading && (
+      {!error && data && (
         <Pager page={page} pageSize={shownPageSize} total={total} onPage={onPage} />
       )}
     </>

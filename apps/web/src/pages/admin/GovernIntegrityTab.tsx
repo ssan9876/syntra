@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -29,6 +29,8 @@ export function GovernIntegrityTab() {
     '/api/admin/govern/integrity',
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const toast = useToast();
 
   const status = data;
 
@@ -37,7 +39,7 @@ export function GovernIntegrityTab() {
 
       {error && <Alert tone="danger">{error}</Alert>}
       {actionError && <Alert tone="danger">{actionError}</Alert>}
-      {loading && <SkeletonRows rows={5} cols={2} />}
+      {!data && loading && <SkeletonRows rows={5} cols={2} />}
 
       {status && (
         <div className="space-y-6">
@@ -81,10 +83,14 @@ export function GovernIntegrityTab() {
           </Panel>
 
           <Button
+            loading={verifying}
             onClick={() => {
+              setVerifying(true);
               void api('/api/admin/govern/integrity/verify', { method: 'POST' })
                 .then(() => {
                   setActionError(null);
+                  // The result is the "Last verification" row above.
+                  toast({ title: 'Verification finished' });
                   reload();
                 })
                 .catch((cause: unknown) =>
@@ -93,7 +99,8 @@ export function GovernIntegrityTab() {
                       ? (cause.problem.detail ?? cause.problem.title)
                       : 'Could not verify the chain.',
                   ),
-                );
+                )
+                .finally(() => setVerifying(false));
             }}
           >
             Verify now

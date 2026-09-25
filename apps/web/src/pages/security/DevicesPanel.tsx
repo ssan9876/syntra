@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Empty, Panel } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { api } from '../../session/api.js';
 
 interface DeviceRow {
@@ -74,6 +74,7 @@ export function DevicesPanel() {
   const [error, setError] = useState<string | null>(null);
   const [signedOut, setSignedOut] = useState(false);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const load = useCallback(async () => {
     try {
@@ -106,6 +107,7 @@ export function DevicesPanel() {
         setSignedOut(true);
         return;
       }
+      toast({ title: 'Device signed out' });
       await load();
     } catch {
       setError('That device could not be signed out.');
@@ -127,6 +129,8 @@ export function DevicesPanel() {
   return (
     <Panel title="Where you are signed in" bodyClassName="p-4">
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {devices === null && !error && <SkeletonRows rows={2} />}
 
       {devices !== null && devices.length === 0 && (
         <Empty title="Nothing to show yet">

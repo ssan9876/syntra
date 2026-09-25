@@ -1,6 +1,22 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Field, Panel, Select, SkeletonRows, Status, Table, buttonClasses } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  DensityToggle,
+  Empty,
+  Field,
+  Panel,
+  RefreshStatus,
+  Select,
+  SkeletonRows,
+  StateBadge,
+  Table,
+  TableToolbar,
+  buttonClasses,
+  useDensity,
+  useToast,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 
@@ -103,7 +119,11 @@ export function AuditTab() {
   // go back without the server having to page upwards.
   const [cursors, setCursors] = useState<(number | null)[]>([null]);
   const before = cursors[cursors.length - 1] ?? null;
-  const { data, error, loading } = useApiResource<AuditResponse>(auditQuery(filters, before));
+  const { data, error, loading, updatedAt, reload } = useApiResource<AuditResponse>(
+    auditQuery(filters, before),
+  );
+  const [density, setDensity] = useDensity('audit');
+  const toast = useToast();
   const views = useApiResource<{ views: SavedView[] }>('/api/admin/audit/views');
   const [notice, setNotice] = useState<{ tone: 'info' | 'danger'; text: string; exportId?: string } | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -147,7 +167,9 @@ export function AuditTab() {
     try {
       await api('/api/admin/audit/views', { method: 'PUT', body: JSON.stringify({ name, filters }) });
       setViewName('');
-      setNotice({ tone: 'info', text: `Saved “${name}”.` });
+      // A saved search is confirmed in passing; an export keeps its inline
+      // receipt below, because it carries the link to follow it.
+      toast({ title: `Saved “${name}”` });
       views.reload();
     } catch (cause) {
       setNotice({
@@ -215,7 +237,11 @@ export function AuditTab() {
         {notice && (
           <Alert tone={notice.tone}>
             {notice.text}{' '}
-            {notice.exportId && <Link to="/admin/activity?tab=exports">Follow it in Exports</Link>}
+            {notice.exportId && (
+              <Link className="link" to="/admin/activity?tab=exports">
+                Follow it in Exports
+              </Link>
+            )}
           </Alert>
         )}
       </div>
@@ -237,27 +263,45 @@ export function AuditTab() {
 
       {!error && data?.chainValid && events.length > 0 && (
         <p className="mb-4 flex items-center gap-2 text-muted">
-          <Status tone="active">Chain verified</Status>
+          <StateBadge state="healthy">Chain verified</StateBadge>
           <span>No entry has been altered or removed.</span>
         </p>
       )}
 
+      {!error && data && (
+        <TableToolbar>
+          <RefreshStatus updatedAt={updatedAt} onRefresh={reload} refreshing={loading} />
+          <DensityToggle value={density} onChange={setDensity} />
+        </TableToolbar>
+      )}
+
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={8} cols={4} />}
+          {!data && loading && <SkeletonRows rows={8} cols={4} />}
 
-          {!loading && data && events.length === 0 && (
+          {data && events.length === 0 && Object.keys(filters).length > 0 && (
             <div className="p-6">
-              <Empty title={Object.keys(filters).length > 0 ? 'No matching events' : 'Nothing recorded yet'}>
-                {Object.keys(filters).length > 0
-                  ? 'Nothing in the log matches these filters.'
-                  : 'Sign-ins, account changes and permission grants appear here as they happen.'}
+              <Empty
+                title="No matching events"
+                action={
+                  <Button variant="secondary" onClick={() => apply({})}>
+                    Reset filters
+                  </Button>
+                }
+              />
+            </div>
+          )}
+
+          {data && events.length === 0 && Object.keys(filters).length === 0 && (
+            <div className="p-6">
+              <Empty title="Nothing recorded yet">
+                Sign-ins, account changes and permission grants appear here as they happen.
               </Empty>
             </div>
           )}
 
-          {!loading && data && events.length > 0 && (
-            <Table>
+          {data && events.length > 0 && (
+            <Table stickyHeader label="Audit log" density={density}>
               <thead>
                 <tr>
                   <th scope="col">#</th>
@@ -276,7 +320,13 @@ export function AuditTab() {
                     <td className="whitespace-nowrap">{when(event.occurredAt)}</td>
                     <td className="text-ink">{event.action}</td>
                     <td>
-                      <Status tone={event.outcome === 'success' ? 'active' : 'danger'}>{event.outcome}</Status>
+                      {event.outcome === 'success' ? (
+                        <StateBadge state="healthy">Success</StateBadge>
+                      ) : (
+                        <StateBadge state="blocked">
+                          {event.outcome.charAt(0).toUpperCase() + event.outcome.slice(1)}
+                        </StateBadge>
+                      )}
                     </td>
                     <td className="max-w-[28ch] truncate max-lg:hidden">{summarize(event.payload)}</td>
                   </tr>

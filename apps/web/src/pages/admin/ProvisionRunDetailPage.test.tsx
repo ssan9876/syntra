@@ -156,7 +156,7 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
     const banner = await noticeHeaded('1 action refused by capability enforcement');
     expect(banner).toHaveTextContent('Planned for adapter 1.0.0.');
-    expect(screen.getByText('refused')).toBeVisible();
+    expect(screen.getByText('Refused')).toBeVisible();
     // A refused action cannot be selected for apply.
     expect(screen.getByLabelText('Apply grant_entitlement for Anna Novak')).toBeDisabled();
   });
@@ -328,7 +328,7 @@ describe('ProvisionRunDetailPage', () => {
     mockFetch(run({ actions: [action({ requiresConfirmation: true })] }));
     renderPage();
 
-    await screen.findByText('needs confirmation');
+    await screen.findByText('Needs confirmation');
     expect(screen.getByRole('button', { name: 'Apply 1 action' })).toBeDisabled();
 
     await userEvent.click(

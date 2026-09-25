@@ -1,5 +1,13 @@
 import { Link } from 'react-router-dom';
-import { Alert, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Empty,
+  Panel,
+  RefreshStatus,
+  SkeletonRows,
+  StateBadge,
+  TableToolbar,
+} from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 
 interface Incident {
@@ -30,7 +38,7 @@ interface Incident {
  * true.
  */
 export function IncidentsTab() {
-  const { data, error, loading } = useApiResource<{ incidents: Incident[] }>(
+  const { data, error, loading, updatedAt, reload } = useApiResource<{ incidents: Incident[] }>(
     '/api/admin/incidents',
   );
 
@@ -42,11 +50,19 @@ export function IncidentsTab() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
+      {/* How old "nothing is broken" is matters as much as the answer: a
+          clean page left open since this morning is this morning's answer. */}
+      {!error && data && (
+        <TableToolbar>
+          <RefreshStatus updatedAt={updatedAt} onRefresh={reload} refreshing={loading} />
+        </TableToolbar>
+      )}
+
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={3} cols={2} />}
+          {!data && loading && <SkeletonRows rows={3} cols={2} />}
 
-          {!loading && incidents.length === 0 && (
+          {data && incidents.length === 0 && (
             <div className="p-6">
               {/* The answer somebody wants most often. A dashboard that
                   manufactures a row to look busy is one people stop reading. */}
@@ -56,16 +72,18 @@ export function IncidentsTab() {
             </div>
           )}
 
-          {!loading && incidents.length > 0 && (
+          {incidents.length > 0 && (
             <ul className="divide-y divide-border-subtle">
               {incidents.map((incident) => (
                 <li key={incident.kind} className="p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Status tone={incident.severity === 'critical' ? 'danger' : 'warning'}>
-                          {incident.severity === 'critical' ? 'Broken' : 'Degraded'}
-                        </Status>
+                        {incident.severity === 'critical' ? (
+                          <StateBadge state="blocked">Broken</StateBadge>
+                        ) : (
+                          <StateBadge state="attention">Degraded</StateBadge>
+                        )}
                         <span className="font-medium text-ink">{incident.title}</span>
                       </div>
                       <p className="mt-1 max-w-[68ch] text-muted">{incident.detail}</p>
@@ -88,7 +106,7 @@ export function IncidentsTab() {
         </Panel>
       )}
 
-      {!loading && critical > 0 && (
+      {critical > 0 && (
         <p className="mt-3 text-sm text-muted">
           {critical} of these {critical === 1 ? 'is' : 'are'} something somebody
           believes is working.

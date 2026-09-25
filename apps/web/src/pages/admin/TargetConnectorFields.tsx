@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Select } from '@syntra/ui';
+import { Alert, Button, Field, Select, Textarea } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { ENTRA_CORRELATION_FIELDS, parseDocument } from './target-form.js';
 
@@ -44,13 +44,18 @@ export function EntraConnectorFields({
     <>
       <Field
         label="Directory (tenant) ID"
+        name="tenantId"
         value={tenantId}
         onChange={onTenantIdChange}
         autoComplete="off"
+        // What it accepts, in the box: the id or a verified domain. A domain
+        // is what lets a correlation key without one be completed.
+        placeholder="Directory ID or contoso.onmicrosoft.com"
         {...mark('tenantId')}
       />
       <Field
         label="Application (client) ID"
+        name="clientId"
         value={clientId}
         onChange={onClientIdChange}
         autoComplete="off"
@@ -73,40 +78,43 @@ export function EntraConnectorFields({
       </p>
       <Field
         label="Application client secret"
+        name="bindPassword"
         type="password"
         autoComplete="new-password"
         value={credential}
         onChange={onCredentialChange}
+        // Blank on an edit keeps the vaulted secret; typing one rotates it.
+        // Said in the box, where somebody about to type is looking.
+        placeholder={isNew ? undefined : 'Leave blank to keep the stored secret'}
         {...mark('bindPassword')}
       />
-      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
-        The tenant is the directory id or a verified domain such as
-        contoso.onmicrosoft.com; a domain lets a correlation key without one be
-        completed. Neither id is a secret.{' '}
-        {isNew
-          ? 'The client secret is stored encrypted by Syntra and never shown again.'
-          : 'Leave the secret blank to keep the stored one; typing a new one rotates it and records a readiness check.'}
-      </p>
       <Select
         label="Correlation field"
+        name="correlationField"
         value={correlationField}
         onChange={onCorrelationFieldChange}
         options={ENTRA_CORRELATION_FIELDS.map((value) => ({ value, label: value }))}
         {...mark('correlationField')}
       />
-      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
-        The correlation field holds the id of the action that created a user. It is written once, on create, and never by an update.
-      </p>
-      <p className="sm:col-span-2 text-sm text-ink-muted">
-        Grant the app registration these application permissions, with admin
-        consent, and no more: <code>User.ReadWrite.All</code>,{' '}
-        <code>GroupMember.ReadWrite.All</code> and <code>Group.Read.All</code>.
-        Graph does not publish effective permissions, so the connection test
-        reports every right as unchecked; the readiness check is where consent
-        is recorded. Only direct memberships of assigned security groups are
-        managed. Nested and dynamic groups are not, and there is no setting
-        that makes them so.
-      </p>
+      {/* Facts about the connector, labelled as facts rather than written
+          as a paragraph: the permissions are what somebody copies into the
+          app registration, and the group scope is a limit no setting on
+          this form changes. */}
+      <dl className="grid gap-x-6 gap-y-3 text-sm sm:col-span-2 sm:grid-cols-2">
+        <div>
+          <dt className="text-muted">Graph application permissions (admin consent)</dt>
+          <dd className="mt-0.5 text-ink">
+            <code>User.ReadWrite.All</code>, <code>GroupMember.ReadWrite.All</code>,{' '}
+            <code>Group.Read.All</code>
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted">Group memberships managed</dt>
+          <dd className="mt-0.5 text-ink">
+            Direct memberships of assigned security groups. Nested and dynamic groups are not.
+          </dd>
+        </div>
+      </dl>
     </>
   );
 }
@@ -126,6 +134,7 @@ export function EntraConnectorFields({
  * name. It is just not the thing you meet first.
  */
 export function HttpConnectorFields({
+  isNew,
   documentKey,
   documentJson,
   credential,
@@ -181,51 +190,57 @@ export function HttpConnectorFields({
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
             label="Directory (tenant) ID"
+            name="entraTenantId"
             value={entraTenantId}
             onChange={onEntraTenantIdChange}
             autoComplete="off"
           />
           <Field
             label="Application (client) ID"
+            name="entraClientId"
             value={entraClientId}
             onChange={onEntraClientIdChange}
             autoComplete="off"
           />
-          <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
-            These identify the directory and app registration; neither is a secret.
-          </p>
         </div>
       )}
 
       <Field
         label={isEntra ? 'Application client secret' : 'Client secret'}
+        name="bindPassword"
         type="password"
         autoComplete="new-password"
         value={credential}
         onChange={onCredentialChange}
+        placeholder={isNew ? undefined : 'Leave blank to keep the stored secret'}
       />
-      {isEntra && (
-        <p className="-mt-2 text-sm text-ink-muted">
-          Stored encrypted by Syntra and never shown again.
-        </p>
-      )}
 
-      <div>
-        <Button type="button" variant="ghost" onClick={() => setShowJson(!showJson)}>
+      <div className="space-y-2">
+        <Button
+          type="button"
+          variant="ghost"
+          aria-expanded={showJson}
+          onClick={() => setShowJson(!showJson)}
+        >
           {showJson ? 'Hide the connector document' : 'Edit the connector document'}
         </Button>
         {showJson && (
-          <>
-            <textarea
-              aria-label="Connector document"
-              value={documentJson}
-              onChange={(event) => onDocumentChange(event.target.value)}
-              spellCheck={false}
-              rows={20}
-              className="mt-2 w-full rounded-control border border-border-control bg-bg p-3 font-mono text-sm text-ink"
-            />
-            {unreadable && <Alert tone="danger">That is not valid JSON.</Alert>}
-          </>
+          <Textarea
+            label="Connector document"
+            name="document"
+            mono
+            value={documentJson}
+            onChange={onDocumentChange}
+            spellCheck={false}
+            rows={20}
+            error={unreadable ? 'That is not valid JSON.' : undefined}
+          />
+        )}
+        {/* Still said while the box is closed. A document broken and then
+            hidden would otherwise save as `{}` with nothing on screen to
+            say why. */}
+        {!showJson && unreadable && (
+          <Alert tone="danger">The connector document is not valid JSON.</Alert>
         )}
       </div>
     </div>

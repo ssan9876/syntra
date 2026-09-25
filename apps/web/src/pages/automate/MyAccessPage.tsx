@@ -1,10 +1,19 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Alert, Button, Empty, Panel, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  buttonClasses,
+  Empty,
+  Panel,
+  SkeletonRows,
+  StateBadge,
+  useToast,
+} from '@syntra/ui';
 import { AppShell } from '../../components/AppShell.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
-import { GRANT_LABEL, GRANT_TONE, when } from './status.js';
+import { GRANT_LABEL, GRANT_STATE, when } from './status.js';
 
 interface GrantRow {
   id: string;
@@ -26,6 +35,7 @@ export function MyAccessPage() {
   }>('/api/portal/automate/grants');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const toast = useToast();
 
   const handBack = async (grantId: string) => {
     setBusy(grantId);
@@ -34,6 +44,7 @@ export function MyAccessPage() {
       await api(`/api/portal/automate/grants/${grantId}/hand-back`, {
         method: 'POST',
       });
+      toast({ title: 'Access handed back' });
       reload();
     } catch (cause) {
       setProblem(
@@ -59,18 +70,25 @@ export function MyAccessPage() {
 
         <div className="mt-6">
           <Panel>
-            {loading && <SkeletonRows rows={4} cols={4} />}
-            {!loading && (data?.grants ?? []).length === 0 && (
+            {!data && loading && <SkeletonRows rows={4} cols={4} />}
+            {data && (data.grants ?? []).length === 0 && (
               <div className="p-6">
-                <Empty title="You hold nothing you asked for">
+                <Empty
+                  title="You hold nothing you asked for"
+                  action={
+                    <Link to="/catalog" className={buttonClasses('primary')}>
+                      Browse the catalog
+                    </Link>
+                  }
+                >
                   Anything granted from the catalog appears here with its end
                   date.
                 </Empty>
               </div>
             )}
-            {!loading && (data?.grants ?? []).length > 0 && (
+            {data && (data.grants ?? []).length > 0 && (
               <ul className="divide-y divide-border-subtle">
-                {data!.grants.map((grant) => (
+                {(data.grants ?? []).map((grant) => (
                   <li
                     key={grant.id}
                     className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -91,9 +109,9 @@ export function MyAccessPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Status tone={GRANT_TONE[grant.status] ?? 'neutral'}>
+                      <StateBadge state={GRANT_STATE[grant.status] ?? 'setup'}>
                         {GRANT_LABEL[grant.status] ?? grant.status}
-                      </Status>
+                      </StateBadge>
                       {LIVE.includes(grant.status) &&
                         grant.endsAt !== null &&
                         grant.productId && (

@@ -59,8 +59,8 @@ describe('ProvisionRunsPage', () => {
     });
     renderPage();
 
-    expect(await screen.findByText('superseded')).toBeVisible();
-    expect(screen.queryByText('failed')).toBeNull();
+    expect(await screen.findByText('Superseded')).toBeVisible();
+    expect(screen.queryByText('Failed')).toBeNull();
   });
 
   it('keeps a genuine failure red', async () => {
@@ -76,7 +76,7 @@ describe('ProvisionRunsPage', () => {
     });
     renderPage();
 
-    const failed = await screen.findByText('failed');
+    const failed = await screen.findByText('Failed');
     expect(failed.className).toMatch(/danger/);
   });
 
@@ -89,8 +89,8 @@ describe('ProvisionRunsPage', () => {
     });
     renderPage();
 
-    const superseded = await screen.findByText('superseded');
-    expect(superseded.className).not.toBe(screen.getByText('failed').className);
+    const superseded = await screen.findByText('Superseded');
+    expect(superseded.className).not.toBe(screen.getByText('Failed').className);
   });
 
   it('leads with the persons a run could not process', async () => {

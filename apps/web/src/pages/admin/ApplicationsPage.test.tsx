@@ -144,7 +144,8 @@ describe('ApplicationsPage', () => {
     // The secret exists in that response and nowhere else. Closing the flow
     // before it has been copied would throw it away.
     expect(await screen.findByDisplayValue('sec-xyz')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('grafana-abc')).toBeInTheDocument();
+    // The client ID is an identifier, set as one: copyable, not a text box.
+    expect(screen.getByText('grafana-abc')).toBeInTheDocument();
   });
 
   it('shows the server’s refusal and keeps what was typed', async () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Empty, Panel, SkeletonRows } from '@syntra/ui';
+import { Alert, Button, Empty, Panel, SkeletonRows, useToast } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { useApiResource } from './hooks.js';
 
@@ -83,7 +83,9 @@ export function AccountSessions({ userId }: { userId: string }) {
   const sessions = data?.sessions ?? [];
   const mayRevoke = can('directory.write');
 
-  const act = async (path: string, method: 'DELETE' | 'POST') => {
+  const toast = useToast();
+
+  const act = async (path: string, method: 'DELETE' | 'POST', done: string) => {
     setFailure(null);
     setBusy(true);
     try {
@@ -92,6 +94,7 @@ export function AccountSessions({ userId }: { userId: string }) {
         setFailure('Could not end that session. It may have already expired.');
         return;
       }
+      toast({ title: done });
       reload();
     } finally {
       setBusy(false);
@@ -106,7 +109,9 @@ export function AccountSessions({ userId }: { userId: string }) {
           <Button
             variant="danger"
             disabled={busy}
-            onClick={() => act(`/api/admin/users/${userId}/sessions/revoke`, 'POST')}
+            onClick={() =>
+              act(`/api/admin/users/${userId}/sessions/revoke`, 'POST', 'Signed out everywhere')
+            }
           >
             Sign out everywhere
           </Button>
@@ -116,7 +121,7 @@ export function AccountSessions({ userId }: { userId: string }) {
     >
       {error && <Alert tone="danger">Could not load sessions.</Alert>}
       {failure && <Alert tone="danger">{failure}</Alert>}
-      {loading && <SkeletonRows rows={2} />}
+      {!data && loading && <SkeletonRows rows={2} />}
 
       {!loading && sessions.length === 0 && (
         <Empty title="No active sessions">
@@ -147,7 +152,7 @@ export function AccountSessions({ userId }: { userId: string }) {
                   size="sm"
                   disabled={busy}
                   onClick={() =>
-                    act(`/api/admin/users/${userId}/sessions/${session.id}`, 'DELETE')
+                    act(`/api/admin/users/${userId}/sessions/${session.id}`, 'DELETE', 'Session revoked')
                   }
                 >
                   Revoke

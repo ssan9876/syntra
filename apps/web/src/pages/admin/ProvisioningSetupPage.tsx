@@ -1,99 +1,207 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Alert, Button, Panel, Select, SkeletonRows, Status } from '@syntra/ui';
+import {
+  Alert,
+  FilterBar,
+  Meter,
+  Panel,
+  RefreshStatus,
+  Select,
+  SkeletonRows,
+  StateBadge,
+  Table,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { ProvisioningSetupSample } from './ProvisioningSetupSample.js';
 import { PageHeader } from './PageHeader.js';
+import {
+  deriveSetupSteps,
+  overallState,
+  readinessState,
+  unknown,
+  type ImportRunLike,
+  type MappingLike,
+  type ProfileLike,
+  type ReadinessLike,
+  type RuleLike,
+  type RunLike,
+  type SampleLike,
+  type SetupEvidence,
+  type SetupStep,
+  type SourceLike,
+  type TargetLike,
+  type Unknown,
+} from './provisioning-readiness.js';
 
-interface Source { id: string; name: string; enabled: boolean; schedule: string | null }
-interface Target extends Source { autoApply: boolean }
-interface Run { id: string; status: string; startedAt: string; error?: string | null; blockedReason?: string | null; personsUnprocessable?: number }
-interface Mapping { recordType: string; targetField: string; sourceColumn: string; isCorrelation: boolean }
-interface StepProps { title: string; evidence: boolean; href: string; action: string; children: ReactNode }
-function Step({ title, evidence, href, action, children }: StepProps) {
-  return <li className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle py-4 last:border-0">
-    <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-ink">{title}</h3><Status tone={evidence ? 'active' : 'warning'}>{evidence ? 'Recorded' : 'Needs review'}</Status></div><div className="mt-1 text-sm text-muted">{children}</div></div>
-    <Link className="text-sm font-medium text-primary underline" to={href}>{action}</Link>
-  </li>;
+interface Source extends SourceLike { name: string }
+interface Target extends TargetLike { name: string }
+
+/** A resource's answer as evidence: its data, or the reason there is none. */
+function known<T, V>(resource: { data: T | null; error: string | null }, pick: (data: T) => V, fallback: V): V | Unknown {
+  if (resource.error) return unknown(resource.error);
+  return resource.data ? pick(resource.data) : fallback;
 }
-function SourceChecklist({ source }: { source: Source }) {
-  const mappings = useApiResource<{ rules: Mapping[] }>(`/api/admin/person-sources/${source.id}/mappings`);
-  const runs = useApiResource<{ runs: Run[] }>(`/api/admin/person-import-runs?sourceId=${encodeURIComponent(source.id)}`);
-  if (mappings.loading || runs.loading) return <SkeletonRows rows={3} cols={1} />;
-  const error = mappings.error || runs.error;
-  if (error) return <Alert tone="danger">Source evidence could not be loaded: {error} <Link to={`/admin/person-sources/${source.id}`}>Open HR source</Link></Alert>;
-  const mapped = mappings.data?.rules.some((rule) => rule.recordType === 'person' && rule.targetField === 'externalId' && rule.isCorrelation && rule.sourceColumn.trim());
-  const latest = runs.data?.runs[0];
-  const imported = latest?.status === 'applied';
-  const href = `/admin/person-sources/${source.id}`;
-  return <ol>
-    <Step title="1. Connect HR" evidence={false} href={href} action="Test HR connection">{source.enabled ? 'Source saved. Test the connection in the source editor.' : 'Source is disabled. Review its connection before enabling.'}</Step>
-    <Step title="2. Map fields" evidence={!!mapped} href={href} action="Review field mappings">{mapped ? 'Person correlation mapping saved. Check names, contract identifiers and employment dates before import.' : 'Save a person correlation mapping before importing.'}</Step>
-    <Step title="3. Inspect an imported employee" evidence={imported} href={latest ? `/admin/person-import-runs/${latest.id}` : href} action={latest ? 'Review import run' : 'Preview HR import'}>{latest ? `Latest import: ${latest.status}. ${latest.error ?? latest.blockedReason ?? ''}` : 'No import run recorded.'} {imported && 'Inspect the employee and contract dates before provisioning.'}<div className="mt-1"><Link className="text-primary underline" to="/admin/users?tab=people">Find a sample employee and inspect contracts</Link></div></Step>
-    <Step title="HR import schedule" evidence={source.enabled && !!source.schedule} href={href} action="Configure HR schedule">{source.schedule ? `Saved cron: ${source.schedule}. ${source.enabled ? 'Source enabled.' : 'Source disabled; schedule will not run.'}` : 'No automatic import schedule saved.'}</Step>
-  </ol>;
-}
-function TargetChecklist({ target }: { target: Target }) {
-  const [profile, setProfile] = useState<'loading' | 'saved' | 'missing' | 'error'>('loading');
-  const [profileError, setProfileError] = useState('');
-  const rules = useApiResource<{ rules: { enabled: boolean; grantsAccount: boolean; entitlements: unknown[] }[] }>(`/api/admin/targets/${target.id}/rules`);
-  const runs = useApiResource<{ runs: Run[] }>(`/api/admin/targets/${target.id}/runs`);
-  const readiness = useApiResource<{ current: boolean; status: string; checkedAt?: string; capabilities?: string[]; adapterWarnings?: string[] }>(`/api/admin/targets/${target.id}/readiness`);
+
+/**
+ * The account profile is the one read where 404 is an ANSWER — no profile
+ * saved — rather than a failure, and a 403 must not be mistaken for it.
+ */
+function useProfile(targetId: string | null, nonce: number) {
+  const [profile, setProfile] = useState<ProfileLike | null | Unknown | undefined>(undefined);
   useEffect(() => {
+    if (!targetId) { setProfile(null); return; }
     let cancelled = false;
-    void api(`/api/admin/targets/${target.id}/profile`).then(() => {
-      if (!cancelled) setProfile('saved');
+    setProfile(undefined);
+    api<ProfileLike>(`/api/admin/targets/${targetId}/profile`).then((value) => {
+      if (!cancelled) setProfile(value);
     }).catch((cause: unknown) => {
       if (cancelled) return;
-      if (cause instanceof ApiError && cause.problem.status === 404) setProfile('missing');
-      else { setProfile('error'); setProfileError(cause instanceof Error ? cause.message : 'Could not read account profile.'); }
+      if (cause instanceof ApiError && cause.problem.status === 404) setProfile(null);
+      else setProfile(unknown(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Could not read account profile.'));
     });
     return () => { cancelled = true; };
-  }, [target.id]);
-  if (profile === 'loading' || rules.loading || runs.loading || readiness.loading) return <SkeletonRows rows={5} cols={1} />;
-  const latest = runs.data?.runs[0];
-  const hasGrants = rules.data?.rules.some((rule) => rule.enabled && (rule.grantsAccount || rule.entitlements.length > 0));
-  const href = `/admin/targets/${target.id}`;
-  return <>
-    {(rules.error || runs.error || profile === 'error') && <Alert tone="danger">Some target evidence is unavailable. {rules.error} {runs.error} {profileError} Refresh or open the relevant editor.</Alert>}
-    {/* A connection test proves the connection, not the adapter behind it. */}
-    {(readiness.data?.adapterWarnings?.length ?? 0) > 0 && <Alert tone="warning" title="Adapter readiness warning"><ul className="list-disc pl-5">{readiness.data!.adapterWarnings!.map((warning) => <li key={warning}>{warning}</li>)}</ul></Alert>}
-    <ol>
-      <Step title="4. Connect target" evidence={readiness.data?.current === true && readiness.data.status === 'passed'} href={href} action="Test target connection">{readiness.data?.current && readiness.data.status === 'passed' ? `Current readiness recorded${readiness.data.checkedAt ? ` ${new Date(readiness.data.checkedAt).toLocaleString()}` : ''}.` : target.enabled ? 'Target saved. Test its current connection and permissions.' : 'Target is disabled. Review its connection before enabling.'}</Step>
-      <Step title="5. Configure naming and placement" evidence={profile === 'saved'} href={`${href}/profile`} action="Configure naming and placement">{profile === 'saved' ? 'Account profile saved. Preview a sample employee to check names, uniqueness and placement.' : profile === 'missing' ? 'No account profile saved.' : 'Profile could not be verified.'}</Step>
-      <Step title="6. Assign access rules" evidence={!rules.error && !!hasGrants} href={`${href}/rules`} action="Configure access rules">{rules.error ? 'Rules could not be verified.' : hasGrants ? 'Enabled access rules saved. Preview who matches and what access they receive.' : 'No enabled rule grants an account or entitlement.'}</Step>
-      <Step title="7. Preview lifecycle" evidence={false} href={latest ? `${href}/runs/${latest.id}` : `${href}/runs`} action={latest ? 'Review lifecycle run' : 'Preview lifecycle'}>{runs.error ? 'Run history could not be verified.' : latest ? <>Latest run: {latest.status} ({new Date(latest.startedAt).toLocaleString()}). {latest.error ?? latest.blockedReason ?? ''} {!!latest.personsUnprocessable && `${latest.personsUnprocessable} employees could not be processed.`}<div>History does not prove the current configuration was reviewed. Generate a fresh preview after changing mappings, profiles, rules or employment dates.</div></> : 'No lifecycle run recorded.'}</Step>
-      <Step title="8. Enable schedule" evidence={target.enabled && !!target.schedule} href={href} action="Configure target schedule">{target.schedule ? `Saved cron: ${target.schedule}. ${target.enabled ? 'Target enabled.' : 'Target disabled; schedule will not run.'}` : 'No automatic target schedule saved.'}<div>{target.autoApply ? 'Automatic apply is enabled. Review the fresh preview and safety thresholds before leaving writes enabled.' : 'Automatic apply is off. Keep it off while validating the preview.'}</div></Step>
-    </ol>
-  </>;
+  }, [targetId, nonce]);
+  return profile;
 }
+
+function Step({ step }: { step: SetupStep }) {
+  const anchor = step.href.startsWith('#');
+  const actionClass = 'link shrink-0 text-sm font-medium';
+  return <li className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-border-subtle px-4 py-4 last:border-0">
+    <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted tabular-nums">{step.number}</span>
+    <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="font-medium text-ink">{step.title}</h3>
+        <StateBadge state={step.state}>{step.label}</StateBadge>
+      </div>
+      {step.facts.length > 0 && (
+        <dl className="mt-2 flex flex-wrap gap-x-6 gap-y-1.5 text-sm">
+          {step.facts.map((fact) => <div key={fact.label} className="min-w-0">
+            <dt className="text-muted">{fact.label}</dt>
+            <dd className="break-words text-ink tabular-nums">{fact.value}</dd>
+          </div>)}
+        </dl>
+      )}
+    </div>
+    {anchor
+      ? <a className={actionClass} href={step.href} onClick={() => document.querySelector<HTMLElement>(step.href)?.focus()}>{step.action}</a>
+      : <Link className={actionClass} to={step.href}>{step.action}</Link>}
+  </li>;
+}
+
+function TargetReadinessRow({ target, selected, onSelect }: { target: Target; selected: boolean; onSelect(): void }) {
+  const readiness = useApiResource<ReadinessLike>(`/api/admin/targets/${target.id}/readiness`);
+  const reading = readiness.data ? readinessState(readiness.data) : null;
+  return <tr aria-current={selected || undefined}>
+    <td><Link className="link" to={`/admin/targets/${target.id}`}>{target.name}</Link></td>
+    <td>{target.enabled ? 'Yes' : 'No'}</td>
+    <td>{readiness.error ? <StateBadge state="attention">Evidence unavailable</StateBadge> : reading ? <StateBadge state={reading.state}>{reading.label}</StateBadge> : '…'}</td>
+    <td className="tabular-nums">{readiness.data?.checkedAt ? new Date(readiness.data.checkedAt).toLocaleString() : '—'}</td>
+    <td>{target.schedule ? <code className="font-mono text-sm">{target.schedule}</code> : 'None'}</td>
+    <td className="text-right">{selected ? <span className="text-sm text-muted">In checklist</span> : <button type="button" className="link text-sm" onClick={onSelect}>Check setup</button>}</td>
+  </tr>;
+}
+
+/**
+ * Provisioning setup as a checklist whose every tick is earned.
+ *
+ * Eight steps, in the order a first deployment has to take them, each with
+ * the evidence it was read from set out as labelled values and a link to the
+ * editor that changes it. The states come from `deriveSetupSteps`, which is
+ * where the rule lives that a saved configuration is never shown as a
+ * verified one. Nothing here writes: the page reads what the editors saved
+ * and what tests and previews recorded, and it enables nothing.
+ */
 export function ProvisioningSetupPage() {
   const [params, setParams] = useSearchParams();
   const sources = useApiResource<{ sources: Source[] }>('/api/admin/person-sources');
   const targets = useApiResource<{ targets: Target[] }>('/api/admin/targets');
-  const [version, setVersion] = useState(0);
-  const source = sources.data?.sources.find((item) => item.id === params.get('source')) ?? sources.data?.sources[0];
-  const target = targets.data?.targets.find((item) => item.id === params.get('target')) ?? targets.data?.targets[0];
+  const source = sources.data?.sources.find((item) => item.id === params.get('source')) ?? sources.data?.sources[0] ?? null;
+  const target = targets.data?.targets.find((item) => item.id === params.get('target')) ?? targets.data?.targets[0] ?? null;
+  const [sample, setSample] = useState<SampleLike | null>(null);
+  const [nonce, setNonce] = useState(0);
+
+  const mappings = useApiResource<{ rules: MappingLike[] }>(source ? `/api/admin/person-sources/${source.id}/mappings` : null);
+  const importRuns = useApiResource<{ runs: ImportRunLike[] }>(source ? `/api/admin/person-import-runs?sourceId=${encodeURIComponent(source.id)}` : null);
+  const rules = useApiResource<{ rules: RuleLike[] }>(target ? `/api/admin/targets/${target.id}/rules` : null);
+  const runs = useApiResource<{ runs: RunLike[] }>(target ? `/api/admin/targets/${target.id}/runs` : null);
+  const readiness = useApiResource<ReadinessLike>(target ? `/api/admin/targets/${target.id}/readiness` : null);
+  const profile = useProfile(target?.id ?? null, nonce);
+
   const select = (key: string, value: string) => { const next = new URLSearchParams(params); next.set(key, value); setParams(next); };
-  const refresh = () => { sources.reload(); targets.reload(); setVersion((value) => value + 1); };
+  const refresh = () => {
+    sources.reload(); targets.reload(); mappings.reload(); importRuns.reload();
+    rules.reload(); runs.reload(); readiness.reload(); setNonce((n) => n + 1);
+  };
+  const onInspect = useCallback((next: SampleLike | null) => setSample(next), []);
+
+  const listsLoading = (!sources.data && sources.loading) || (!targets.data && targets.loading);
+  // Not `loading` alone: in the render where a path first becomes known the
+  // hook still holds its settled null-path state, and reading that as
+  // "loaded, nothing there" flashes a checklist of empty evidence.
+  const waiting = (r: { data: unknown; error: string | null }, active: boolean) => active && !r.data && !r.error;
+  const evidenceLoading = [mappings, importRuns].some((r) => waiting(r, !!source))
+    || [rules, runs, readiness].some((r) => waiting(r, !!target))
+    || profile === undefined;
+
+  const steps = useMemo(() => {
+    if (listsLoading || evidenceLoading || sources.error || targets.error) return null;
+    const evidence: SetupEvidence = {
+      source,
+      mappings: known(mappings, (data) => data.rules, []),
+      importRuns: known(importRuns, (data) => data.runs, []),
+      sample,
+      target,
+      readiness: known(readiness, (data) => data, { current: false, status: 'untested' }),
+      profile: profile ?? null,
+      rules: known(rules, (data) => data.rules, []),
+      runs: known(runs, (data) => data.runs, []),
+    };
+    return deriveSetupSteps(evidence);
+  }, [listsLoading, evidenceLoading, sources.error, targets.error, source, sample, target, mappings, importRuns, readiness, rules, runs, profile]);
+
+  const verified = steps?.filter((step) => step.state === 'healthy').length ?? 0;
+  const overall = steps ? overallState(steps) : null;
+  const warnings = readiness.data?.adapterWarnings ?? [];
+
   return <>
-    <PageHeader title="Provisioning setup" actions={<Button onClick={refresh}>Refresh evidence</Button>} />
-    <p className="mb-4 max-w-3xl text-sm text-muted">Follow saved HR and target configuration through to a reviewed lifecycle preview. This checklist reloads saved evidence when you return; it does not enable writes.</p>
-    <Alert tone="warning">Saved-target connection tests create fingerprinted readiness evidence. It proves the tested connection and permissions, not that employees currently have the correct access.</Alert>
-    <div className="mt-5 grid items-start gap-5 xl:grid-cols-2">
-      <section aria-label="HR setup"><Panel><div className="p-5"><h2 className="mb-3 font-semibold text-ink">HR source</h2>
-        {sources.loading ? <SkeletonRows rows={3} cols={1} /> : sources.error ? <Alert tone="danger">{sources.error}</Alert> : source ? <><Select label="HR source" value={source.id} onChange={(value) => select('source', value)} options={(sources.data?.sources ?? []).map((item) => ({ value: item.id, label: item.name }))} /><SourceChecklist key={`${source.id}-${version}`} source={source} /></> : <p>No HR source saved. <Link className="text-primary underline" to="/admin/person-sources/new">Connect HR source</Link></p>}
-      </div></Panel></section>
-      <section aria-label="Target setup"><Panel><div className="p-5"><h2 className="mb-3 font-semibold text-ink">Target system</h2>
-        {targets.loading ? <SkeletonRows rows={3} cols={1} /> : targets.error ? <Alert tone="danger">{targets.error}</Alert> : target ? <><Select label="Target system" value={target.id} onChange={(value) => select('target', value)} options={(targets.data?.targets ?? []).map((item) => ({ value: item.id, label: item.name }))} /><TargetChecklist key={`${target.id}-${version}`} target={target} /></> : <p>No target saved. <Link className="text-primary underline" to="/admin/targets/new">Connect target</Link></p>}
-      </div></Panel></section>
+    <PageHeader
+      title="Provisioning setup"
+      status={overall && <StateBadge state={overall.state}>{overall.label}</StateBadge>}
+      actions={<RefreshStatus updatedAt={runs.updatedAt ?? targets.updatedAt} onRefresh={refresh} refreshing={evidenceLoading} />}
+    />
+
+    {(sources.error || targets.error) && <div className="mb-4"><Alert tone="danger">{sources.error ?? targets.error}</Alert></div>}
+
+    <FilterBar
+      trailing={steps && <div className="w-56" aria-label="Setup progress">
+        <p className="mb-1.5 text-sm text-muted"><span className="text-xl font-semibold text-ink tabular-nums">{verified}</span> of {steps.length} verified</p>
+        <Meter percent={(verified / steps.length) * 100} label="of setup steps verified" tone={verified === steps.length ? 'success' : 'primary'} />
+      </div>}
+    >
+      {(sources.data?.sources.length ?? 0) > 1 && source && <Select className="w-56" label="HR source" value={source.id} onChange={(value) => select('source', value)} options={sources.data!.sources.map((item) => ({ value: item.id, label: item.name }))} />}
+      {(targets.data?.targets.length ?? 0) > 1 && target && <Select className="w-56" label="Target system" value={target.id} onChange={(value) => select('target', value)} options={targets.data!.targets.map((item) => ({ value: item.id, label: item.name }))} />}
+    </FilterBar>
+
+    {warnings.length > 0 && <div className="mb-4"><Alert tone="warning" title="Adapter readiness warning"><ul className="list-disc pl-5">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></Alert></div>}
+
+    <div className="space-y-5">
+      <Panel title={[source?.name, target?.name].filter(Boolean).join(' → ') || 'Checklist'}>
+        {steps ? <ol aria-label="Setup checklist">{steps.map((step) => <Step key={step.key} step={step} />)}</ol> : <div className="p-4"><SkeletonRows rows={8} cols={1} /></div>}
+      </Panel>
+
+      <ProvisioningSetupSample onInspect={onInspect} />
+
+      {(targets.data?.targets.length ?? 0) > 0 && (
+        <Panel title="Connector readiness">
+          <Table>
+            <caption className="sr-only">Connector readiness per target</caption>
+            <thead><tr><th scope="col">Target</th><th scope="col">Enabled</th><th scope="col">Connection</th><th scope="col">Tested</th><th scope="col">Schedule</th><th scope="col"><span className="sr-only">Checklist</span></th></tr></thead>
+            <tbody>{targets.data!.targets.map((item) => <TargetReadinessRow key={`${item.id}-${nonce}`} target={item} selected={item.id === target?.id} onSelect={() => select('target', item.id)} />)}</tbody>
+          </Table>
+        </Panel>
+      )}
     </div>
-    <div className="mt-5"><ProvisioningSetupSample /></div>
-    <div className="mt-5"><Panel><div className="p-5 text-sm"><h2 className="font-semibold text-ink">Choose schedules after reviewing the preview</h2><p className="mt-2 text-muted">Start with manual runs and automatic apply off. If daily processing is sufficient, a daily cron such as <code>0 3 * * *</code> runs at 03:00 in the scheduler’s configured timezone. Confirm that timezone and allow the HR import to finish before scheduling target provisioning. Use the linked editors for advanced cron and safety thresholds.</p><div className="mt-3 flex flex-wrap gap-4"><Link className="text-primary underline" to="/admin/sources?tab=people">All HR feeds</Link><Link className="text-primary underline" to="/admin/targets">All target editors</Link></div></div></Panel></div>
   </>;
 }
-
-
-
-

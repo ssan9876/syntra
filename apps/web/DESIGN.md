@@ -116,6 +116,7 @@ eyeballed and not carried over. **Text pairs (AA needs 4.5:1):**
 | `border-control` on `bg` / `surface` | 3.37 / 3.14 |
 | `border-strong` on `bg` / `surface` | 3.96 / 3.69 |
 | `border-subtle` on `bg` | 1.44 — **decorative rules only, never a control** |
+| `border-control` on `surface-2` | **2.98** — under 3:1. A control drawn on the rail or a table head needs `bg` behind it first |
 
 White text on every saturated fill, per Helmholtz-Kohlrausch. `accent` sits
 2.6:1 away from `ink`, which is what lets a link read as a link before its
@@ -407,6 +408,159 @@ that only screen-reader users were consuming is not the trade being made here.
 And an empty state is conditional by nature — it appears only when there is
 nothing — so it stays, and names the next action.
 
+## The operational layer
+
+The data layer made the console legible. What it still lacked was a way to
+WORK in it: a queue that says what to do first, a form that holds its place
+over four screens, and a sign that a click took. The pieces below close that,
+without a new colour, a new font or a new kind of container.
+
+### One status language
+
+`StateBadge` and seven states. Every screen had chosen its own mapping — a
+failed run was `danger` on one page and `warning` on the next — so a reader
+could not learn what a colour meant because it never meant the same thing
+twice.
+
+| State | Tone | Glyph | Means |
+|---|---|---|---|
+| `healthy` | success | check | Done and confirmed. Nothing to do. |
+| `attention` | warning | triangle | Works, but somebody should look. |
+| `blocked` | danger | slashed circle | Cannot proceed without a person. |
+| `pending` | accent | clock | Waiting on something outside Syntra — a target, a read-back, an approver. Do not act yet. |
+| `running` | primary | half-filled circle | Syntra is doing it now. |
+| `setup` | neutral | dashed circle | Not configured, so not yet a state at all. |
+| `inactive` | inactive | dash | Deliberately off. Shown, never hidden. |
+
+The glyph is not decoration: it is the second channel 1.4.1 asks for, and the
+reason this is a component rather than a convention. `pending` is accent, not
+primary — primary is selection and the main action, and a queue of amber
+"waiting" badges read as a queue of things to click. `accent` on
+`accent-soft` measures **5.69:1**.
+
+**Planned, applied and observed are three states, not one.** A person's
+provisioning evidence shows each target's plan, its write, and the read-back
+that confirmed it, in separate columns. "Waiting for directory read-back" is a
+`pending` state of its own and is never allowed to look like success: the gap
+between "the target accepted it" and "the target has it" is the gap this
+product exists to close.
+
+### Queues
+
+`Segmented`, `FilterChips`, `FilterBar`, `BulkActionBar`, `Checkbox`.
+
+A short, fixed set of filters is laid out rather than put in a `<select>`: the
+counts beside each option ARE the summary, and a select hides them. Every
+filter lives in the URL, as tabs do, and every active one appears as a
+removable chip with a "Reset filters" beside it — a URL filter survives a
+pasted link, which is also how a reader lands on four rows of four hundred
+without noticing.
+
+Employee work is organised by **lane** — overdue, blocked, needs action,
+waiting — which is what an item needs from the operator, rather than by kind,
+which is what it is about. The server puts each item in exactly one lane by
+that precedence, so the four counts add up to the queue. Saved views are query
+strings: the built-in ones every HR team needs, plus a reader's own, kept in
+their browser.
+
+The bulk bar is present at zero selected, with its actions disabled, for the
+reason the pager is: a bar that appears on the first tick pushes the table
+under the pointer. The outcome of the last bulk action is reported IN the bar
+— "3 retried, 1 could not be" — where the reader's eye already is.
+
+### Tables, continued
+
+`stickyHeader` for queues worked row by row; the container becomes the
+scroller, capped at 70% of the viewport, because a sticky heading sticks to its
+nearest scrolling ancestor and the horizontal scroll already makes the
+container one. `DensityToggle` lets a reader opt into compact rows, remembered
+per list; the default row height is still the one row height in the product.
+`ColumnPicker` hides optional columns only — the record's own column cannot be
+hidden. `RefreshStatus` says how old the rows are and ticks, because an
+operational list is a snapshot, and a tab left open since 8:40 looked like now.
+
+`Identifier` for run ids, hashes, correlation keys and DNs: monospaced,
+selectable in one go, copyable, truncated with the full value in its title.
+
+### Long forms
+
+`FormSection`, `FormActions`, `ErrorSummary`, `Textarea`.
+
+A section is a heading and a rule — no card, since the form is already in a
+panel — and its `status` slot takes a state ("Not tested", "2 need
+attention"), never a description. `FormActions sticky` keeps save and cancel
+in reach for exactly as long as the form is on screen; it is sticky within the
+form, not fixed to the viewport, and only for forms longer than a screen. Its
+`status` slot is where "Unsaved changes" and "Preview is out of date" go.
+
+**A preview is bound to the draft it describes.** The moment the draft changes,
+a shown test result or dry run is marked out of date. Results that look
+current and are not are worse than no results.
+
+`ErrorSummary` takes focus when a submit fails and links each message to its
+control by `name`. Field errors still sit against their fields; the summary
+exists because on a four-screen form the failing field is usually not where
+the reader is looking.
+
+### Feedback and overlays
+
+`useToast` confirms that something the reader did has taken — and nothing
+more. A toast disappears, so a job receipt, a failure somebody must act on or
+a consequence that outlives the moment stays on the page as an `Alert`.
+`danger` toasts do not time out; hovering or focusing any toast holds it.
+
+`Dialog` is the browser's own `<dialog>` with `showModal()`, which traps focus,
+closes on Escape and makes the page behind it inert — the three things a
+hand-rolled overlay gets wrong. It is for a decision that must be made first,
+never for anything the reader needs to compare with what is behind it: an
+impact preview belongs beside the change.
+
+Overlays — toasts, dialogs, menus — arrive with 180ms of fade and 4px of
+travel. Nothing else in the product animates in.
+
+### The shell, continued
+
+The rail carries an icon **beside** each label. Icons speed a reader who
+already knows the rail; they name nothing for one who does not, and "Sources"
+against "Target systems" is exactly the pair no picture separates. The
+selected item gains an edge as well as a tint, because `primary-soft` on
+`surface-2` is a difference of hue a washed-out monitor flattens.
+
+Employee work carries a live count on the rail: overdue plus blocked plus
+needs-action, red when anything is overdue or blocked. Only a destination
+whose whole job is a queue gets one. Waiting work is not counted — a badge
+that counts work waiting on a target is a badge that is never zero.
+
+Deep pages carry a breadcrumb of their ancestors, derived from the route and
+the rail's own table. The current page is left off; its title is directly
+underneath. A record's name is remembered from its own page, so the trail
+above a run names the target it belongs to.
+
+`PageHeader` takes an optional `status` — a `StateBadge` beside the title —
+so a record answers "is this all right" before anything else is read. A page
+reads: title and actions, then facts, then state, then the working content.
+
+## Application logos
+
+Hosted here, always. The page's security policy loads images from its own
+origin only, so a vendor URL was a logo that never appeared; every tile fell
+back to its monogram. There are two sources now, both same-origin:
+
+- **Twenty built-in marks** under `/app-icons/`, one per kind of application
+  an organisation actually assigns — calendar, rota, clinical records,
+  expenses. Generic on purpose: a vendor's trademark shipped in the product is
+  a licence question for every tenant. One grid for all of them: a 48px tile,
+  11px radius, one flat fill, a white glyph at a 2.5 round stroke inside the
+  central 24px. Twenty marks that each chose their own stroke read as clip art.
+  Keys are stored, so a key is never renamed or reused for another picture.
+- **An uploaded raster** — PNG, JPEG or WebP, 64 KB — stored by the API and
+  served from this origin with its own restrictive headers. SVG is refused: it
+  can carry script.
+
+`AppLogo` is the one component that draws a logo, in the portal tile, the
+applications list and the picker, so the preview an administrator approves is
+the tile an employee sees. The monogram remains the fallback for everything.
+
 ## Component rules
 
 - Every interactive element ships default, hover, focus-visible, active,
@@ -414,7 +568,11 @@ nothing — so it stays, and names the next action.
 - **Colour is never the only channel.** Links are underlined by default, not on
   hover. A status carries a word, not just a tone. A meter is always beside its
   figure.
-- Loading is a skeleton shaped like the content, never a centred spinner.
+- Loading is a skeleton shaped like the content, never a centred spinner. A
+  reload keeps the rows on screen and says how old they are; it does not drop
+  back to a skeleton.
+- A status is a `StateBadge`. If none of the seven states fits, the thing being
+  labelled is probably two things.
 - Empty states name the next action rather than saying "nothing here".
 - Inactive users stay visible and labelled. Hiding a deactivation to keep a list
   tidy makes the directory unauditable.

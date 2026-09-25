@@ -4,9 +4,11 @@ import {
   Empty,
   Panel,
   SkeletonRows,
+  StateBadge,
   Status,
   Table,
   buttonClasses,
+  type State,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -132,20 +134,24 @@ function health(
   target: TargetRow,
   now: number,
 ): {
-  tone: 'active' | 'inactive' | 'neutral' | 'danger';
+  /**
+   * Absent where the row makes no claim about health: a target run by hand
+   * is not late, and not healthy either — it is simply when it last ran.
+   */
+  state?: State;
   label: string;
   title?: string;
 } {
   if (target.consecutiveSkippedRuns > 0) {
     return {
-      tone: 'danger',
+      state: 'blocked',
       label: `${target.consecutiveSkippedRuns} scheduled run${
         target.consecutiveSkippedRuns === 1 ? '' : 's'
       } skipped`,
       ...(target.lastSkipReason === null ? {} : { title: target.lastSkipReason }),
     };
   }
-  if (!target.enabled) return { tone: 'inactive', label: 'Disabled' };
+  if (!target.enabled) return { state: 'inactive', label: 'Disabled' };
 
   const stale =
     'A run records this timestamp only when its preview finishes. A run that ' +
@@ -156,9 +162,8 @@ function health(
     // Nothing is late when nothing is scheduled, so this states the fact and
     // makes no claim about health either way.
     return target.lastRunAt === null
-      ? { tone: 'neutral', label: 'Never run', title: 'This target runs by hand only.' }
+      ? { state: 'setup', label: 'Never run', title: 'This target runs by hand only.' }
       : {
-          tone: 'neutral',
           label: `Ran ${since(target.lastRunAt, now)}`,
           title: 'This target runs by hand only.',
         };
@@ -166,7 +171,7 @@ function health(
 
   if (target.lastRunAt === null) {
     return {
-      tone: 'danger',
+      state: 'blocked',
       label: 'No run has ever completed',
       title: stale,
     };
@@ -176,14 +181,14 @@ function health(
   const age = now - new Date(target.lastRunAt).getTime();
   if (ceiling !== null && age > 2 * ceiling) {
     return {
-      tone: 'danger',
+      state: 'blocked',
       label: `No completed run for ${duration(age)}`,
       title: stale,
     };
   }
 
   return {
-    tone: 'active',
+    state: 'healthy',
     label: `Ran ${since(target.lastRunAt, now)}`,
     title:
       'A run completed within this target’s own schedule. This says a run ' +
@@ -192,7 +197,7 @@ function health(
 }
 
 export function TargetsPage() {
-  const { data, error, loading } = useApiResource<{ targets: TargetRow[] }>(
+  const { data, error } = useApiResource<{ targets: TargetRow[] }>(
     '/api/admin/targets',
   );
   // Narrowed once, and reused by both the summary cards and the table.
@@ -238,9 +243,9 @@ export function TargetsPage() {
 
       {!error && (
         <Panel>
-          {loading && <SkeletonRows rows={4} cols={5} />}
+          {!data && <SkeletonRows rows={4} cols={5} />}
 
-          {!loading && data?.targets.length === 0 && (
+          {data?.targets.length === 0 && (
             <div className="p-6">
               <Empty
                 title="No target systems yet"
@@ -259,7 +264,7 @@ export function TargetsPage() {
             </div>
           )}
 
-          {!loading && data && data.targets.length > 0 && (
+          {data && data.targets.length > 0 && (
             <Table>
               <thead>
                 <tr>
@@ -326,7 +331,13 @@ export function TargetsPage() {
                       </td>
                       <td>
                         <span title={state.title}>
-                          <Status tone={state.tone}>{state.label}</Status>
+                          {state.state ? (
+                            <StateBadge state={state.state}>{state.label}</StateBadge>
+                          ) : (
+                            <Status tone="neutral" glyph="dot">
+                              {state.label}
+                            </Status>
+                          )}
                         </span>
                       </td>
                     </tr>

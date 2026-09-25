@@ -13,10 +13,17 @@ export function Empty({
   title,
   children,
   action,
+  secondaryAction,
 }: {
   title: string;
   children?: ReactNode;
   action?: ReactNode;
+  /**
+   * A second route, quieter than the first — "or import a file" beside "Add a
+   * person". Never a second primary: an empty state that offers two equal
+   * next steps has not decided what the next step is.
+   */
+  secondaryAction?: ReactNode;
 }) {
   return (
     <div className="py-8 text-center">
@@ -24,7 +31,12 @@ export function Empty({
       {children && (
         <p className="mx-auto mt-1.5 max-w-[52ch] text-muted">{children}</p>
       )}
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
+      {(action || secondaryAction) && (
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+          {action}
+          {secondaryAction}
+        </div>
+      )}
     </div>
   );
 }

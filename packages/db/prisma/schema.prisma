@@ -125,6 +125,12 @@ model Tenant {
   /// bug.
   brandPrimary           String?
   brandAccent            String?
+  /// Where "Get help" on the sign-in page and the portal goes: an `https:`
+  /// page or a `mailto:` address, checked by `isSupportUrl` on every write
+  /// and again on render. Null means no link, which is the old behaviour.
+  brandSupportUrl        String?
+  /// The words on that link. Null means the page's own "Get help".
+  brandSupportLabel      String?
   /// A counter that goes up whenever anything a tenant's cached OIDC
   /// `Provider` was built from changes: a client (`OidcClient` insert, update
   /// or delete), an OIDC signing key (rotation, retirement), or a hostname
@@ -1135,7 +1141,27 @@ model Application {
   name        String
   slug        String
   description String?
+  /// A LEGACY remote logo address. Kept for the rows that have one, and never
+  /// rendered from another origin: the page's security policy allows images
+  /// only from this one, so a vendor URL here was always a monogram. Setting a
+  /// self-hosted icon (below) clears it.
   iconUrl     String?
+  /// A built-in mark, one of `BUILTIN_APP_ICONS` — served by the web app at
+  /// `/app-icons/<key>.svg`. Mutually exclusive with `iconImage`.
+  iconKey     String?
+  /// An uploaded raster (PNG, JPEG or WebP, at most 64 KB), stored here rather
+  /// than in object storage because it is small, belongs to exactly one row,
+  /// and must go wherever the row goes — including tenant deletion, which
+  /// erases the row. Never selected by list queries: see `APPLICATION_OMIT`.
+  iconImage   Bytes?
+  /// The uploaded raster's media type, checked against its magic bytes.
+  iconType    String?
+  /// `iconImage`'s length in bytes, stored beside it so a list of
+  /// applications can report it without reading every picture.
+  iconSize    Int?
+  /// SHA-256 of `iconImage`, hex. The ETag, and the `?v=` that lets the image
+  /// be cached forever: a new picture is a new URL.
+  iconHash    String?
   launchUrl   String?
   type        String   @default("bookmark")
   /// How the portal groups this tile — 'Finance', 'Engineering', or null.

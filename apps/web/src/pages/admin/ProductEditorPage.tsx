@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Field, Panel, Select } from '@syntra/ui';
+import { Alert, Button, Field, Panel, Select, Textarea, useToast } from '@syntra/ui';
 import { PageHeader } from './PageHeader.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { ApiError, api } from '../../session/api.js';
@@ -94,6 +94,7 @@ export function ProductEditorPage() {
 
   const [preview, setPreview] = useState<Preview | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const toast = useToast();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
@@ -201,7 +202,10 @@ export function ProductEditorPage() {
         isNew ? '/api/admin/automate/products' : `/api/admin/automate/products/${id}`,
         { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(body) },
       );
-      setProblem('Saved.');
+      // Confirmed in passing. `problem` is for what went wrong, and a
+      // warning-toned "Saved." read as one.
+      setProblem(null);
+      toast({ title: 'Product saved' });
     } catch (cause) {
       setErrors(fieldErrors(cause));
       setProblem(
@@ -223,14 +227,16 @@ export function ProductEditorPage() {
         <div className="space-y-4 p-4">
           <Field label="Name" value={name} onChange={setName} error={errors.name} />
           <Field label="Slug" value={slug} onChange={setSlug} error={errors.slug} />
-          <Field
+          <Textarea
             label="Description"
+            rows={2}
             value={description}
             onChange={setDescription}
           />
           <Field label="Category" value={category} onChange={setCategory} />
-          <Field
+          <Textarea
             label="Request instructions"
+            rows={3}
             value={requestInstructions}
             onChange={setRequestInstructions}
           />

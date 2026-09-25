@@ -1,5 +1,40 @@
 import type { TenantClient } from '@syntra/db';
+import type { ApplicationIconView } from '@syntra/contracts';
 import { currentTenant } from '../tenant-context.js';
+import { toApplicationIconView } from './application-icon.js';
+
+/**
+ * Left out of every application read and write result in this module.
+ *
+ * An uploaded logo is up to 64 KB of bytes, and nothing that lists, creates or
+ * updates an application needs them: the list reports the logo by URL and
+ * size, and the picture itself is read by exactly one route
+ * (`readApplicationIconImage`). Omitted here rather than stripped later, so
+ * the bytes never leave the database for a list of fifty applications — and
+ * so a handler that returns the row as-is cannot serialise a Buffer into a
+ * JSON response.
+ */
+export const APPLICATION_OMIT = { iconImage: true } as const;
+
+type ApplicationRow = Awaited<ReturnType<typeof findApplicationRow>>;
+type StoredApplication = NonNullable<ApplicationRow>;
+
+async function findApplicationRow(tx: TenantClient, id: string) {
+  return tx.application.findUnique({ where: { id }, omit: APPLICATION_OMIT });
+}
+
+/**
+ * An application as the admin API reports it: the row, with the icon
+ * bookkeeping columns replaced by the one `icon` the console draws.
+ */
+export type ApplicationView = Omit<StoredApplication, 'iconKey' | 'iconType' | 'iconSize' | 'iconHash'> & {
+  icon: ApplicationIconView;
+};
+
+export function toApplicationView(row: StoredApplication): ApplicationView {
+  const { iconKey, iconType, iconSize, iconHash, ...rest } = row;
+  return { ...rest, icon: toApplicationIconView({ id: row.id, iconKey, iconType, iconSize, iconHash }) };
+}
 
 export type ApplicationVisibility = 'assigned' | 'hidden';
 
@@ -39,6 +74,7 @@ export async function createApplication(
       type: input.type ?? 'bookmark',
       visibility: input.visibility ?? 'assigned',
     },
+    omit: APPLICATION_OMIT,
   });
 }
 
@@ -69,13 +105,14 @@ export async function updateApplication(
       ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
       ...(input.status === undefined ? {} : { status: input.status }),
     },
+    omit: APPLICATION_OMIT,
   });
 }
 
 export async function listApplications(tx: TenantClient) {
-  return tx.application.findMany({ orderBy: { name: 'asc' } });
+  return tx.application.findMany({ orderBy: { name: 'asc' }, omit: APPLICATION_OMIT });
 }
 
 export async function findApplication(tx: TenantClient, id: string) {
-  return tx.application.findUnique({ where: { id } });
+  return findApplicationRow(tx, id);
 }

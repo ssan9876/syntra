@@ -4,7 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { BrandingTab } from './BrandingTab.js';
 
-const brand = { name: null, logo: null, primary: null, accent: null };
+const brand = {
+  name: null,
+  logo: null,
+  primary: null,
+  accent: null,
+  supportUrl: null,
+  supportLabel: null,
+};
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -30,7 +37,7 @@ describe('BrandingTab', () => {
     renderPage();
     // The default is not an empty header. A tenant that has not thought about
     // branding still has to see something on their sign-in page.
-    expect(await screen.findByText('Syntra')).toBeInTheDocument();
+    expect((await screen.findAllByText('Syntra')).length).toBeGreaterThan(0);
   });
 
   it('shows the name in the preview as it is typed, before it is saved', async () => {
@@ -40,7 +47,7 @@ describe('BrandingTab', () => {
     renderPage();
 
     await userEvent.type(await screen.findByLabelText('Name'), 'Acme');
-    expect(screen.getByText('Acme')).toBeInTheDocument();
+    expect(screen.getAllByText('Acme').length).toBeGreaterThan(0);
   });
 
   it('takes a hex pasted from brand guidelines as well as one picked', async () => {
@@ -137,6 +144,49 @@ describe('BrandingTab', () => {
       const call = spy.mock.calls.find(([, init]) => (init as RequestInit)?.method === 'PUT');
       expect(call).toBeDefined();
       expect(JSON.parse(String(call![1]!.body))).toMatchObject({ name: null });
+    });
+  });
+
+  it('shows the support link in both previews as it is typed', async () => {
+    // A help link is only reassuring once you can see where it sits.
+    vi.stubGlobal('fetch', vi.fn(async () => json(brand)));
+    renderPage();
+
+    await userEvent.type(await screen.findByLabelText('Support link'), 'mailto:it@acme.test');
+    await userEvent.type(screen.getByLabelText('Support link text'), 'IT service desk');
+    expect(screen.getAllByText('IT service desk')).toHaveLength(2);
+  });
+
+  it('flags a javascript: support link and leaves it out of the preview', async () => {
+    // It would be a link on the unauthenticated sign-in page. The server
+    // refuses it too; this is so the refusal is visible while typing.
+    vi.stubGlobal('fetch', vi.fn(async () => json(brand)));
+    renderPage();
+
+    const box = await screen.findByLabelText('Support link');
+    await userEvent.type(box, 'javascript:alert(1)');
+    expect(box).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText(/https:\/\/ address or a mailto:/)).toBeInTheDocument();
+    expect(screen.queryByText('Get help')).toBeNull();
+  });
+
+  it('sends the support link and a cleared label as null', async () => {
+    const spy = vi.fn(async (_url: unknown, init?: RequestInit) =>
+      init?.method === 'PUT' ? json(brand) : json(brand),
+    );
+    vi.stubGlobal('fetch', spy);
+    renderPage();
+
+    await userEvent.type(await screen.findByLabelText('Support link'), 'https://help.acme.test');
+    await userEvent.click(screen.getByRole('button', { name: /save branding/i }));
+
+    await waitFor(() => {
+      const call = spy.mock.calls.find(([, init]) => (init as RequestInit)?.method === 'PUT');
+      expect(call).toBeDefined();
+      expect(JSON.parse(String(call![1]!.body))).toMatchObject({
+        supportUrl: 'https://help.acme.test',
+        supportLabel: null,
+      });
     });
   });
 });

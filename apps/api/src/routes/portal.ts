@@ -6,6 +6,8 @@ import {
   isApplicationAssigned,
   endSessions,
   listSessionsForUser,
+  portalTileIconUrl,
+  readApplicationIconImage,
   recordEvent,
   resolveApplicationsForUser,
 } from '@syntra/core';
@@ -22,6 +24,21 @@ export interface PortalRouteOptions {
   /** Attempts per minute for the whole tenant, across every address. */
   authRateLimitTenantMax: number;
   publicUrl: string;
+}
+
+/**
+ * Whether an `If-None-Match` header names this representation.
+ *
+ * The header is a list, may be `*`, and a cache may send the tag weak
+ * (`W/"…"`); the weak comparison RFC 9110 §13.1.2 prescribes for this header
+ * ignores that prefix.
+ */
+function etagMatches(header: string | undefined, hash: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((candidate) => {
+    const tag = candidate.trim().replace(/^W\//, '');
+    return tag === '*' || tag === `"${hash}"`;
+  });
 }
 
 export async function registerPortalRoutes(
@@ -43,10 +60,55 @@ export async function registerPortalRoutes(
       name: row.name,
       slug: row.slug,
       description: row.description,
-      iconUrl: row.iconUrl,
+      // The self-hosted logo when there is one; a legacy `iconUrl` only when
+      // it is a path on this origin. A remote one is null: the page's
+      // security policy would refuse it anyway, and null lets the client go
+      // straight to the monogram instead of making a request that fails.
+      iconUrl: portalTileIconUrl(row),
       category: row.category,
     }));
     return { applications };
+  });
+
+  /**
+   * An application's uploaded logo, served from this origin.
+   *
+   * Any signed-in session, portal or admin: the console draws the same URL
+   * the portal does. NOT gated on assignment, deliberately — a logo is not
+   * access, the console shows logos for applications its administrator is
+   * not assigned, and the only thing an assignment check would protect is
+   * the fact that a tenant has a picture for an application whose ID the
+   * caller already knows. Tenant-scoped like everything else: another
+   * tenant's ID reads as 404.
+   *
+   * The headers are the security of this route, not decoration. The bytes
+   * were checked on the way in (`decodeAppIconDataUri`), and these make sure
+   * a browser treats them as exactly the image type we checked and nothing
+   * else: the stored type, `nosniff` so it cannot guess otherwise, and
+   * `default-src 'none'` so even a browser that opened it as a document would
+   * run nothing and load nothing.
+   *
+   * Cached as immutable because the URL carries the content hash (`?v=`): a
+   * new picture is a new URL, so there is nothing to revalidate. `private`,
+   * because it sits behind a session and a shared cache has no business
+   * holding it. The ETag and 304 are for a client that asks anyway.
+   */
+  app.get('/applications/:id/icon', async (request, reply) => {
+    const { id } = idParam.parse(request.params);
+    const image = await request.db((tx) => readApplicationIconImage(tx, id));
+    if (!image) throw new ProblemError(404, 'not-found', 'No logo has been uploaded for that application');
+
+    const etag = `"${image.hash}"`;
+    reply
+      .header('etag', etag)
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-content-type-options', 'nosniff')
+      .header('content-security-policy', "default-src 'none'");
+
+    if (etagMatches(request.headers['if-none-match'], image.hash)) {
+      return reply.status(304).send();
+    }
+    return reply.type(image.contentType).send(Buffer.from(image.bytes));
   });
 
   app.post(

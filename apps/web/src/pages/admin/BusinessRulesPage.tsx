@@ -5,15 +5,20 @@ import {
   Button,
   Check,
   Empty,
+  ErrorSummary,
   Field,
+  FormActions,
+  FormSection,
   Panel,
   SkeletonRows,
-  Status,
+  StateBadge,
+  useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { ConditionGroupEditor } from './ConditionGroupEditor.js';
+import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
 
 interface Entitlement {
   id: string;
@@ -270,6 +275,11 @@ export function describeCondition(raw: unknown): string {
 
 const describe = (rule: StoredRule) => describeCondition(rule.condition);
 
+/** On-screen names for the fields the API refuses by name. */
+const LABELS: Record<string, string> = {
+  name: 'Name',
+};
+
 export function BusinessRulesPage() {
   const { id } = useParams<{ id: string }>();
   return <BusinessRulesEditor key={id} />;
@@ -283,8 +293,22 @@ function BusinessRulesEditor() {
   const [entitlementResults, setEntitlementResults] = useState<Entitlement[] | null>(null);
   const [searching, setSearching] = useState(false);
   const searchSeq = useRef(0);
+  const toast = useToast();
   const [draft, updateDraft] = useState<Draft>(BLANK);
+  // The rule as it was when editing began, so "Unsaved changes" is a
+  // comparison with it rather than a flag.
+  const [editingFrom, setEditingFrom] = useState<Draft>(BLANK);
   const [impact, setImpact] = useState<Impact | null>(null);
+  /**
+   * An impact was on screen, or on its way, when the draft changed.
+   *
+   * The figures are withdrawn at once — they are the blast radius of a rule
+   * that no longer exists — but the withdrawal is said, in their place and
+   * beside Save, so an empty space is never read as "this rule affects
+   * nobody".
+   */
+  const [impactStale, setImpactStale] = useState(false);
+  const impactShown = useRef(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<Record<string, string>>({});
@@ -302,9 +326,19 @@ function BusinessRulesEditor() {
 
   // Invalidate synchronously in the edit handler, including edits that restore
   // an earlier value. A response belongs to one draft revision, not just JSON.
+  /** Takes the impact off screen, saying so if one was there. */
+  const withdrawImpact = () => {
+    previewSeq.current += 1;
+    if (impactShown.current) setImpactStale(true);
+    impactShown.current = false;
+    setImpact(null);
+  };
+
   const setDraft = (next: Draft) => {
     previewSeq.current += 1;
     deletePreviewSeq.current += 1;
+    if (impactShown.current) setImpactStale(true);
+    impactShown.current = false;
     setImpact(null);
     setPending(null);
     setBusy((current) => current === 'impact' || current === 'delete-preview' ? null : current);
@@ -416,6 +450,7 @@ function BusinessRulesEditor() {
 
   async function onSave() {
     if ((draft.id !== undefined || authoritative || !target) && !impact) return;
+    // `previewRequired` below is the same condition, for the render.
     setBusy('save');
     setPending(null);
     setInvalid({});
@@ -426,9 +461,11 @@ function BusinessRulesEditor() {
         method: 'PUT',
         body: JSON.stringify(bodyOf(draft)),
       });
-      setNotice('Saved.');
+      toast({ tone: 'success', title: draft.id === undefined ? 'Rule created' : 'Rule saved' });
       setDraft(BLANK);
+      setEditingFrom(BLANK);
       setImpact(null);
+      setImpactStale(false);
       reload();
     } catch (cause) {
       fail(cause, 'The rule could not be saved.');
@@ -443,6 +480,8 @@ function BusinessRulesEditor() {
     setInvalid({});
     setProblem(null);
     setImpact(null);
+    setImpactStale(false);
+    impactShown.current = true;
     try {
       const result = await api<Impact>(`/api/admin/targets/${id}/rules/impact`, {
           method: 'POST',
@@ -450,7 +489,10 @@ function BusinessRulesEditor() {
         });
       if (seq === previewSeq.current) setImpact(result);
     } catch (cause) {
-      if (seq === previewSeq.current) fail(cause, 'The impact of that rule could not be previewed.');
+      if (seq === previewSeq.current) {
+        impactShown.current = false;
+        fail(cause, 'The impact of that rule could not be previewed.');
+      }
     } finally {
       if (seq === previewSeq.current) setBusy(null);
     }
@@ -467,7 +509,8 @@ function BusinessRulesEditor() {
   async function onRefresh() {
     setBusy('refresh');
     setPending(null);
-    setImpact(null);
+    // The catalog is what the impact was counted against.
+    withdrawImpact();
     setProblem(null);
     setNotice(null);
     try {
@@ -531,8 +574,15 @@ function BusinessRulesEditor() {
     setProblem(null);
     try {
       await api(`/api/admin/rules/${ruleId}`, { method: 'DELETE' });
-      setImpact(null);
-      if (draft.id === ruleId) setDraft(BLANK);
+      // Another rule's grants are part of what this draft's impact was
+      // counted against.
+      withdrawImpact();
+      if (draft.id === ruleId) {
+        setDraft(BLANK);
+        setEditingFrom(BLANK);
+        setImpactStale(false);
+      }
+      toast({ tone: 'success', title: 'Rule deleted' });
       setPending(null);
       reload();
     } catch (cause) {
@@ -541,6 +591,11 @@ function BusinessRulesEditor() {
       setBusy(null);
     }
   }
+
+  // Ruling P2 again: an edit, or any rule on an authoritative target, can take
+  // access away, so its impact is seen before it is saved.
+  const previewRequired = draft.id !== undefined || authoritative || !target;
+  const dirty = draftKey(draft) !== draftKey(editingFrom);
 
   return (
     <>
@@ -560,11 +615,6 @@ function BusinessRulesEditor() {
       <div className="space-y-6">
         {notice && <Alert tone="info">{notice}</Alert>}
         {problem && <Alert tone="danger">{problem}</Alert>}
-        {Object.keys(invalid).length > 0 && (
-          <Alert tone="danger" title="Some of this was refused">
-            The fields concerned are marked below.
-          </Alert>
-        )}
 
         {/*
           The union half is true under both modes. The reassurance is not.
@@ -657,7 +707,7 @@ function BusinessRulesEditor() {
                   <div className="min-w-0">
                     <p className="font-medium text-ink">
                       {rule.name}{' '}
-                      {!rule.enabled && <Status tone="inactive">disabled</Status>}
+                      {!rule.enabled && <StateBadge state="inactive">Disabled</StateBadge>}
                     </p>
                     <p className="text-muted">
                       {describe(rule)} —{' '}
@@ -669,7 +719,14 @@ function BusinessRulesEditor() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={() => setDraft(draftFrom(rule))}>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const opened = draftFrom(rule);
+                        setDraft(opened);
+                        setEditingFrom(opened);
+                      }}
+                    >
                       Edit
                     </Button>
                     <Button
@@ -687,46 +744,77 @@ function BusinessRulesEditor() {
           )}
         </Panel>
 
-        <Panel
-          title={draft.id === undefined ? 'New rule' : `Editing ${draft.name}`}
-          actions={
-            draft.id === undefined ? undefined : (
-              <Button size="sm" onClick={() => setDraft(BLANK)}>
+        {/*
+          The editor is a working area, not a Panel: the Panel's
+          `overflow-hidden` would pin the completion bar to the panel's own
+          box, and with a long entitlement list the Save somebody needs is
+          otherwise a screen below the tick they just changed. The impact
+          preview sits in it, directly above that bar, because it is the
+          blast radius of exactly this draft and is withdrawn the moment the
+          draft changes.
+        */}
+        <section
+          className="space-y-6 rounded-panel border border-border-subtle bg-bg px-4 pt-4"
+        >
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-md font-semibold text-ink">
+              {draft.id === undefined ? 'New rule' : `Editing ${draft.name}`}
+            </h2>
+            {draft.id !== undefined && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setDraft(BLANK);
+                  setEditingFrom(BLANK);
+                }}
+              >
                 Start a new rule instead
               </Button>
-            )
-          }
-        >
-          <div className="space-y-4 p-4">
+            )}
+          </header>
+
+          <ErrorSummary errors={summaryOf(invalid, LABELS)} />
+
+          <FormSection title="Who it matches">
             <Field
               label="Name"
+              name="name"
               value={draft.name}
               onChange={(v) => set('name', v)}
               placeholder="Finance staff"
               {...mark('name')}
+              className="sm:col-span-2"
             />
+            <div className="sm:col-span-2">
+              <ConditionGroupEditor
+                node={draft.condition}
+                onChange={(next) => set('condition', next)}
+                depth={0}
+              />
+            </div>
+          </FormSection>
 
-            <ConditionGroupEditor
-              node={draft.condition}
-              onChange={(next) => set('condition', next)}
-              depth={0}
-            />
-
+          <FormSection
+            title="What it grants"
+            status={
+              draft.enabled ? null : <StateBadge state="inactive">Disabled</StateBadge>
+            }
+          >
             <Check
+              className="sm:col-span-2"
               checked={draft.grantsAccount}
               onChange={(v) => set('grantsAccount', v)}
               label="A match requires an account in this target"
             />
             <Check
+              className="sm:col-span-2"
               checked={draft.enabled}
               onChange={(v) => set('enabled', v)}
               label="Enabled"
             />
 
-            <fieldset className="rounded-panel border border-border-subtle p-4">
-              <legend className="px-1 font-medium text-ink">
-                Entitlements granted
-              </legend>
+            <fieldset className="space-y-2 sm:col-span-2">
+              <legend className="mb-2 font-medium text-ink">Entitlements granted</legend>
               {loading ? (
                 // Never "the catalog is empty" before the catalog has been
                 // read: that sentence sends somebody to press a button that
@@ -742,14 +830,12 @@ function BusinessRulesEditor() {
                 <div className="space-y-2">
                   <Field
                     label="Search entitlements"
+                    name="entitlementQuery"
                     value={entitlementQuery}
                     onChange={setEntitlementQuery}
                     placeholder="Type part of a group name"
                     warning={searching ? 'Searching…' : undefined}
                   />
-                  <p className="text-sm text-muted">
-                    Groups without a note are direct-membership groups Syntra can manage. Dynamic or unsupported groups are marked and cannot be selected.
-                  </p>
                   {(() => {
                     const shown = entitlementResults ?? entitlements;
                     // What is selected stays visible even when the search
@@ -803,80 +889,111 @@ function BusinessRulesEditor() {
                 </div>
               )}
             </fieldset>
+          </FormSection>
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={onImpact}
-                loading={busy === 'impact'}
-                disabled={!!busy}
-              >
-                Preview impact
-              </Button>
-              <Button
-                variant="primary"
-                onClick={onSave}
-                loading={busy === 'save'}
-                disabled={!!busy || ((draft.id !== undefined || authoritative || !target) && !impact)}
-              >
-                Save rule
-              </Button>
+          <FormSection
+            title="Impact"
+            status={
+              busy === 'impact' ? (
+                <StateBadge state="running">Previewing</StateBadge>
+              ) : impactStale ? (
+                <StaleBadge />
+              ) : impact ? (
+                <StateBadge state="healthy">Matches this draft</StateBadge>
+              ) : previewRequired ? (
+                <StateBadge state="setup">Not previewed</StateBadge>
+              ) : null
+            }
+          >
+            <div className="sm:col-span-2">
+              {impactStale && !impact && (
+                <p className="text-sm text-warning" role="status">
+                  The rule changed after the last preview. Preview again to see what it would do.
+                </p>
+              )}
+              {impact && (
+                <div className="rounded-panel border border-border-subtle p-4">
+                  {/* A rule whose blast radius is only visible after it is saved
+                      is a rule that gets saved and then discovered. The
+                      revocation count leads when there is one: an edit that
+                      empties a rule's entitlement list revokes everything that
+                      rule ever granted, and that is the change most likely to be
+                      made without meaning it. */}
+                  <p className="text-ink">
+                    This rule matches{' '}
+                    <strong className="font-semibold tabular-nums">
+                      {impact.matchedPersons}
+                    </strong>{' '}
+                    of {impact.totalPersons} persons.
+                  </p>
+                  <p className="mt-2 text-ink">
+                    Saving it would grant{' '}
+                    <strong className="font-semibold tabular-nums">
+                      {impact.wouldGrant}
+                    </strong>{' '}
+                    entitlement{impact.wouldGrant === 1 ? '' : 's'} and revoke{' '}
+                    <strong className="font-semibold tabular-nums">
+                      {impact.wouldRevoke}
+                    </strong>
+                    .
+                  </p>
+                  {impact.wouldRevoke > 0 && (
+                    <div className="mt-3">
+                      <Alert
+                        tone="warning"
+                        title={`${impact.wouldRevoke} holding${
+                          impact.wouldRevoke === 1 ? '' : 's'
+                        } would be taken away`}
+                      >
+                        Revocations are what an edit to an existing rule usually
+                        does without meaning to. Removing an entitlement from a
+                        rule revokes it from everybody the rule granted it to.
+                      </Alert>
+                    </div>
+                  )}
+                  {impact.sample.length > 0 && (
+                    <ul className="mt-3 text-muted">
+                      {impact.sample.map((person) => (
+                        <li key={person.personId}>{person.displayName}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
+          </FormSection>
 
-            {(draft.id !== undefined || authoritative || !target) && !impact && (
-              <p className="text-muted">Preview the current rule before saving changes that may remove access.</p>
-            )}
-
-            {impact && (
-              <div className="rounded-panel border border-border-subtle p-4">
-                {/* A rule whose blast radius is only visible after it is saved
-                    is a rule that gets saved and then discovered. The
-                    revocation count leads when there is one: an edit that
-                    empties a rule's entitlement list revokes everything that
-                    rule ever granted, and that is the change most likely to be
-                    made without meaning it. */}
-                <p className="text-ink">
-                  This rule matches{' '}
-                  <strong className="font-semibold tabular-nums">
-                    {impact.matchedPersons}
-                  </strong>{' '}
-                  of {impact.totalPersons} persons.
-                </p>
-                <p className="mt-2 text-ink">
-                  Saving it would grant{' '}
-                  <strong className="font-semibold tabular-nums">
-                    {impact.wouldGrant}
-                  </strong>{' '}
-                  entitlement{impact.wouldGrant === 1 ? '' : 's'} and revoke{' '}
-                  <strong className="font-semibold tabular-nums">
-                    {impact.wouldRevoke}
-                  </strong>
-                  .
-                </p>
-                {impact.wouldRevoke > 0 && (
-                  <div className="mt-3">
-                    <Alert
-                      tone="warning"
-                      title={`${impact.wouldRevoke} holding${
-                        impact.wouldRevoke === 1 ? '' : 's'
-                      } would be taken away`}
-                    >
-                      Revocations are what an edit to an existing rule usually
-                      does without meaning to. Removing an entitlement from a
-                      rule revokes it from everybody the rule granted it to.
-                    </Alert>
-                  </div>
-                )}
-                {impact.sample.length > 0 && (
-                  <ul className="mt-3 text-muted">
-                    {impact.sample.map((person) => (
-                      <li key={person.personId}>{person.displayName}</li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        </Panel>
+          <FormActions
+            sticky
+            status={
+              previewRequired && !impact && !impactStale ? (
+                <span className="flex flex-wrap items-center gap-2">
+                  {dirty && draftStatus({ dirty })}
+                  {/* Why Save is disabled, said beside it rather than left for
+                      somebody to discover by pressing it. */}
+                  <StateBadge state="attention">Preview required before saving</StateBadge>
+                </span>
+              ) : (
+                draftStatus({
+                  dirty,
+                  stale: impactStale ? 'Preview is out of date' : null,
+                })
+              )
+            }
+          >
+            <Button onClick={onImpact} loading={busy === 'impact'} disabled={!!busy}>
+              Preview impact
+            </Button>
+            <Button
+              variant="primary"
+              onClick={onSave}
+              loading={busy === 'save'}
+              disabled={!!busy || (previewRequired && !impact)}
+            >
+              Save rule
+            </Button>
+          </FormActions>
+        </section>
 
         <Link
           to={`/admin/targets/${id}`}

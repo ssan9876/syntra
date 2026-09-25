@@ -134,7 +134,7 @@
           "Applications"
         ],
         "summary": "List applications",
-        "description": "Requires `access.read`.",
+        "description": "Each application carries `icon`: its logo as a same-origin URL (a built-in mark, or an uploaded image served by the API), or null.\n\nRequires `access.read`.",
         "x-syntra-permission": [
           "access.read"
         ],
@@ -1006,6 +1006,243 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/applications/{id}/icon": {
+      "put": {
+        "operationId": "putApplicationsByIdIcon",
+        "tags": [
+          "Applications"
+        ],
+        "summary": "Set or clear the logo of an application",
+        "description": "A built-in mark by key, an uploaded PNG, JPEG or WebP as a base64 data URI (at most 64 KB decoded), or `null` to clear it. SVG is refused, and an image whose content does not match its declared type is refused. Any change also clears the legacy `iconUrl`. The uploaded image is served, to any signed-in session, at `/api/portal/applications/{id}/icon`.\n\nRequires `access.manage`.",
+        "x-syntra-permission": [
+          "access.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "icon": {
+                    "anyOf": [
+                      {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "builtin"
+                              },
+                              "key": {
+                                "type": "string",
+                                "enum": [
+                                  "calendar",
+                                  "mail",
+                                  "chat",
+                                  "video",
+                                  "documents",
+                                  "files",
+                                  "wiki",
+                                  "rota",
+                                  "clinical",
+                                  "pharmacy",
+                                  "learning",
+                                  "hr",
+                                  "finance",
+                                  "expenses",
+                                  "crm",
+                                  "helpdesk",
+                                  "analytics",
+                                  "security",
+                                  "building",
+                                  "globe"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "key"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "const": "image"
+                              },
+                              "dataUri": {
+                                "type": "string",
+                                "maxLength": 87446
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "dataUri"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "icon"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "icon": {
+                      "anyOf": [
+                        {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "builtin"
+                                },
+                                "key": {
+                                  "type": "string",
+                                  "enum": [
+                                    "calendar",
+                                    "mail",
+                                    "chat",
+                                    "video",
+                                    "documents",
+                                    "files",
+                                    "wiki",
+                                    "rota",
+                                    "clinical",
+                                    "pharmacy",
+                                    "learning",
+                                    "hr",
+                                    "finance",
+                                    "expenses",
+                                    "crm",
+                                    "helpdesk",
+                                    "analytics",
+                                    "security",
+                                    "building",
+                                    "globe"
+                                  ]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "key",
+                                "url"
+                              ]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "image"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "contentType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/webp"
+                                  ]
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "url",
+                                "contentType",
+                                "bytes"
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "icon"
+                  ]
+                }
               }
             }
           },
@@ -7320,6 +7557,20 @@
                 "onboarding",
                 "offboarding",
                 "failed"
+              ]
+            }
+          },
+          {
+            "name": "lane",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "action",
+                "waiting",
+                "blocked",
+                "overdue"
               ]
             }
           }
@@ -27856,6 +28107,29 @@
                       {
                         "type": "string",
                         "maxLength": 7
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "supportUrl": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "supportLabel": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 40
                       },
                       {
                         "type": "null"

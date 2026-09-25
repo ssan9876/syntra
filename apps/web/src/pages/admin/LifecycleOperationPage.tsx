@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Select, Status, Table } from '@syntra/ui';
+import { Alert, Button, Check, Field, Panel, Select, StateBadge, Status, Table, type State } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
@@ -65,13 +65,40 @@ function stateSummary(state: TargetState | null) {
   return `Account ${state.accountPresent ? 'present' : 'absent'} · ${state.enabled ? 'enabled' : 'disabled'} · ${state.entitlements.length ? state.entitlements.join(', ') : 'no entitlements'}`;
 }
 
-function tone(status: string): 'active' | 'danger' | 'warning' | 'inactive' | 'neutral' | 'primary' {
-  if (status === 'completed' || status === 'succeeded') return 'active';
-  if (status === 'failed' || status === 'rejected' || status === 'abandoned') return 'danger';
-  if (status === 'awaiting_approval') return 'primary';
-  if (status === 'cancelled' || status === 'skipped') return 'inactive';
-  if (status === 'manual') return 'warning';
-  return 'warning';
+/**
+ * Operation, step and attempt statuses in the console's agreed language.
+ *
+ * The old mapping sent every status it did not recognise — queued, running,
+ * waiting — to `warning`, so an operation Syntra was busy on looked exactly
+ * like one a person had to rescue. The difference between "do not act yet"
+ * and "act on this" is the whole point of this page.
+ */
+const STEP_STATE: Record<string, State> = {
+  completed: 'healthy',
+  succeeded: 'healthy',
+  failed: 'blocked',
+  rejected: 'blocked',
+  abandoned: 'blocked',
+  blocked: 'blocked',
+  manual: 'attention',
+  awaiting_approval: 'pending',
+  waiting: 'pending',
+  queued: 'pending',
+  running: 'running',
+  cancelled: 'inactive',
+  skipped: 'inactive',
+};
+
+const STEP_LABEL: Record<string, string> = { manual: 'Manual work', awaiting_approval: 'Awaiting approval' };
+
+function OperationStatus({ status }: { status: string }) {
+  const label = STEP_LABEL[status] ?? status.charAt(0).toUpperCase() + status.slice(1).replaceAll('_', ' ');
+  return <StateBadge state={STEP_STATE[status] ?? 'attention'}>{label}</StateBadge>;
+}
+
+/** A step a person has to act on before the operation can finish. */
+function needsPerson(status: string) {
+  return ['failed', 'blocked', 'manual', 'abandoned'].includes(status);
 }
 
 function problemText(error: unknown, fallback: string) {
@@ -111,7 +138,6 @@ function ObservationForm({ operationId, step, onDone }: { operationId: string; s
   };
   return (
     <form className="mt-3 space-y-3 rounded border border-border-subtle p-3" aria-label={`Record observed state for ${step.title}`} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
-      <p className="text-sm text-muted">Record what you saw at the target. A match completes the step; a confirmed mismatch or an incomplete read leaves it for a person and keeps the evidence.</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <fieldset className="space-y-2"><legend className="font-medium text-ink">Expected</legend>
           <Check label="Account should exist" checked={expectedPresent} onChange={setExpectedPresent} />
@@ -258,9 +284,9 @@ export function LifecycleOperationPage() {
     return next;
   });
   return <>
-    <PageHeader title={`${operation.kind} operation${operation.personName ? ` — ${operation.personName}` : ''}`} actions={operation.personId ? <Link className="underline" to={`/admin/people/${operation.personId}`}>Employee record</Link> : undefined} />
+    <PageHeader title={`${operation.kind} operation${operation.personName ? ` — ${operation.personName}` : ''}`} status={<OperationStatus status={operation.status} />} actions={operation.personId ? <Link className="link" to={`/admin/people/${operation.personId}`}>Employee record</Link> : undefined} />
     <PageFacts facts={[
-      { label: 'Status', value: <Status tone={tone(operation.status)}>{operation.status.replace('_', ' ')}</Status> },
+      { label: 'Status', value: <OperationStatus status={operation.status} /> },
       { label: 'Attempt', value: operation.attempt },
       { label: 'Priority', value: operation.priority },
       { label: 'Owner', value: operation.ownerName ?? 'Unassigned' },
@@ -291,7 +317,7 @@ export function LifecycleOperationPage() {
         const observation = step.observations?.[0];
         const attempts = step.attempts ?? [];
         return <li key={step.id} className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2"><strong>{step.title}</strong> <Status tone={tone(step.status)}>{step.status}</Status>{step.responseCategory ? <span className="text-sm text-muted">· {CATEGORY_LABEL[step.responseCategory] ?? step.responseCategory}</span> : null}</div>
+          <div className="flex flex-wrap items-center gap-2"><strong>{step.title}</strong> <OperationStatus status={step.status} />{step.responseCategory ? <span className="text-sm text-muted">· {CATEGORY_LABEL[step.responseCategory] ?? step.responseCategory}</span> : null}</div>
           <p className="text-sm text-muted">Planned: {step.title}. Started {when(step.startedAt)} · finished {when(step.completedAt)} · attempts recorded: {attempts.length}</p>
           {step.message ? <p className="text-sm">{step.message}</p> : null}
           {observation ? <div className="mt-2 border-t border-border-subtle pt-2 text-sm space-y-1">
@@ -300,12 +326,20 @@ export function LifecycleOperationPage() {
             <p><span className="text-muted">Observed:</span> {stateSummary(observation.observed)}</p>
             {observation.differences.length ? <ul className="list-disc pl-5 text-muted">{observation.differences.map((difference) => <li key={difference.path}>{difference.path}: expected {JSON.stringify(difference.expected)}, observed {JSON.stringify(difference.observed)}</li>)}</ul> : null}
           </div> : null}
+          {/* A failure carries its way out on the step it belongs to, rather
+              than leaving the reader to find the retry at the bottom of the
+              timeline or the evidence on another page. */}
+          {needsPerson(step.status) ? <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-sm font-medium text-muted">Next</span>
+            {open && !pendingApproval ? <Button size="sm" loading={busy} onClick={() => void act('retry', undefined, 'Operation requeued as a new attempt. Earlier evidence is kept.', 'Could not requeue the operation.')}>Retry unfinished work</Button> : null}
+            {step.key === 'targets' && operation.personId ? <Link className="link" to={`/admin/people/${operation.personId}`}>Review provisioning evidence</Link> : null}
+          </div> : null}
           <div className="flex flex-wrap gap-2">
             {attempts.length > 0 ? <Button size="sm" variant="ghost" aria-expanded={history.has(step.id)} onClick={() => toggleHistory(step.id)}>{history.has(step.id) ? 'Hide attempt history' : `Show attempt history (${attempts.length})`}</Button> : null}
             {open && step.key === 'targets' && step.status !== 'succeeded' && step.status !== 'skipped' ? <Button size="sm" variant="secondary" onClick={() => setObserving(observing === step.id ? null : step.id)}>{observing === step.id ? 'Close observation form' : 'Record observed state'}</Button> : null}
           </div>
           {history.has(step.id) ? <Table tight><thead><tr><th scope="col">Attempt</th><th scope="col">Outcome</th><th scope="col">Target response</th><th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Message</th></tr></thead><tbody>
-            {attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt}</td><td><Status tone={tone(attempt.status)}>{attempt.status}</Status></td><td>{attempt.responseCategory ? CATEGORY_LABEL[attempt.responseCategory] ?? attempt.responseCategory : '—'}</td><td>{when(attempt.startedAt)}</td><td>{when(attempt.completedAt)}</td><td>{attempt.message ?? '—'}</td></tr>)}
+            {attempts.map((attempt) => <tr key={attempt.id}><td>{attempt.attempt}</td><td><OperationStatus status={attempt.status} /></td><td>{attempt.responseCategory ? CATEGORY_LABEL[attempt.responseCategory] ?? attempt.responseCategory : '—'}</td><td>{when(attempt.startedAt)}</td><td>{when(attempt.completedAt)}</td><td>{attempt.message ?? '—'}</td></tr>)}
           </tbody></Table> : null}
           {observing === step.id ? <ObservationForm operationId={operation.id} step={step} onDone={(message) => { setNotice(message); setObserving(null); resource.reload(); }} /> : null}
         </li>;

@@ -1,8 +1,23 @@
 import { useState } from 'react';
-import { Alert, Button, Check, Field, Panel, Select, Status } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Check,
+  ErrorSummary,
+  Field,
+  FormActions,
+  FormSection,
+  Identifier,
+  Panel,
+  Select,
+  Status,
+  Textarea,
+  useToast,
+} from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { ApplicationClaims } from './ApplicationClaims.js';
+import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 
 /**
  * The single-sign-on configuration for one application.
@@ -96,7 +111,14 @@ export function ApplicationSso({ applicationId }: { applicationId: string }) {
   const hasSaml = typeof saml.data?.spEntityId === 'string';
   const hasOidc = typeof oidc.data?.clientId === 'string';
 
-  if (saml.loading || oidc.loading) return null;
+  // Only the FIRST read hides the panels. `useApiResource` keeps the previous
+  // data through a reload, and this used to answer every reload with `null` —
+  // which unmounted the OpenID Connect panel between a save and its re-read,
+  // and with it the rotated client secret the save had just put on screen
+  // under "it is not shown again".
+  const firstRead = (r: { loading: boolean; data: unknown; error: string | null }) =>
+    r.loading && r.data === null && r.error === null;
+  if (firstRead(saml) || firstRead(oidc)) return null;
 
   if (!hasSaml && !hasOidc) {
     return (
@@ -113,6 +135,9 @@ export function ApplicationSso({ applicationId }: { applicationId: string }) {
     <>
       {hasSaml && (
         <SamlPanel
+          // Remounted from each read, so an import or a save shows what the
+          // server now holds rather than what was typed before it.
+          key={saml.updatedAt?.getTime() ?? 0}
           applicationId={applicationId}
           config={saml.data!}
           onSaved={() => saml.reload()}
@@ -142,6 +167,42 @@ export function ApplicationSso({ applicationId }: { applicationId: string }) {
   );
 }
 
+/** What each SAML control is called on screen, for the error summary. */
+const SAML_LABELS: Record<string, string> = {
+  spEntityId: 'Service provider entity ID',
+  acsUrls: 'Assertion consumer URLs',
+  defaultAcsUrl: 'Assertion consumer URLs',
+  nameIdFormat: 'Name ID format',
+  spCertificates: 'Signing certificates',
+  sloUrl: 'Single logout URL',
+  url: 'Service provider metadata',
+  xml: 'Service provider metadata',
+};
+
+const OIDC_LABELS: Record<string, string> = {
+  redirectUris: 'Redirect URIs',
+  postLogoutRedirectUris: 'Redirect URIs',
+  scopes: 'Scopes',
+  backchannelLogoutUri: 'Back-channel logout endpoint',
+};
+
+/** A list box's contents, compared as the list the server would store. */
+const sameLines = (a: string, b: string) =>
+  JSON.stringify(toLines(a)) === JSON.stringify(toLines(b));
+
+/**
+ * The warning a list of exact-match URLs earns, and only while it applies.
+ *
+ * This used to be a permanent caption — "One per line. Matched exactly; there
+ * is no wildcard." — under both URL boxes. The first half is now the label.
+ * The second half is only news to somebody who has just typed a `*`, which is
+ * exactly when it is shown.
+ */
+const wildcardWarning = (value: string) =>
+  value.includes('*')
+    ? 'Matched exactly: a * is taken literally, not as a wildcard.'
+    : undefined;
+
 function SamlPanel({
   applicationId,
   config,
@@ -151,7 +212,8 @@ function SamlPanel({
   config: SamlConfig;
   onSaved(): void;
 }) {
-  const [form, setForm] = useState({
+  const toast = useToast();
+  const initial = {
     spEntityId: config.spEntityId,
     acsUrls: linesOf(config.acsUrls),
     nameIdFormat: config.nameIdFormat,
@@ -160,24 +222,46 @@ function SamlPanel({
     allowIdpInitiated: config.allowIdpInitiated,
     wsFedEnabled: config.wsFedEnabled,
     sloUrl: config.sloUrl ?? '',
-  });
+  };
+  const [form, setForm] = useState(initial);
   const [metadata, setMetadata] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
-  const describe = (cause: unknown) =>
-    cause instanceof ApiError
-      ? (cause.problem.detail ?? cause.problem.title)
-      : 'That could not be saved.';
+  // Compared as what would be SAVED, so a trailing newline or a re-pasted
+  // identical certificate does not claim the form has changed.
+  const dirty =
+    form.spEntityId.trim() !== initial.spEntityId ||
+    !sameLines(form.acsUrls, initial.acsUrls) ||
+    form.nameIdFormat !== initial.nameIdFormat ||
+    JSON.stringify(certificatesOf(form.spCertificates)) !==
+      JSON.stringify(certificatesOf(initial.spCertificates)) ||
+    form.wantAuthnRequestsSigned !== initial.wantAuthnRequestsSigned ||
+    form.allowIdpInitiated !== initial.allowIdpInitiated ||
+    form.wsFedEnabled !== initial.wsFedEnabled ||
+    form.sloUrl.trim() !== initial.sloUrl;
+
+  /** A refusal, split into what belongs against a field and what does not. */
+  const refuse = (cause: unknown) => {
+    const marked = formFieldErrors(cause);
+    setErrors(marked);
+    setProblem(
+      Object.keys(marked).length > 0
+        ? null
+        : cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'That could not be saved.',
+    );
+  };
 
   async function save() {
     setBusy(true);
     setProblem(null);
-    setNote(null);
+    setErrors({});
     try {
       const acsUrls = toLines(form.acsUrls);
       await api(`/api/admin/applications/${applicationId}/saml`, {
@@ -227,10 +311,13 @@ function SamlPanel({
           sloUrl: form.sloUrl.trim() === '' ? null : form.sloUrl.trim(),
         }),
       });
-      setNote('Saved.');
+      // A toast rather than the inline "Saved." this used to set: the panel
+      // is re-read after a save and remounted from what the server stored,
+      // which took the inline note with it.
+      toast({ tone: 'success', title: 'SAML settings saved' });
       onSaved();
     } catch (cause) {
-      setProblem(describe(cause));
+      refuse(cause);
     } finally {
       setBusy(false);
     }
@@ -239,7 +326,7 @@ function SamlPanel({
   async function importMetadata() {
     setBusy(true);
     setProblem(null);
-    setNote(null);
+    setErrors({});
     try {
       const trimmed = metadata.trim();
       await api(`/api/admin/applications/${applicationId}/saml/import`, {
@@ -251,142 +338,172 @@ function SamlPanel({
         ),
       });
       setMetadata('');
-      setNote('Imported. The fields below now describe what the metadata said.');
+      toast({
+        tone: 'success',
+        title: 'Metadata imported',
+        body: 'The fields now show what the metadata said.',
+      });
       onSaved();
     } catch (cause) {
-      setProblem(describe(cause));
+      refuse(cause);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Panel
-      title="SAML"
+    /*
+      A form, so Enter saves and the error summary can reach every control by
+      name. Four stages, essentials first: where the settings can come from
+      wholesale, then who the service provider is, then how its requests are
+      trusted, then the optional ways in and out.
+
+      The form wraps the panel rather than sitting inside it so the save bar
+      can be sticky: `Panel` clips its overflow, and a sticky element inside a
+      clipping box sticks to the box, not to the screen.
+    */
+    <form
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
     >
-      <div className="space-y-5 p-4">
-        {/*
-          Import first. Where a service provider publishes metadata this is
-          exact, carries the certificates, and cannot go stale — the fields
-          below are for the majority that publish none.
-        */}
-        <div className="rounded-panel border border-border-control p-3">
-          <span className="font-medium text-ink">Import the service provider’s metadata</span>
-          <p className="mt-0.5 text-sm text-muted">
-            A metadata URL, or paste the XML. This fills in everything below,
-            certificates included.
-          </p>
-          <textarea
-            aria-label="Service provider metadata"
-            value={metadata}
-            onChange={(event) => setMetadata(event.target.value)}
-            rows={3}
-            spellCheck={false}
-            className="mt-2 w-full rounded-control border border-border-control bg-bg p-2 font-mono text-sm text-ink"
+      <Panel title="SAML">
+        <div className="space-y-6 p-4">
+          <ErrorSummary
+            errors={summaryErrors(errors, SAML_LABELS, problem)}
+            {...(Object.keys(errors).length === 0 ? { title: 'Not saved' } : {})}
           />
-          <div className="mt-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={busy}
-              disabled={metadata.trim() === ''}
-              onClick={importMetadata}
-            >
-              Import
-            </Button>
-          </div>
+
+          {/*
+            Import first. Where a service provider publishes metadata this is
+            exact, carries the certificates, and cannot go stale — the fields
+            below are for the majority that publish none.
+          */}
+          <FormSection title="Import from metadata" number={1}>
+            <div className="space-y-2 sm:col-span-2">
+              <Textarea
+                name="metadata"
+                label="Service provider metadata"
+                value={metadata}
+                onChange={setMetadata}
+                rows={3}
+                mono
+                spellCheck={false}
+                placeholder="https://sp.example.com/saml/metadata, or paste the XML"
+                error={errors.url ?? errors.xml}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={busy}
+                disabled={metadata.trim() === ''}
+                onClick={importMetadata}
+              >
+                Import
+              </Button>
+            </div>
+          </FormSection>
+
+          <FormSection title="Service provider" number={2}>
+            <Field
+              name="spEntityId"
+              label="Service provider entity ID"
+              value={form.spEntityId}
+              onChange={(v) => set('spEntityId', v)}
+              required
+              error={errors.spEntityId}
+            />
+            <Select
+              name="nameIdFormat"
+              label="Name ID format"
+              value={form.nameIdFormat}
+              onChange={(v) => set('nameIdFormat', v)}
+              options={NAME_ID_FORMATS}
+              error={errors.nameIdFormat}
+            />
+            <Textarea
+              name="acsUrls"
+              label="Assertion consumer URLs, one per line"
+              value={form.acsUrls}
+              onChange={(v) => set('acsUrls', v)}
+              rows={3}
+              mono
+              spellCheck={false}
+              className="sm:col-span-2"
+              warning={wildcardWarning(form.acsUrls)}
+              error={errors.acsUrls ?? errors.defaultAcsUrl}
+            />
+          </FormSection>
+
+          <FormSection title="Request signing" number={3}>
+            <Textarea
+              name="spCertificates"
+              label="Signing certificates"
+              value={form.spCertificates}
+              onChange={(v) => set('spCertificates', v)}
+              rows={6}
+              mono
+              spellCheck={false}
+              placeholder="-----BEGIN CERTIFICATE-----"
+              className="sm:col-span-2"
+              error={errors.spCertificates}
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.wantAuthnRequestsSigned}
+              onChange={(v) => set('wantAuthnRequestsSigned', v)}
+              label="Require the service provider to sign its requests"
+            />
+          </FormSection>
+
+          <FormSection title="Sign-in and logout" number={4}>
+            <Check
+              checked={form.allowIdpInitiated}
+              onChange={(v) => set('allowIdpInitiated', v)}
+              label="Allow sign-in started from Syntra"
+            />
+            <Check
+              checked={form.wsFedEnabled}
+              onChange={(v) => set('wsFedEnabled', v)}
+              label="Also accept WS-Federation"
+            />
+            {form.wsFedEnabled && (
+              <div className="sm:col-span-2">
+                <Alert>
+                  <p>
+                    Point the application at{' '}
+                    <code>{`${window.location.origin}/saml/wsfed`}</code> with{' '}
+                    <code>wtrealm={form.spEntityId || 'your entity ID'}</code>.
+                  </p>
+                </Alert>
+              </div>
+            )}
+            <Field
+              name="sloUrl"
+              label="Single logout URL"
+              value={form.sloUrl}
+              onChange={(v) => set('sloUrl', v)}
+              error={errors.sloUrl}
+            />
+          </FormSection>
+
         </div>
+      </Panel>
 
-        <Field
-          label="Service provider entity ID"
-          value={form.spEntityId}
-          onChange={(v) => set('spEntityId', v)}
-          required
-        />
-
-        <div>
-          <label className="mb-1.5 block font-medium text-ink" htmlFor="acs-urls">
-            Assertion consumer URLs
-          </label>
-          <textarea
-            id="acs-urls"
-            value={form.acsUrls}
-            onChange={(event) => set('acsUrls', event.target.value)}
-            rows={3}
-            spellCheck={false}
-            className="w-full rounded-control border border-border-control bg-bg p-2 font-mono text-sm text-ink"
-          />
-          {/* Matched byte for byte at sign-in — this is an allowlist, not a
-              pattern, and saying so is the difference between a working
-              integration and an hour of guessing. */}
-          <p className="mt-1 text-sm text-muted">
-            One per line. Matched exactly; there is no wildcard.
-          </p>
-        </div>
-
-        <Select
-          label="Name ID format"
-          value={form.nameIdFormat}
-          onChange={(v) => set('nameIdFormat', v)}
-          options={NAME_ID_FORMATS}
-        />
-
-        <div>
-          <label className="mb-1.5 block font-medium text-ink" htmlFor="sp-certs">
-            Signing certificates
-          </label>
-          <textarea
-            id="sp-certs"
-            value={form.spCertificates}
-            onChange={(event) => set('spCertificates', event.target.value)}
-            rows={6}
-            spellCheck={false}
-            placeholder="-----BEGIN CERTIFICATE-----"
-            className="w-full rounded-control border border-border-control bg-bg p-2 font-mono text-sm text-ink"
-          />
-        </div>
-
-        <Check
-          checked={form.wantAuthnRequestsSigned}
-          onChange={(v) => set('wantAuthnRequestsSigned', v)}
-          label="Require the service provider to sign its requests"
-        />
-
-        <Check
-          checked={form.allowIdpInitiated}
-          onChange={(v) => set('allowIdpInitiated', v)}
-          label="Allow sign-in started from Syntra"
-        />
-
-        <Check
-          checked={form.wsFedEnabled}
-          onChange={(v) => set('wsFedEnabled', v)}
-          label="Also accept WS-Federation"
-        />
-        {form.wsFedEnabled && (
-          <Alert>
-            <p>
-              Point the application at{' '}
-              <code>{`${window.location.origin}/saml/wsfed`}</code> with{' '}
-              <code>wtrealm={form.spEntityId || 'your entity ID'}</code>.
-            </p>
-          </Alert>
-        )}
-
-        <Field
-          label="Single logout URL"
-          value={form.sloUrl}
-          onChange={(v) => set('sloUrl', v)}
-        />
-
-        {problem && <Alert tone="danger">{problem}</Alert>}
-        {note && <Alert tone="success">{note}</Alert>}
-
-        <Button variant="primary" loading={busy} onClick={save}>
+      {/* Sticky: this form runs past a screen, and the certificate box is
+          usually the last thing changed and the furthest from the top. */}
+      <FormActions
+        sticky
+        status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
+      >
+        <Button type="submit" variant="primary" loading={busy}>
           Save SAML settings
         </Button>
-      </div>
-    </Panel>
+      </FormActions>
+    </form>
   );
 }
 
@@ -416,6 +533,7 @@ function OidcPanel({
   client: OidcClient;
   onSaved(): void;
 }) {
+  const toast = useToast();
   const [form, setForm] = useState({
     redirectUris: linesOf(client.redirectUris),
     postLogoutRedirectUris: linesOf(client.postLogoutRedirectUris),
@@ -426,14 +544,27 @@ function OidcPanel({
   });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [secret, setSecret] = useState<string | null>(null);
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  // Against the client as last READ, which is re-read after every save — so
+  // this clears itself once the server has what is on screen. Ticking
+  // "Issue a new client secret" is a change too: it is the one that breaks
+  // the application if it is saved by accident.
+  const dirty =
+    !sameLines(form.redirectUris, linesOf(client.redirectUris)) ||
+    form.backchannelLogoutUri.trim() !== (client.backchannelLogoutUri ?? '') ||
+    form.scopes.split(/\s+/).filter(Boolean).join(' ') !== client.scopes.join(' ') ||
+    form.clientCredentialsEnabled !== client.clientCredentialsEnabled ||
+    form.rotateSecret;
+
   async function save() {
     setBusy(true);
     setProblem(null);
+    setErrors({});
     setSecret(null);
     try {
       const result = await api<{ clientSecret?: string }>(
@@ -479,12 +610,17 @@ function OidcPanel({
       );
       if (result.clientSecret) setSecret(result.clientSecret);
       set('rotateSecret', false);
+      toast({ tone: 'success', title: 'OpenID Connect settings saved' });
       onSaved();
     } catch (cause) {
+      const marked = formFieldErrors(cause);
+      setErrors(marked);
       setProblem(
-        cause instanceof ApiError
-          ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+        Object.keys(marked).length > 0
+          ? null
+          : cause instanceof ApiError
+            ? (cause.problem.detail ?? cause.problem.title)
+            : 'That could not be saved.',
       );
     } finally {
       setBusy(false);
@@ -492,18 +628,34 @@ function OidcPanel({
   }
 
   return (
-    <Panel title="OpenID Connect">
-      <div className="space-y-5 p-4">
+    <Panel
+      title="OpenID Connect"
+      actions={
+        client.clientCredentialsEnabled ? <Status tone="neutral">Machine client</Status> : null
+      }
+    >
+      <form
+        noValidate
+        className="space-y-6 p-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
         {/* The client ID rode in on the panel's `description`, which made a
             value the application needs look like a sentence about the panel.
-            It is data: labelled, monospaced and selectable like every other
+            It is data: labelled, monospaced and copyable like every other
             identifier in this console. */}
-        <div>
-          <div className="text-sm font-medium text-muted">Client ID</div>
-          <code className="mt-0.5 block break-all font-mono text-sm text-ink">
-            {client.clientId}
-          </code>
-        </div>
+        <dl>
+          <dt className="text-sm font-medium text-muted">Client ID</dt>
+          <dd className="mt-0.5">
+            <Identifier value={client.clientId} />
+          </dd>
+        </dl>
+
+        {/* Inline and persistent, never a toast: the secret exists in this
+            response and nowhere else, and a toast that timed out would take
+            it with it. */}
         {secret && (
           <Alert tone="warning" title="New client secret">
             <code className="mt-1 block break-all font-mono text-sm">{secret}</code>
@@ -511,77 +663,85 @@ function OidcPanel({
           </Alert>
         )}
 
-        <Check
-          checked={form.clientCredentialsEnabled}
-          onChange={(v) => set('clientCredentialsEnabled', v)}
-          label="This is a machine, not a person"
-          // The reason this control exists at all: the grant was implemented,
-          // enforced at the token endpoint and advertised by the provider, and
-          // could be turned on only with SQL.
+        <ErrorSummary
+          errors={summaryErrors(errors, OIDC_LABELS, problem)}
+          {...(Object.keys(errors).length === 0 ? { title: 'Not saved' } : {})}
         />
 
-        {!form.clientCredentialsEnabled && (
-          <div>
-            <label className="mb-1.5 block font-medium text-ink" htmlFor="redirect-uris">
-              Redirect URIs
-            </label>
-            <textarea
-              id="redirect-uris"
-              value={form.redirectUris}
-              onChange={(event) => set('redirectUris', event.target.value)}
-              rows={3}
-              spellCheck={false}
-              className="w-full rounded-control border border-border-control bg-bg p-2 font-mono text-sm text-ink"
-            />
-            <p className="mt-1 text-sm text-muted">
-              One per line. Matched exactly; there is no wildcard.
-            </p>
-          </div>
-        )}
-
-        <Field
-          label="Scopes"
-          value={form.scopes}
-          onChange={(v) => set('scopes', v)}
-        />
-
-        {!form.clientCredentialsEnabled && (
-          <Field
-            label="Back-channel logout endpoint"
-            value={form.backchannelLogoutUri}
-            onChange={(v) => set('backchannelLogoutUri', v)}
-            // No hint. `Field` dropped the prop on purpose -- eighty-nine of
-            // them turned these forms into prose about themselves -- so what
-            // the field IS lives in its label, and the placeholder shows the
-            // shape. An empty box is a client that is not told, which is what
-            // an empty box already looks like.
-            placeholder="https://app.example/backchannel-logout"
+        <FormSection title="Client">
+          <Check
+            className="sm:col-span-2"
+            checked={form.clientCredentialsEnabled}
+            onChange={(v) => set('clientCredentialsEnabled', v)}
+            label="This is a machine, not a person"
+            // The reason this control exists at all: the grant was implemented,
+            // enforced at the token endpoint and advertised by the provider, and
+            // could be turned on only with SQL.
           />
-        )}
 
-        <Check
-          checked={form.rotateSecret}
-          onChange={(v) => set('rotateSecret', v)}
-          label="Issue a new client secret"
-          warning={
-            // Only while the box is ticked. Off, nothing is about to break.
-            form.rotateSecret
-              ? 'The current secret stops working the moment this is saved.'
-              : undefined
-          }
-        />
+          {!form.clientCredentialsEnabled && (
+            <Textarea
+              name="redirectUris"
+              label="Redirect URIs, one per line"
+              value={form.redirectUris}
+              onChange={(v) => set('redirectUris', v)}
+              rows={3}
+              mono
+              spellCheck={false}
+              className="sm:col-span-2"
+              warning={wildcardWarning(form.redirectUris)}
+              error={errors.redirectUris}
+            />
+          )}
 
-        {problem && <Alert tone="danger">{problem}</Alert>}
+          <Field
+            name="scopes"
+            label="Scopes"
+            value={form.scopes}
+            onChange={(v) => set('scopes', v)}
+            error={errors.scopes}
+          />
 
-        <div className="flex items-center gap-3">
-          <Button variant="primary" loading={busy} onClick={save}>
+          {!form.clientCredentialsEnabled && (
+            <Field
+              name="backchannelLogoutUri"
+              label="Back-channel logout endpoint"
+              value={form.backchannelLogoutUri}
+              onChange={(v) => set('backchannelLogoutUri', v)}
+              // No hint. `Field` dropped the prop on purpose -- eighty-nine of
+              // them turned these forms into prose about themselves -- so what
+              // the field IS lives in its label, and the placeholder shows the
+              // shape. An empty box is a client that is not told, which is what
+              // an empty box already looks like.
+              placeholder="https://app.example/backchannel-logout"
+              error={errors.backchannelLogoutUri}
+            />
+          )}
+        </FormSection>
+
+        <FormSection title="Client secret">
+          <Check
+            className="sm:col-span-2"
+            checked={form.rotateSecret}
+            onChange={(v) => set('rotateSecret', v)}
+            label="Issue a new client secret"
+            warning={
+              // Only while the box is ticked. Off, nothing is about to break.
+              form.rotateSecret
+                ? 'The current secret stops working the moment this is saved.'
+                : undefined
+            }
+          />
+        </FormSection>
+
+        <FormActions
+          status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
+        >
+          <Button type="submit" variant="primary" loading={busy}>
             Save OpenID Connect settings
           </Button>
-          {client.clientCredentialsEnabled && (
-            <Status tone="neutral">Machine client</Status>
-          )}
-        </div>
-      </div>
+        </FormActions>
+      </form>
     </Panel>
   );
 }
