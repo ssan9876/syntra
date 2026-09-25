@@ -362,6 +362,7 @@ export {
   AD_OU_NAME_MAX_LENGTH,
   deriveMirroredDns,
   mirrorPreview,
+  switchAllToMirrored,
   switchToMirrored,
   syncMirroredContainers,
   targetPlacesAccountsInContainers,
@@ -371,6 +372,9 @@ export type {
   MirrorPreviewUnit,
   MirrorProblem,
   MirrorSyncReport,
+  NotSwitchedToMirrored,
+  SwitchAllToMirroredOutcome,
+  SwitchedToMirrored,
   SwitchToMirroredOutcome,
 } from './provision/org-unit-mirror.js';
 export { dnDepth, planContainerStructure, rebaseDn } from './provision/container-structure.js';

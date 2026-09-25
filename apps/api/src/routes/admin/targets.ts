@@ -77,6 +77,7 @@ import {
   clearDeprecationOverride,
   MAX_DEPRECATION_OVERRIDE_MS,
   mirrorPreview,
+  switchAllToMirrored,
   targetPlacesAccountsInContainers,
   type Scheduler,
 } from '@syntra/core';
@@ -281,9 +282,16 @@ export async function registerAdminTargetRoutes(
     '/targets',
     { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
     async (request) => ({
-      targets: await request.db((tx) =>
-        tx.targetSystem.findMany({ select: TARGET_FIELDS, orderBy: { name: 'asc' } }),
-      ),
+      // `placesAccountsInContainers` as on `GET /targets/:id`: an org unit's
+      // Containers panel lists every target, and needs to know which ones
+      // have OUs to place it in -- and so which to recommend mirroring on --
+      // without a request per target.
+      targets: (
+        await request.db((tx) => tx.targetSystem.findMany({ select: TARGET_FIELDS, orderBy: { name: 'asc' } }))
+      ).map((target) => ({
+        ...target,
+        placesAccountsInContainers: targetPlacesAccountsInContainers(target.type, target.config),
+      })),
     }),
   );
 
@@ -562,6 +570,44 @@ export async function registerAdminTargetRoutes(
       });
       if (preview === null) throw new ProblemError(404, 'not-found', 'Target not found');
       return preview;
+    },
+  );
+
+  /**
+   * "Switch all to mirrored": every org unit on this target that still has a
+   * DN typed by hand is handed to the mirror, parents first, in one
+   * transaction.
+   *
+   * Exists because turning mirroring on moves nothing that was materialised
+   * by hand -- a typed DN always wins, and that rule is not changing -- and a
+   * tenant that typed forty DNs before mirroring existed would otherwise
+   * press forty buttons, and miss some. Each conversion is the single
+   * switch's (`POST /org-units/:id/containers/:targetSystemId/switch-to-mirrored`)
+   * own code, with its own audit event, so the bulk press is exactly as
+   * audited as n single ones, under the same permission and the same
+   * administrative session (the hook above).
+   *
+   * Idempotent: a second press finds no manual row left and converts
+   * nothing. Units that cannot be converted are left as they are and named
+   * in `skipped`, never dropped silently. Nothing is written to the
+   * directory: the next run proposes the OU moves, and any container move
+   * holds the run for a person.
+   */
+  app.post(
+    '/targets/:id/org-units/switch-to-mirrored',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const outcome = await switchAllToMirrored(request.tenantId, {
+        targetSystemId: id,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+      if (!outcome.ok) {
+        if (outcome.reason === 'no_such_target') throw new ProblemError(404, 'not-found', 'Target not found');
+        throw new ProblemError(409, 'not-mirroring', 'This target does not mirror org units', outcome.message);
+      }
+      return { targetSystemId: id, switched: outcome.switched, skipped: outcome.skipped };
     },
   );
 

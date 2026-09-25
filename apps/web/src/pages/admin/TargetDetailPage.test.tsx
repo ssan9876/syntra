@@ -1158,3 +1158,138 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
     expect(JSON.parse(String(patch[1]!.body))).not.toHaveProperty('mirrorOrgUnits');
   });
 });
+
+describe('TargetDetailPage: units that still use a DN typed by hand', () => {
+  // The live case: every unit was materialised by hand, mirroring was turned
+  // on, and nothing moved -- a typed DN always wins -- with no hint why.
+  const ROOT = 'OU=Syntra,DC=ssander,DC=local';
+  const manualUnit = (id: string, name: string, parentId: string | null, depth: number, typed: string, derived: string) => ({
+    id, name, parentId, status: 'active', depth,
+    derivedDn: derived,
+    row: { dn: typed, source: 'manual', state: 'live', previousDn: null },
+    effectiveDn: typed, placement: 'manual', problem: null,
+    note: `materialised by hand; mirroring would place it at ${derived}`,
+  });
+  const HAND_TYPED = [
+    manualUnit('u-local', 'ssander.local', null, 0, `OU=ssander.local,${ROOT}`, `OU=ssander.local,${ROOT}`),
+    manualUnit('u-it', 'IT', 'u-local', 1, `OU=IT,${ROOT}`, `OU=IT,OU=ssander.local,${ROOT}`),
+  ];
+  const preview = (mirrorOrgUnits: boolean, units: unknown[]) => ({
+    mirrorOrgUnits, placesAccountsInContainers: true, baseDn: 'DC=ssander,DC=local', rootDn: ROOT, rootProblem: null, units,
+  });
+  const mirroredAfterSwitch = HAND_TYPED.map((unit) => ({
+    ...unit, row: { ...unit.row, source: 'mirrored', dn: unit.derivedDn }, effectiveDn: unit.derivedDn, placement: 'mirrored', note: null,
+  }));
+
+  /** A target whose preview lists the hand-typed units until a switch lands. */
+  function mockMirroring({ mirrorOrgUnits = true }: { mirrorOrgUnits?: boolean } = {}) {
+    let switched = false;
+    return vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith('/org-units/switch-to-mirrored') && init?.method === 'POST') {
+        switched = true;
+        return Promise.resolve(json({
+          targetSystemId: 't1',
+          switched: [
+            { orgUnitId: 'u-local', unitName: 'ssander.local', from: `OU=ssander.local,${ROOT}`, dn: `OU=ssander.local,${ROOT}`, pendingMoveFrom: null },
+            { orgUnitId: 'u-it', unitName: 'IT', from: `OU=IT,${ROOT}`, dn: `OU=IT,OU=ssander.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` },
+          ],
+          skipped: [],
+        }));
+      }
+      if (url.includes('/containers/t1/switch-to-mirrored') && init?.method === 'POST') {
+        switched = true;
+        return Promise.resolve(json({ targetSystemId: 't1', dn: `OU=IT,OU=ssander.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` }));
+      }
+      if (url.includes('/org-unit-mirror')) {
+        return Promise.resolve(json(preview(mirrorOrgUnits, switched ? mirroredAfterSwitch : HAND_TYPED)));
+      }
+      return Promise.resolve(
+        json(target({ type: 'activeDirectory', placesAccountsInContainers: true, mirrorOrgUnits, orgUnitRootDn: ROOT })),
+      );
+    });
+  }
+
+  it('warns that typed DNs win, listing each unit with its typed and mirrored DN', async () => {
+    mockMirroring();
+    renderExisting();
+    const warning = await screen.findByTestId('hand-typed-warning');
+    expect(screen.getByText('Mirroring is on, but 2 org units use a DN typed by hand')).toBeInTheDocument();
+    expect(warning).toHaveTextContent(/A typed DN always wins over the mirror/);
+    expect(warning).toHaveTextContent(/Switching writes nothing to the directory/);
+    expect(warning).toHaveTextContent(/a container move always holds the run for a person to confirm/);
+    const itRow = screen.getByTestId('hand-typed-u-it');
+    expect(itRow).toHaveTextContent(`Typed: OU=IT,${ROOT}`);
+    expect(itRow).toHaveTextContent(`Mirrored: OU=IT,OU=ssander.local,${ROOT}`);
+    // Parents first, as they will be switched.
+    const items = within(warning).getAllByRole('listitem').map((li) => li.getAttribute('data-testid'));
+    expect(items).toEqual(['hand-typed-u-local', 'hand-typed-u-it']);
+  });
+
+  it('shows no warning while mirroring is off', async () => {
+    mockMirroring({ mirrorOrgUnits: false });
+    renderExisting();
+    await screen.findByTestId('org-unit-mirror-preview');
+    expect(screen.queryByTestId('hand-typed-warning')).toBeNull();
+  });
+
+  it('switches them all, says nothing moves until a run is confirmed, and re-reads the tree', async () => {
+    const fetchMock = mockMirroring();
+    renderExisting();
+    await userEvent.click(await screen.findByRole('button', { name: 'Switch all to mirrored' }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/admin/targets/t1/org-units/switch-to-mirrored' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    // The press did not submit the target form around it.
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+    expect(await screen.findByText('Switched 2 org units to mirrored')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Nothing has moved in the directory yet\. The next run proposes moving 1 OU/),
+    ).toHaveTextContent(/holds for a person to confirm before anything moves/);
+    await waitFor(() => expect(screen.queryByTestId('hand-typed-warning')).toBeNull());
+  });
+
+  it('switches one unit from its own button', async () => {
+    const fetchMock = mockMirroring();
+    renderExisting();
+    await userEvent.click(await screen.findByRole('button', { name: 'Switch IT' }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/admin/org-units/u-it/containers/t1/switch-to-mirrored' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Switched 1 org unit to mirrored')).toBeInTheDocument();
+  });
+
+  it('asks for the settings to be saved first while the root in the box is unsaved', async () => {
+    mockMirroring();
+    renderExisting();
+    await screen.findByTestId('hand-typed-warning');
+    await userEvent.type(screen.getByLabelText(/org-unit root/i), 'X');
+    expect(screen.getByRole('button', { name: 'Switch all to mirrored' })).toBeDisabled();
+    expect(screen.getByText(/Save the org-unit settings first/)).toBeInTheDocument();
+  });
+
+  it('leads with the mirroring checkbox and calls a typed DN an override', async () => {
+    mockMirroring();
+    renderExisting();
+    const section = await screen.findByTestId('mirror-org-units');
+    const box = within(section).getByRole('checkbox', { name: /mirror org units as ous/i });
+    const root = within(section).getByLabelText(/org-unit root/i);
+    // The checkbox precedes everything else in the section.
+    expect(box.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(section).toHaveTextContent(/The recommended way to place org units on this target/);
+    expect(screen.getByTestId('mirror-override-note')).toHaveTextContent(
+      /A DN typed by hand on an org unit .* is an override: it takes precedence over the mirror/,
+    );
+  });
+});

@@ -706,57 +706,220 @@ export async function switchToMirrored(
   tenantId: string,
   input: { orgUnitId: string; targetSystemId: string; actorUserId: string | null; sourceIp: string | null },
 ): Promise<SwitchToMirroredOutcome> {
-  return withTenant(tenantId, async (tx) => {
-    const row = await tx.orgUnitContainer.findFirst({
-      where: { orgUnitId: input.orgUnitId, targetSystemId: input.targetSystemId },
+  return withTenant(tenantId, (tx) => switchToMirroredIn(tx, input));
+}
+
+/**
+ * {@link switchToMirrored} inside a transaction the caller already holds, so
+ * the bulk switch ({@link switchAllToMirrored}) converts many rows through
+ * exactly this code -- the same refusals, the same `previousDn` rule, the
+ * same audit event per unit -- rather than a second copy of it that drifts.
+ */
+export async function switchToMirroredIn(
+  tx: TenantClient,
+  input: { orgUnitId: string; targetSystemId: string; actorUserId: string | null; sourceIp: string | null },
+  /**
+   * The target's derivation, when the caller has already made it. The bulk
+   * switch converts many rows of one target in one transaction, and the tree
+   * does not change between them -- only the rows do, and those are re-read
+   * here every time -- so deriving it once per row would be the same answer
+   * computed n times over.
+   */
+  prepared?: { target: MirrorTargetFacts; derivation: MirrorDerivation },
+): Promise<SwitchToMirroredOutcome> {
+  const row = await tx.orgUnitContainer.findFirst({
+    where: { orgUnitId: input.orgUnitId, targetSystemId: input.targetSystemId },
+  });
+  if (row === null) return { ok: false, reason: 'no_such_row', message: 'this unit is not materialised on this target' };
+  if (row.source !== 'manual') return { ok: false, reason: 'not_manual', message: 'this container is already mirrored' };
+  const target =
+    prepared?.target ??
+    (await tx.targetSystem.findUnique({
+      where: { id: input.targetSystemId },
+      select: { id: true, type: true, config: true, mirrorOrgUnits: true, orgUnitRootDn: true },
+    }));
+  if (target === null || !targetMirrors(target)) {
+    return {
+      ok: false,
+      reason: 'not_mirroring',
+      message: 'this target does not mirror org units; turn "Mirror org units as OUs" on first',
+    };
+  }
+  const derivation = prepared?.derivation ?? deriveForTarget(target, await mirrorUnits(tx));
+  const derived = derivation.dns.get(input.orgUnitId);
+  if (derived === undefined) {
+    const problem = derivation.problems.find((p) => p.orgUnitId === input.orgUnitId);
+    return {
+      ok: false,
+      reason: 'cannot_derive',
+      message: problem?.message ?? 'this unit cannot be mirrored (it is not active)',
+    };
+  }
+  const same = derived.toLowerCase() === row.dn.toLowerCase();
+  if (!same) {
+    const owner = await tx.orgUnitContainer.findFirst({
+      where: { targetSystemId: input.targetSystemId, dn: { equals: derived, mode: 'insensitive' } },
+      select: { orgUnitId: true },
     });
-    if (row === null) return { ok: false, reason: 'no_such_row', message: 'this unit is not materialised on this target' };
-    if (row.source !== 'manual') return { ok: false, reason: 'not_manual', message: 'this container is already mirrored' };
+    if (owner !== null && owner.orgUnitId !== input.orgUnitId) {
+      return { ok: false, reason: 'dn_taken', message: `${derived} is already the container of another unit on this target` };
+    }
+  }
+  const pendingMoveFrom = same || row.state === 'desired' ? null : row.dn;
+  await tx.orgUnitContainer.update({
+    where: { id: row.id },
+    data: { source: 'mirrored', dn: derived, previousDn: pendingMoveFrom },
+  });
+  await recordEvent(tx, {
+    actorUserId: input.actorUserId,
+    action: 'orgUnit.container.switch_to_mirrored',
+    targetType: 'OrgUnit',
+    targetId: input.orgUnitId,
+    outcome: 'success',
+    sourceIp: input.sourceIp,
+    payload: { targetSystemId: input.targetSystemId, from: row.dn, to: derived, pendingMoveFrom },
+  });
+  return { ok: true, dn: derived, pendingMoveFrom };
+}
+
+export interface SwitchedToMirrored {
+  orgUnitId: string;
+  unitName: string;
+  /** The typed DN the row held. */
+  from: string;
+  /** The derived DN it holds now. */
+  dn: string;
+  /** Where the next run moves the OU from; null when there is nothing to move. */
+  pendingMoveFrom: string | null;
+}
+
+export interface NotSwitchedToMirrored {
+  orgUnitId: string;
+  unitName: string;
+  /** The typed DN, still in force. */
+  dn: string;
+  reason: Extract<SwitchToMirroredOutcome, { ok: false }>['reason'];
+  message: string;
+}
+
+export type SwitchAllToMirroredOutcome =
+  | {
+      ok: true;
+      /** Every row converted, parents first, in the order it was converted. */
+      switched: SwitchedToMirrored[];
+      /**
+       * Every manual row on an active unit that was NOT converted, and why --
+       * a name too long to mirror, a derived DN another unit's row holds. Left
+       * exactly as it was, typed DN and all; never dropped from the answer.
+       */
+      skipped: NotSwitchedToMirrored[];
+    }
+  | { ok: false; reason: 'no_such_target' | 'not_mirroring'; message: string };
+
+/**
+ * "Switch all to mirrored": hands EVERY hand-typed placement on one mirroring
+ * target to the mirror at once.
+ *
+ * Why this exists: a tenant that materialised its units by hand and then
+ * turned mirroring on sees nothing move -- a typed DN always wins, by design
+ * -- and converting forty units one button at a time is how some of them get
+ * missed. This is that button pressed for each of them, and nothing more:
+ * every conversion goes through {@link switchToMirroredIn}, with its refusals
+ * and its own `orgUnit.container.switch_to_mirrored` audit event, so the
+ * audit trail of a bulk switch reads exactly like n single ones.
+ *
+ * **One transaction.** Either every convertible row is converted or, on an
+ * error, none is -- a half-switched target, some units mirrored and some not
+ * for no reason anybody chose, is worse than either end state. A row that
+ * CANNOT be converted (its unit cannot be derived, or another unit's row holds
+ * its derived DN) is not an error: it is left as it is and reported by name
+ * in `skipped`, exactly as the single switch would have refused it.
+ *
+ * **Parents first**, by depth in the tree. The planner moves a renamed parent
+ * once and lets its children ride along; converting in tree order keeps the
+ * audit trail in the order an administrator reads it, and means a child's
+ * `dn_taken` check sees its parent's row already where it is going. A row
+ * blocked only by a sibling not yet converted (two units trading DNs) is
+ * retried until a pass makes no progress, as the run's sync does.
+ *
+ * Only ACTIVE units' manual rows are considered: a deactivated unit is not
+ * mirrored at all, so its typed row is the only thing still describing where
+ * its OU is, and converting it would have nowhere to point.
+ *
+ * Nothing is written to the directory. Every OU this changes the address of
+ * is MOVED by the next run, and any container move holds that run for a
+ * person to confirm.
+ */
+export async function switchAllToMirrored(
+  tenantId: string,
+  input: { targetSystemId: string; actorUserId: string | null; sourceIp: string | null },
+): Promise<SwitchAllToMirroredOutcome> {
+  return withTenant(tenantId, async (tx) => {
     const target = await tx.targetSystem.findUnique({
       where: { id: input.targetSystemId },
       select: { id: true, type: true, config: true, mirrorOrgUnits: true, orgUnitRootDn: true },
     });
-    if (target === null || !targetMirrors(target)) {
+    if (target === null) return { ok: false, reason: 'no_such_target', message: 'no such target' };
+    if (!targetMirrors(target)) {
       return {
         ok: false,
         reason: 'not_mirroring',
         message: 'this target does not mirror org units; turn "Mirror org units as OUs" on first',
       };
     }
-    const derivation = deriveForTarget(target, await mirrorUnits(tx));
-    const derived = derivation.dns.get(input.orgUnitId);
-    if (derived === undefined) {
-      const problem = derivation.problems.find((p) => p.orgUnitId === input.orgUnitId);
-      return {
-        ok: false,
-        reason: 'cannot_derive',
-        message: problem?.message ?? 'this unit cannot be mirrored (it is not active)',
-      };
-    }
-    const same = derived.toLowerCase() === row.dn.toLowerCase();
-    if (!same) {
-      const owner = await tx.orgUnitContainer.findFirst({
-        where: { targetSystemId: input.targetSystemId, dn: { equals: derived, mode: 'insensitive' } },
-        select: { orgUnitId: true },
-      });
-      if (owner !== null && owner.orgUnitId !== input.orgUnitId) {
-        return { ok: false, reason: 'dn_taken', message: `${derived} is already the container of another unit on this target` };
+    const units = await mirrorUnits(tx);
+    const derivation = deriveForTarget(target, units);
+    const byId = new Map(units.map((unit) => [unit.id, unit]));
+    const depthOf = (id: string): number => {
+      let depth = 0;
+      const seen = new Set<string>();
+      let parentId = byId.get(id)?.parentId ?? null;
+      while (parentId !== null && byId.has(parentId) && !seen.has(parentId)) {
+        seen.add(parentId);
+        depth += 1;
+        parentId = byId.get(parentId)!.parentId;
       }
+      return depth;
+    };
+
+    const manual = await tx.orgUnitContainer.findMany({
+      where: { targetSystemId: target.id, source: 'manual', orgUnit: { status: 'active' } },
+      select: { orgUnitId: true, dn: true },
+    });
+    // Depth, then name, then id: a stable order, so two presses over the
+    // same tree audit in the same order.
+    let queue = manual
+      .map((row) => ({ ...row, unitName: byId.get(row.orgUnitId)?.name ?? row.orgUnitId, depth: depthOf(row.orgUnitId) }))
+      .sort((a, b) => a.depth - b.depth || a.unitName.localeCompare(b.unitName) || a.orgUnitId.localeCompare(b.orgUnitId));
+
+    const switched: SwitchedToMirrored[] = [];
+    // Keyed by unit, so a row refused on one pass and converted on the next
+    // is reported once, as converted.
+    const skipped = new Map<string, NotSwitchedToMirrored>();
+    for (;;) {
+      const blocked: typeof queue = [];
+      let progressed = false;
+      for (const row of queue) {
+        // A refusal returns before the helper writes anything, so a skipped
+        // row leaves no half-written state behind in this transaction.
+        const outcome = await switchToMirroredIn(
+          tx,
+          { orgUnitId: row.orgUnitId, targetSystemId: target.id, actorUserId: input.actorUserId, sourceIp: input.sourceIp },
+          { target, derivation },
+        );
+        if (outcome.ok) {
+          progressed = true;
+          skipped.delete(row.orgUnitId);
+          switched.push({ orgUnitId: row.orgUnitId, unitName: row.unitName, from: row.dn, dn: outcome.dn, pendingMoveFrom: outcome.pendingMoveFrom });
+        } else {
+          skipped.set(row.orgUnitId, { orgUnitId: row.orgUnitId, unitName: row.unitName, dn: row.dn, reason: outcome.reason, message: outcome.message });
+          // Only a DN held by another row can come free on a later pass.
+          if (outcome.reason === 'dn_taken') blocked.push(row);
+        }
+      }
+      if (!progressed || blocked.length === 0) break;
+      queue = blocked;
     }
-    const pendingMoveFrom = same || row.state === 'desired' ? null : row.dn;
-    await tx.orgUnitContainer.update({
-      where: { id: row.id },
-      data: { source: 'mirrored', dn: derived, previousDn: pendingMoveFrom },
-    });
-    await recordEvent(tx, {
-      actorUserId: input.actorUserId,
-      action: 'orgUnit.container.switch_to_mirrored',
-      targetType: 'OrgUnit',
-      targetId: input.orgUnitId,
-      outcome: 'success',
-      sourceIp: input.sourceIp,
-      payload: { targetSystemId: input.targetSystemId, from: row.dn, to: derived, pendingMoveFrom },
-    });
-    return { ok: true, dn: derived, pendingMoveFrom };
+    return { ok: true, switched, skipped: [...skipped.values()] };
   });
 }

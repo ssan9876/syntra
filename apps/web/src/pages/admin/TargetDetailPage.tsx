@@ -32,6 +32,7 @@ import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
 import { SAFETY_THRESHOLDS_ANCHOR } from './threshold-hints.js';
 import {
   BLANK,
+  ORG_UNITS_ANCHOR,
   OWNED_CONFIG_KEYS,
   THRESHOLDS,
   configFromForm,
@@ -253,7 +254,10 @@ function OrgUnitsSection({
   onMirror,
   onRootDn,
   rootError,
+  unsaved,
 }: {
+  /** The mirror checkbox or root differs from what is stored. */
+  unsaved: boolean;
   targetId: string;
   placesAccounts: boolean | undefined;
   baseDn: string;
@@ -281,14 +285,20 @@ function OrgUnitsSection({
         label="Mirror org units as OUs"
       />
       <p className="pl-6 text-sm text-muted">
-        Each active org unit is placed at an OU derived from its place in the tree —{' '}
+        The recommended way to place org units on this target. Each active org unit is
+        placed at an OU derived from its place in the tree —{' '}
         <code>OU=&lt;unit&gt;,OU=&lt;parent&gt;,…,&lt;root&gt;</code> — with no DN to
         type per unit. Runs create the missing OUs parent first, and move an OU, with
-        every account in it, when its unit is renamed or moved. A unit materialised by
-        hand keeps the DN that was typed. Turning this on writes nothing by itself: the
-        next run shows which OUs it would create and which accounts would move, and a
-        container move always waits for a person to confirm it. OUs are never deleted;
-        a deactivated or deleted unit&apos;s OU stays where it is.
+        every account in it, when its unit is renamed or moved. Turning this on writes
+        nothing by itself: the next run shows which OUs it would create and which
+        accounts would move, and a container move always waits for a person to confirm
+        it. OUs are never deleted; a deactivated or deleted unit&apos;s OU stays where
+        it is.
+      </p>
+      <p className="pl-6 text-sm text-muted" data-testid="mirror-override-note">
+        A DN typed by hand on an org unit (its Containers panel, &ldquo;Set a DN by
+        hand&rdquo;) is an override: it takes precedence over the mirror for that unit on
+        this target, until the unit is switched back to mirrored.
       </p>
       <Field
         label="Org-unit root"
@@ -302,7 +312,7 @@ function OrgUnitsSection({
         Where the tree hangs, below the base DN. Blank uses the base DN itself. A root
         that does not exist yet is created by the first run, like any missing parent.
       </p>
-      <OrgUnitMirrorPreview targetId={targetId} rootDn={rootDn} />
+      <OrgUnitMirrorPreview targetId={targetId} rootDn={rootDn} unsaved={unsaved} />
     </div>
   );
 }
@@ -372,9 +382,13 @@ export function TargetDetailPage() {
   // and this form renders after the target is fetched, so the scroll is done
   // once the data has arrived.
   const { hash } = useLocation();
+  // An org unit's Containers panel links here as `#org-units` when it
+  // recommends turning mirroring on, for the same reason.
   useEffect(() => {
-    if (!data || hash !== `#${SAFETY_THRESHOLDS_ANCHOR}`) return;
-    document.getElementById(SAFETY_THRESHOLDS_ANCHOR)?.scrollIntoView?.({ block: 'start' });
+    if (!data) return;
+    const anchor = [SAFETY_THRESHOLDS_ANCHOR, ORG_UNITS_ANCHOR].find((id) => hash === `#${id}`);
+    if (anchor === undefined) return;
+    document.getElementById(anchor)?.scrollIntoView?.({ block: 'start' });
   }, [data, hash]);
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) =>
@@ -977,8 +991,12 @@ export function TargetDetailPage() {
           </FormSection>
 
           {!isNew && targetId !== null && (
-            <FormSection title="Org units" status={refusedIn(MIRROR_FIELDS)}>
+            <FormSection title="Org units" status={refusedIn(MIRROR_FIELDS)} id={ORG_UNITS_ANCHOR}>
               <OrgUnitsSection
+                unsaved={
+                  form.mirrorOrgUnits !== baseline.mirrorOrgUnits ||
+                  form.orgUnitRootDn.trim() !== baseline.orgUnitRootDn.trim()
+                }
                 targetId={targetId}
                 placesAccounts={data?.placesAccountsInContainers}
                 baseDn={form.baseDn}
