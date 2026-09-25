@@ -320,6 +320,20 @@ describe('scimTargetConnector — entitlements and containers', () => {
       found.push(container);
     }
     expect(found).toEqual([]);
+    // And says so, declared: the run skips the container check rather than
+    // dropping every person as `container_missing`.
+    expect(scimTargetConnector.placesAccountsInContainers(baseConfig(server))).toBe(false);
+  });
+
+  it('authenticates with the vault credential core hands it as bindPassword', async () => {
+    // What `targetWithCredential` builds: the stored config plus
+    // `bindPassword`. Read as `bearerToken` only, it went out as
+    // `Bearer undefined` and every request through a real run was a 401.
+    server = await startFakeScimServer({ bearerToken: 'vault-token' });
+    const { bearerToken: _unused, ...stored } = baseConfig(server);
+    void _unused;
+    const result = await scimTargetConnector.test({ ...stored, bindPassword: 'vault-token' } as never);
+    expect(result.ok).toBe(true);
   });
 
   it('reads every member of one entitlement in full', async () => {

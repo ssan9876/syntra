@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakeGraphServer, type FakeGraphServer } from '../testing/fake-graph-server.js';
 import { entraTargetConnector } from './connector.js';
 import { forgetEntraTokens } from './graph.js';
-import { entraTargetConfigSchema, type EntraTargetConfig } from './config.js';
+import { entraTargetConfigSchema, entraUserPrincipalName, type EntraTargetConfig } from './config.js';
 import { readBackTarget, type TargetConnector, type TargetReadBack } from '../types.js';
 import { ENTRA_CAPABILITY_MATRIX } from './capabilities.js';
 import { certifyTargetConnector } from '../testing/target-connector-certification.js';
@@ -176,6 +176,20 @@ describe('configuration', () => {
     ).not.toThrow();
   });
 
+  it('accepts a userPrincipalDomain only as a lowercase domain name', () => {
+    const base = { tenantId: '99999999-8888-7777-6666-555555555555', clientId: CLIENT };
+    expect(entraTargetConfigSchema.parse({ ...base, userPrincipalDomain: 'contoso.com' }).userPrincipalDomain).toBe(
+      'contoso.com',
+    );
+    expect(entraTargetConfigSchema.parse({ ...base, userPrincipalDomain: ' mail.contoso.com ' }).userPrincipalDomain).toBe(
+      'mail.contoso.com',
+    );
+    expect(entraTargetConfigSchema.parse(base).userPrincipalDomain).toBeUndefined();
+    for (const bad of ['@contoso.com', 'user@contoso.com', 'https://contoso.com', 'contoso.com/x', 'Contoso.com', 'contoso', 'contoso.com:443', '']) {
+      expect(() => entraTargetConfigSchema.parse({ ...base, userPrincipalDomain: bad }), bad).toThrow();
+    }
+  });
+
   it('never lists userPrincipalName as a managed attribute', () => {
     expect(() =>
       entraTargetConfigSchema.parse({
@@ -184,6 +198,37 @@ describe('configuration', () => {
         managedAttributes: ['userPrincipalName'],
       }),
     ).toThrow();
+  });
+});
+
+describe('entraUserPrincipalName', () => {
+  const GUID = '99999999-8888-7777-6666-555555555555';
+
+  it('uses a key that already carries a domain as it is, whatever else is set', () => {
+    expect(entraUserPrincipalName({ tenantId: GUID, userPrincipalDomain: 'contoso.com' }, 'fay@fabrikam.com')).toEqual({
+      upn: 'fay@fabrikam.com',
+    });
+  });
+
+  it('completes a bare key with userPrincipalDomain ahead of a domain tenantId', () => {
+    expect(entraUserPrincipalName({ tenantId: 'contoso.onmicrosoft.com', userPrincipalDomain: 'contoso.com' }, 'fay.wong')).toEqual({
+      upn: 'fay.wong@contoso.com',
+    });
+    expect(entraUserPrincipalName({ tenantId: GUID, userPrincipalDomain: 'contoso.com' }, ' fay.wong ')).toEqual({
+      upn: 'fay.wong@contoso.com',
+    });
+  });
+
+  it('falls back to tenantId when it is a domain', () => {
+    expect(entraUserPrincipalName({ tenantId: 'contoso.example' }, 'fay.wong')).toEqual({ upn: 'fay.wong@contoso.example' });
+  });
+
+  it('names the setting when there is no domain anywhere', () => {
+    const named = entraUserPrincipalName({ tenantId: GUID }, 'fay.wong');
+    expect('message' in named && named.message).toMatch(/userPrincipalDomain/);
+    expect(entraUserPrincipalName({ tenantId: GUID, userPrincipalDomain: 'contoso.com' }, '  ')).toEqual({
+      message: 'the correlation key is blank',
+    });
   });
 });
 
@@ -445,7 +490,29 @@ describe('create', () => {
     );
     expect(result).toMatchObject({ ok: false, failure: 'rejected' });
     expect(result.message).toMatch(/no domain/);
+    expect(result.message).toMatch(/userPrincipalDomain/);
     expect(graphRequests().some((r) => r.method === 'POST')).toBe(false);
+  });
+
+  it('completes a bare key with userPrincipalDomain when the tenant is a directory id', async () => {
+    const result = await entraTargetConnector.write(
+      config({ tenantId: '99999999-8888-7777-6666-555555555555', userPrincipalDomain: 'contoso.com' }),
+      {
+        op: 'create_account',
+        actionId: 'action-upn-domain',
+        correlationKey: 'hal.jordan',
+        attributes: { displayName: ['Hal Jordan'] },
+        enabled: true,
+        initialPassword: 'Initial-Passw0rd!',
+      },
+    );
+    expect(result.ok).toBe(true);
+    const post = graphRequests().find((r) => r.method === 'POST' && r.url === '/v1.0/users')!;
+    expect((post.body as { userPrincipalName: string }).userPrincipalName).toBe('hal.jordan@contoso.com');
+  });
+
+  it('declares that it places accounts in no container', () => {
+    expect(entraTargetConnector.placesAccountsInContainers(config())).toBe(false);
   });
 
   it('never treats a failed marker lookup as "not found"', async () => {
@@ -635,6 +702,7 @@ describe('readBackTarget', () => {
       async write() { return { ok: true, message: '' }; },
       async *listEntitlements() {},
       async *listContainers() {},
+      placesAccountsInContainers() { return false; },
       async readEntitlementMembers() { return []; },
       async readBack() { return own; },
     } satisfies TargetConnector<unknown> & { readBack(): Promise<TargetReadBack> };

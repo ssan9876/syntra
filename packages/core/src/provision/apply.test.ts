@@ -321,6 +321,7 @@ const intercepting = (
   discoverSchema: (c: never) => target.discoverSchema(c),
   listEntitlements: (c: never) => target.listEntitlements(c),
   listContainers: (c: never) => target.listContainers(c),
+  placesAccountsInContainers: (c: never) => target.placesAccountsInContainers(c),
   readEntitlementMembers: (c: never, dn: string) => target.readEntitlementMembers(c, dn),
   read: (c: never) => target.read(c),
   write: async (c: never, operation: WriteOperation) => {
@@ -2010,6 +2011,7 @@ describe('resolveInFlightActions', () => {
       discoverSchema: (c: never) => target.discoverSchema(c),
       listEntitlements: (c: never) => target.listEntitlements(c),
       listContainers: (c: never) => target.listContainers(c),
+      placesAccountsInContainers: (c: never) => target.placesAccountsInContainers(c),
       readEntitlementMembers: (c: never, dn: string) =>
         target.readEntitlementMembers(c, dn),
       write: (c: never, op: WriteOperation) => target.write(c, op as never),

@@ -297,3 +297,46 @@ describe('the adoption routes', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('a flat target', () => {
+  // Entra ID keeps users in one flat directory. These two routes are safe to
+  // exercise here because the refusal comes from the connector's declaration,
+  // before anything is dialled -- the URLs below answer nothing.
+  async function createFlatTarget(cookie: string) {
+    const res = await call('POST', '/api/admin/targets', cookie, {
+      name: 'Entra',
+      type: 'entraId',
+      config: {
+        tenantId: '99999999-8888-7777-6666-555555555555',
+        clientId: 'client-1',
+        userPrincipalDomain: 'contoso.com',
+        graphBaseUrl: 'https://graph.invalid/v1.0',
+        tokenUrl: 'https://login.invalid/token',
+      },
+      bindPassword: 'a-client-secret',
+    });
+    expect(res.statusCode).toBe(201);
+    return (res.json() as { id: string }).id;
+  }
+
+  it('answers 409 no-containers for the container list', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const cookie = await adminCookie();
+    const flat = await createFlatTarget(cookie);
+    const res = await call('GET', `/api/admin/targets/${flat}/containers`, cookie);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ title: 'This target has no containers' });
+  });
+
+  it('refuses a move with 409 no-containers', async () => {
+    await seedAdmin([...ALL_PERMISSIONS]);
+    const cookie = await adminCookie();
+    const flat = await createFlatTarget(cookie);
+    const res = await call('PUT', `/api/admin/targets/${flat}/placements/${personId}`, cookie, {
+      container: 'OU=Anywhere',
+      reason: 'reorg',
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ title: 'This target has no containers' });
+  });
+});

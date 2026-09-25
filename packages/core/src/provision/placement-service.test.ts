@@ -4,10 +4,15 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
   ContainerNotInTargetError,
   NoAccountToMoveError,
+  TargetHasNoContainersError,
   clearPlacement,
   findPlacement,
+  moveAccount,
   setPlacement,
+  targetContainers,
 } from './placement-service.js';
+import { localMasterKeyProvider } from '../vault/master-key.js';
+import { createTarget } from './target-service.js';
 
 let tenantId: string;
 let personId: string;
@@ -170,5 +175,58 @@ describe('row-level security', () => {
     await move();
     const other = await prisma.tenant.create({ data: { name: 'Globex', slug: 'globex' } });
     expect(await withTenant(other.id, (tx) => tx.accountPlacement.count())).toBe(0);
+  });
+});
+
+describe('a flat target', () => {
+  // Entra ID keeps users in one flat directory. Its config points at an
+  // address nothing answers on: the refusal must come from the connector's
+  // declaration, before anything is dialled.
+  const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
+  const flatTarget = () =>
+    createTarget(tenantId, provider, null, {
+      type: 'entraId',
+      name: 'Entra',
+      config: {
+        tenantId: '99999999-8888-7777-6666-555555555555',
+        clientId: 'client',
+        graphBaseUrl: 'https://graph.invalid/v1.0',
+        tokenUrl: 'https://login.invalid/token',
+      },
+      bindPassword: 'secret',
+    });
+
+  it('has no containers to list, and says so', async () => {
+    const { id } = await flatTarget();
+    await expect(targetContainers(tenantId, provider, id)).rejects.toBeInstanceOf(
+      TargetHasNoContainersError,
+    );
+  });
+
+  it('refuses a move clearly and records no placement', async () => {
+    const { id } = await flatTarget();
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.create({
+        data: {
+          tenantId,
+          targetSystemId: id,
+          personId,
+          anchor: 'entra-anchor',
+          correlationKey: 'ada.lovelace',
+          status: 'active',
+        },
+      }),
+    );
+    await expect(
+      moveAccount(tenantId, provider, {
+        personId,
+        targetSystemId: id,
+        container: 'OU=Anything',
+        reason: 'reorg',
+        actorUserId: null,
+        sourceIp: null,
+      }),
+    ).rejects.toThrow(/this target has no containers/);
+    expect(await withTenant(tenantId, (tx) => findPlacement(tx, personId, id))).toBeNull();
   });
 });

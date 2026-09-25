@@ -55,6 +55,19 @@ const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A verified domain: `contoso.onmicrosoft.com`, `acme.example`. */
 const DOMAIN = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
 
+/**
+ * A DNS domain for `userPrincipalName`: a lowercase host name, nothing else.
+ * No `@`, no scheme, no path, no port -- each of those is a UPN Graph refuses
+ * at create time, which is the moment this is meant to prevent.
+ */
+export const userPrincipalDomainSchema = z
+  .string()
+  .trim()
+  .refine((v) => DOMAIN.test(v) && v === v.toLowerCase(), {
+    message:
+      'userPrincipalDomain must be a lowercase domain name such as contoso.com, with no @, scheme or path',
+  });
+
 const httpsUrl = z
   .string()
   .trim()
@@ -90,6 +103,18 @@ export const entraTargetConfigSchema = z
       }),
     /** The application (client) id of the app registration. Not a secret. */
     clientId: z.string().trim().min(1),
+    /**
+     * The domain a new user's `userPrincipalName` is completed with when the
+     * correlation key has no `@` -- which a generated key never has, because
+     * `names.ts` folds it to `[a-z0-9.-]`. Must be a verified domain in the
+     * tenant. Optional only because a `tenantId` that is itself a domain can
+     * stand in for it; with the directory GUID as `tenantId` (Microsoft's own
+     * recommendation) no account can be created without it.
+     *
+     * Not part of the transport: it changes what a user is called, never
+     * where the client secret is sent.
+     */
+    userPrincipalDomain: userPrincipalDomainSchema.optional(),
     graphBaseUrl: httpsUrl.default('https://graph.microsoft.com/v1.0'),
     /** Derived from `tenantId` when absent -- see `resolveEntraConfig`. */
     tokenUrl: httpsUrl.optional(),
@@ -167,6 +192,33 @@ export function resolveEntraConfig(
 /** Whether `tenantId` names a domain a UPN could be completed with. */
 export function tenantIsDomain(tenantId: string): boolean {
   return !GUID.test(tenantId) && DOMAIN.test(tenantId);
+}
+
+/**
+ * The `userPrincipalName` a correlation key becomes, or why it cannot.
+ *
+ * Precedence: a key that already carries `@` is used as it is; otherwise the
+ * key is completed with `userPrincipalDomain`; otherwise with `tenantId` when
+ * that is a domain; otherwise there is no answer. Pure, so the account-profile
+ * preview can say the same thing the connector will do at apply time --
+ * before apply, which is the point.
+ */
+export function entraUserPrincipalName(
+  config: { tenantId: string; userPrincipalDomain?: string | undefined },
+  correlationKey: string,
+): { upn: string } | { message: string } {
+  const key = correlationKey.trim();
+  if (key === '') return { message: 'the correlation key is blank' };
+  if (key.includes('@')) return { upn: key };
+  const domain = config.userPrincipalDomain?.trim();
+  if (domain !== undefined && domain !== '') return { upn: `${key}@${domain}` };
+  const tenantId = config.tenantId.trim();
+  if (tenantIsDomain(tenantId)) return { upn: `${key}@${tenantId}` };
+  return {
+    message:
+      `the correlation key "${key}" has no domain, no userPrincipalDomain is set and tenantId is a directory id, not a domain; ` +
+      'set userPrincipalDomain (User principal name domain) to a verified domain of the tenant, such as contoso.com',
+  };
 }
 
 /** The Graph property the correlation marker is read from and written to. */

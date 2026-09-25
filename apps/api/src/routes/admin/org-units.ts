@@ -229,6 +229,8 @@ export async function registerAdminOrgUnitRoutes(
             throw new ProblemError(404, 'not-found', 'Org unit not found');
           case 'no_such_target':
             throw new ProblemError(404, 'not-found', 'Target not found');
+          case 'no_containers':
+            throw new ProblemError(409, 'no-containers', 'This target has no containers', outcome.message);
           default:
             throw new ProblemError(400, 'bad-request', outcome.message, undefined, {
               reason: outcome.reason,

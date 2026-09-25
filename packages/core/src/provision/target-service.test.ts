@@ -757,6 +757,37 @@ describe('testTargetConfiguration', () => {
     }
   });
 
+  it('borrows an Entra secret when only the userPrincipalDomain changed', async () => {
+    // The UPN domain names what a user is called, never where the secret is
+    // sent, so it is not part of the transport and changing it must not force
+    // the administrator to re-enter the client secret. The token endpoint is
+    // a closed loopback port, so the test gets past the borrow and fails on
+    // the connection -- which is the point: it is not refused as a mismatch.
+    const entra = {
+      tenantId: '99999999-8888-7777-6666-555555555555',
+      clientId: 'client-1',
+      graphBaseUrl: 'https://127.0.0.1:1/v1.0',
+      tokenUrl: 'https://127.0.0.1:1/token',
+      allowPrivateAddresses: true,
+      timeoutMs: 2_000,
+    };
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'entraId',
+      name: 'Entra',
+      config: { ...entra, userPrincipalDomain: 'contoso.com' },
+      bindPassword: 'a-client-secret',
+    });
+    for (const requested of [{ ...entra, userPrincipalDomain: 'fabrikam.com' }, entra]) {
+      const result = await testTargetConfiguration(tenantId, provider, {
+        type: 'entraId',
+        config: requested,
+        borrowFromTargetId: id,
+      });
+      expect(result.message).not.toMatch(/only be borrowed/);
+      expect(result.message).not.toMatch(/no saved credential/);
+    }
+  });
+
   it('refuses to borrow for a different URL', async () => {
     // The whole point: a request naming a saved target without a password is
     // asking Syntra to send that password somewhere, and *where* is the

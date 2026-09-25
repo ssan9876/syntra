@@ -64,6 +64,13 @@ export interface PlanInput {
    * turns that decision into an action and does not second-guess it.
    */
   containersToCreate: ReadonlyMap<string, string>;
+  /**
+   * Whether the target places accounts in containers, as its connector
+   * declares. False for a flat target (Entra ID, SCIM), where an account's
+   * "DN" is a UPN or a resource id and never a move away from anywhere: no
+   * container comparison is made. Absent means true.
+   */
+  placesAccountsInContainers?: boolean;
   contractsByPerson: ReadonlyMap<string, ContractFacts[]>;
   /**
    * Administrative departures, keyed on `personId`.
@@ -382,6 +389,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
         // deeper one cannot be computed.
         const currentContainer = containerOf(current);
         const containerChanged =
+          input.placesAccountsInContainers !== false &&
           currentContainer !== null &&
           currentContainer.toLowerCase() !== state.account.container.toLowerCase();
         if (

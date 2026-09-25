@@ -22,6 +22,7 @@ import {
 import {
   PERMISSIONS,
   ContainerNotInTargetError,
+  TargetHasNoContainersError,
   LadderConfigurationError,
   NoAccountToMoveError,
   NoCorrelationKeyError,
@@ -326,6 +327,11 @@ export async function registerAdminTargetRoutes(
       if (!target) throw new ProblemError(404, 'not-found', 'Target not found');
       const containers = await targetContainers(request.tenantId, provider, id).catch(
         (cause: unknown) => {
+          // A flat target is a clear 409, not a 502 about a target that
+          // answered perfectly well.
+          if (cause instanceof TargetHasNoContainersError) {
+            throw new ProblemError(409, 'no-containers', 'This target has no containers', cause.message);
+          }
           throw new ProblemError(
             502,
             'target-unreachable',
@@ -390,6 +396,9 @@ export async function registerAdminTargetRoutes(
         actorUserId: request.session.userId,
         sourceIp: request.ip,
       }).catch((cause: unknown) => {
+        if (cause instanceof TargetHasNoContainersError) {
+          throw new ProblemError(409, 'no-containers', 'This target has no containers', cause.message);
+        }
         if (cause instanceof ContainerNotInTargetError) {
           throw new ProblemError(
             400,

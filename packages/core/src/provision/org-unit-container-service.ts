@@ -1,6 +1,6 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
-import { targetContainers } from './placement-service.js';
+import { targetContainers, TargetHasNoContainersError } from './placement-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 
 export type DnRefusal = {
@@ -136,7 +136,13 @@ export type MaterialiseOutcome =
   | { ok: true; state: 'desired' | 'adopted'; dn: string }
   | {
       ok: false;
-      reason: 'malformed' | 'outside_base' | 'no_such_unit' | 'no_such_target' | 'dn_taken';
+      reason:
+        | 'malformed'
+        | 'outside_base'
+        | 'no_such_unit'
+        | 'no_such_target'
+        | 'dn_taken'
+        | 'no_containers';
       message: string;
     };
 
@@ -184,11 +190,17 @@ export async function materialiseOrgUnit(
   if (!validated.ok) return validated;
 
   // Network I/O, so no transaction is held across it.
-  const present = new Set(
-    (await targetContainers(tenantId, provider, input.targetSystemId)).map((dn) =>
-      dn.trim().toLowerCase(),
-    ),
-  );
+  let listed: string[];
+  try {
+    listed = await targetContainers(tenantId, provider, input.targetSystemId);
+  } catch (cause) {
+    // A flat target (Entra ID, SCIM) has nowhere to put a unit's accounts.
+    if (cause instanceof TargetHasNoContainersError) {
+      return { ok: false, reason: 'no_containers', message: cause.message };
+    }
+    throw cause;
+  }
+  const present = new Set(listed.map((dn) => dn.trim().toLowerCase()));
   const state = present.has(validated.dn.toLowerCase()) ? 'adopted' : 'desired';
 
   try {

@@ -25,6 +25,19 @@ export interface ReconcileInput {
    * ordinary configuration, not a missing container.
    */
   existingContainers: ReadonlySet<string>;
+  /**
+   * Whether the target places accounts in containers at all, as its connector
+   * DECLARES (`TargetConnector.placesAccountsInContainers`).
+   *
+   * False for a flat target -- Entra ID, SCIM, a document with no containers
+   * -- and then there is no container to check: no `container_missing`, no
+   * `container_vanished`, no `create_container`. Never inferred from
+   * `existingContainers` being empty; for a target that does place accounts
+   * an empty set still fails every person by name (Ruling P9).
+   *
+   * Absent means true, which is Active Directory's behaviour unchanged.
+   */
+  placesAccountsInContainers?: boolean;
   /** personId to the container the profile computed for them, in its own case. */
   desiredContainers: ReadonlyMap<string, string>;
   /**
@@ -239,7 +252,10 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
    * `container_vanished` finding, never a re-create, and that judgement stays
    * with the person loop which has the context to report it.
    */
+  const placesAccounts = input.placesAccountsInContainers !== false;
   for (const row of input.desiredContainerRows.values()) {
+    // A flat target has nowhere to create a container, whatever a row says.
+    if (!placesAccounts) break;
     if (row.state !== 'desired') continue;
     if (input.existingContainers.has(row.dn.trim().toLowerCase())) continue;
     containersToCreate.set(row.id, row.dn);
@@ -330,7 +346,9 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
       continue;
     }
 
-    if (state.account?.required) {
+    // A flat target places accounts nowhere, so the rendered container is
+    // irrelevant to it and there is nothing to check.
+    if (placesAccounts && state.account?.required) {
       // The map is the run's copy of the same value `state.account.container`
       // already holds. The fallback is not belt and braces: without it a
       // person whose entry the caller failed to add is not checked at all, and

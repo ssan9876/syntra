@@ -36,6 +36,46 @@ import {
   type TlsMode,
 } from './target-form.js';
 
+/**
+ * What stops this target provisioning anybody, read from the endpoints the
+ * configuration pages already use: a 404 for the account profile, and a rule
+ * list with no enabled rule that grants an account.
+ *
+ * Only a definite answer raises a warning. A refused or failed read says
+ * nothing about the target, so it warns about nothing.
+ */
+function useConfigurationGaps(targetId: string | null): {
+  noProfile: boolean;
+  noAccountRule: boolean;
+} {
+  const [gaps, setGaps] = useState({ noProfile: false, noAccountRule: false });
+  useEffect(() => {
+    setGaps({ noProfile: false, noAccountRule: false });
+    if (targetId === null) return;
+    let cancelled = false;
+    const profile = api(`/api/admin/targets/${targetId}/profile`).then(
+      () => false,
+      (cause: unknown) => cause instanceof ApiError && cause.problem.status === 404,
+    );
+    const rules = api<{ rules?: { enabled: boolean; grantsAccount: boolean }[] }>(
+      `/api/admin/targets/${targetId}/rules`,
+    )
+      .then(
+        (body) =>
+          Array.isArray(body.rules) &&
+          !body.rules.some((rule) => rule.enabled && rule.grantsAccount),
+      )
+      .catch(() => false);
+    void Promise.all([profile, rules]).then(([noProfile, noAccountRule]) => {
+      if (!cancelled) setGaps({ noProfile, noAccountRule });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetId]);
+  return gaps;
+}
+
 export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -72,6 +112,7 @@ export function TargetDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | 'save' | 'test'>(null);
   const [result, setResult] = useState<TestResult | null>(null);
+  const gaps = useConfigurationGaps(isNew ? null : targetId);
 
   useEffect(() => {
     if (!data) return;
@@ -368,6 +409,8 @@ export function TargetDetailPage() {
               clientId={form.entraClientId}
               credential={form.bindPassword}
               correlationField={form.entraCorrelationField}
+              userPrincipalDomain={form.entraUserPrincipalDomain}
+              onUserPrincipalDomainChange={(v) => set('entraUserPrincipalDomain', v)}
               onTenantIdChange={(v) => set('entraTenantId', v)}
               onClientIdChange={(v) => set('entraClientId', v)}
               onCredentialChange={(v) => set('bindPassword', v)}
@@ -454,15 +497,6 @@ export function TargetDetailPage() {
           )}
         </Panel>
 
-        {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
-        {!isNew && targetId !== null && <TargetAdapterPanel targetId={targetId} />}
-        {!isNew && data && <TargetWriteStopPanel target={data} onChanged={reload} />}
-        {!isNew && data && <TargetMaintenancePanel target={data} onChanged={reload} />}
-        {!isNew && targetId !== null && <TargetHealthPanel targetId={targetId} />}
-        {!isNew && targetId !== null && data?.type === 'httpJson' && (
-          <TargetMigrationPanel targetId={targetId} onApplied={reload} />
-        )}
-
         {/*
           These three links are the only route into the rest of the target's
           configuration. Without them the sub-pages exist and are reachable
@@ -470,6 +504,20 @@ export function TargetDetailPage() {
         */}
         {!isNew && (
           <Panel title="Configuration">
+            {(gaps.noProfile || gaps.noAccountRule) && (
+              <div className="space-y-2 px-4 pt-4">
+                {gaps.noProfile && (
+                  <Alert tone="warning">
+                    This target has no account profile, so it cannot create accounts.
+                  </Alert>
+                )}
+                {gaps.noAccountRule && (
+                  <Alert tone="warning">
+                    No business rule grants an account on this target, so no one will be provisioned.
+                  </Alert>
+                )}
+              </div>
+            )}
             <ul className="space-y-3 p-4">
               <li>
                 <Link
@@ -503,6 +551,15 @@ export function TargetDetailPage() {
               </li>
             </ul>
           </Panel>
+        )}
+
+        {!isNew && targetId !== null && <CapabilitiesPanel targetId={targetId} />}
+        {!isNew && targetId !== null && <TargetAdapterPanel targetId={targetId} />}
+        {!isNew && data && <TargetWriteStopPanel target={data} onChanged={reload} />}
+        {!isNew && data && <TargetMaintenancePanel target={data} onChanged={reload} />}
+        {!isNew && targetId !== null && <TargetHealthPanel targetId={targetId} />}
+        {!isNew && targetId !== null && data?.type === 'httpJson' && (
+          <TargetMigrationPanel targetId={targetId} onApplied={reload} />
         )}
 
         <Panel
