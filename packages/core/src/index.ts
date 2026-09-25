@@ -88,7 +88,7 @@ export * from './scim/patch.js';
 // evaluation, second factors and the audit event. authorize() is the door.
 export type { AuthFailure, AuthResult } from './auth/login-service.js';
 export { clearLockout, isLocked, lockedWhere, readLockout } from './auth/login-lockout.js';
-export { mustRenewPassword, passwordWasUsedBefore } from './auth/password-ageing.js';
+export { isServiceAccount, mustRenewPassword, passwordWasUsedBefore } from './auth/password-ageing.js';
 export type { AgeingPolicy } from './auth/password-ageing.js';
 export { renewExpiredPassword } from './auth/password-renewal.js';
 export type { RenewOutcome } from './auth/password-renewal.js';

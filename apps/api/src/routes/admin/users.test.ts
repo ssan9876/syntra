@@ -10,6 +10,7 @@ import {
   createRole,
   createUser,
   hashPassword,
+  issueApiToken,
   setPasswordHash,
   type Permission,
 } from '@syntra/core';
@@ -740,6 +741,7 @@ describe('PATCH /api/admin/users/:id', () => {
       id: admin.id,
       passwordSource: 'upstream',
       passwordSourceHint: 'Entra ID',
+      kind: 'person',
     });
 
     const events = await withTenant(ctx.tenantId, (tx) =>
@@ -1656,5 +1658,164 @@ describe('GET /api/admin/users/unlinked', () => {
 
     // `/users/:id` would parse `unlinked` as a uuid and 400 on it.
     expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * Service accounts: an account an integration uses through API tokens.
+ *
+ * The live failure this covers: an administrator set a password on
+ * `svc-claude`, the set flagged it must-change, and every request its token
+ * made was refused from then on because nobody ever signs in as an
+ * integration to change it.
+ */
+describe('service accounts', () => {
+  const patch = (url: string, cookie: string, payload: unknown) =>
+    ctx.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { host: ctx.host, cookie },
+      payload: payload as object,
+    });
+
+  /** A token for `userId`, and a role letting it read the directory. */
+  async function tokenFor(userId: string) {
+    return withTenant(ctx.tenantId, async (tx) => {
+      const role = await createRole(tx, `Reader ${userId}`, [PERMISSIONS.DIRECTORY_READ]);
+      await assignRole(tx, userId, role.id);
+      const issued = await issueApiToken(tx, {
+        userId,
+        name: 'integration',
+        scopes: [],
+        expiresAt: null,
+        createdBy: null,
+      });
+      return issued.token;
+    });
+  }
+
+  const withToken = (token: string) =>
+    ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/users',
+      headers: { host: ctx.host, authorization: `Bearer ${token}` },
+    });
+
+  it("keeps a service account's token working after an admin sets its password", async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const created = await post('/api/admin/users', cookie, {
+      login: 'svc-claude',
+      email: 'svc-claude@acme.test',
+      displayName: 'Claude integration',
+      personId: null,
+      kind: 'service',
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ kind: 'service' });
+    const id = created.json().id as string;
+    const token = await tokenFor(id);
+
+    const set = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toMatchObject({ mustChange: false });
+
+    expect((await withToken(token)).statusCode).toBe(200);
+  });
+
+  it("still refuses a PERSON account's token once an admin sets its password", async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const created = await post('/api/admin/users', cookie, {
+      login: 'jdoe',
+      email: 'jdoe@acme.test',
+      displayName: 'J Doe',
+    });
+    const id = created.json().id as string;
+    expect(created.json()).toMatchObject({ kind: 'person' });
+    const token = await tokenFor(id);
+    expect((await withToken(token)).statusCode).toBe(200);
+
+    const set = await post(`/api/admin/users/${id}/password`, cookie, {
+      password: 'a-long-enough-password',
+    });
+    expect(set.json()).toMatchObject({ mustChange: true });
+
+    expect((await withToken(token)).statusCode).toBe(401);
+  });
+
+  it('marks an account as a service account, and audits the change', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await authCookie('admin');
+    const created = await post('/api/admin/users', cookie, {
+      login: 'svc-x',
+      email: 'svc-x@acme.test',
+      displayName: 'X',
+      personId: null,
+    });
+    const id = created.json().id as string;
+
+    const res = await patch(`/api/admin/users/${id}`, cookie, { kind: 'service' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ kind: 'service' });
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'user.kindChanged', targetId: id } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload).toEqual({ from: 'person', to: 'service' });
+  });
+
+  it("refuses to make a person's account a service account", async () => {
+    await seedAdmin([
+      PERMISSIONS.DIRECTORY_READ,
+      PERMISSIONS.DIRECTORY_WRITE,
+      PERMISSIONS.IDENTITY_WRITE,
+    ]);
+    const cookie = await authCookie('admin');
+    const person = await withTenant(ctx.tenantId, (tx) =>
+      createPerson(tx, { givenName: 'Jo', familyName: 'Doe' }),
+    );
+    const created = await post('/api/admin/users', cookie, {
+      login: 'jo',
+      email: 'jo@acme.test',
+      displayName: 'Jo',
+      personId: person.id,
+    });
+    const id = created.json().id as string;
+
+    const res = await patch(`/api/admin/users/${id}`, cookie, { kind: 'service' });
+    expect(res.statusCode).toBe(409);
+
+    // Nor created as one with a person, nor linked to one afterwards.
+    const both = await post('/api/admin/users', cookie, {
+      login: 'jo2',
+      email: 'jo2@acme.test',
+      displayName: 'Jo',
+      personId: person.id,
+      kind: 'service',
+    });
+    expect(both.statusCode).toBe(409);
+
+    const svc = await post('/api/admin/users', cookie, {
+      login: 'svc-y',
+      email: 'svc-y@acme.test',
+      displayName: 'Y',
+      personId: null,
+      kind: 'service',
+    });
+    const link = await post(`/api/admin/persons/${person.id}/link-user`, cookie, {
+      userId: svc.json().id,
+    });
+    expect(link.statusCode).toBe(409);
+  });
+
+  it('refuses the change without directory.write', async () => {
+    const admin = await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+    const res = await patch(`/api/admin/users/${admin.id}`, cookie, { kind: 'service' });
+    expect(res.statusCode).toBe(403);
   });
 });

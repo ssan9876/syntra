@@ -419,6 +419,18 @@ export async function registerAdminUserRoutes(
 
         let personId: string | null = body.personId ?? null;
 
+        // A service account belongs to no person: an explicit person is a
+        // contradiction, and the matcher must not link one either.
+        const kind = body.kind ?? 'person';
+        if (kind === 'service' && body.personId) {
+          throw new ProblemError(
+            409,
+            'service-account-person',
+            'A service account belongs to no person',
+            'Create it without a person, or create a person account instead.',
+          );
+        }
+
         if (body.personId) {
           const person = await tx.person.findUnique({ where: { id: body.personId } });
           if (!person) throw new ProblemError(404, 'not-found', 'Person not found');
@@ -441,7 +453,7 @@ export async function registerAdminUserRoutes(
               );
             }
           }
-        } else if (body.personId === undefined && mayLink) {
+        } else if (body.personId === undefined && mayLink && kind === 'person') {
           // Omitted, not null. `null` is somebody saying "service account",
           // and matching one would be answering a question they answered.
           const match = await matchPersonForAccount(tx, {
@@ -464,6 +476,7 @@ export async function registerAdminUserRoutes(
             email: body.email,
             displayName: body.displayName,
             ...(body.orgUnitId ? { orgUnitId: body.orgUnitId } : {}),
+            kind,
           });
         } catch (error) {
           // Both pre-checks in `createUser` raise a plain Error so the domain
@@ -525,7 +538,7 @@ export async function registerAdminUserRoutes(
           targetId: created.id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { login: created.login, email: created.email, personId },
+          payload: { login: created.login, email: created.email, personId, kind: created.kind },
         });
         return created;
       });
@@ -691,9 +704,22 @@ export async function registerAdminUserRoutes(
           throw new ProblemError(404, 'not-found', 'User not found');
         }
 
+        // A person's account is never a service account. Marking one would
+        // let an administrator set that person's password without the
+        // must-change that makes a spoken password a handover credential.
+        if (body.kind === 'service' && existing.kind !== 'service' && existing.personId) {
+          throw new ProblemError(
+            409,
+            'service-account-person',
+            'This account belongs to a person',
+            'A service account belongs to no person. Unlink the person first if this account really is used only by an integration.',
+          );
+        }
+
         const user = await tx.user.update({
           where: { id },
           data: {
+            ...(body.kind === undefined ? {} : { kind: body.kind }),
             ...(body.passwordSource === undefined
               ? {}
               : { passwordSource: body.passwordSource }),
@@ -711,6 +737,19 @@ export async function registerAdminUserRoutes(
           sourceIp: request.ip,
           payload: { passwordSource: user.passwordSource },
         });
+        // Its own event, and only on a real change: which accounts are exempt
+        // from must-change is something an auditor asks about by name.
+        if (body.kind !== undefined && body.kind !== existing.kind) {
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'user.kindChanged',
+            targetType: 'User',
+            targetId: id,
+            outcome: 'success',
+            sourceIp: request.ip,
+            payload: { from: existing.kind, to: user.kind },
+          });
+        }
         return user;
       });
 
@@ -718,6 +757,7 @@ export async function registerAdminUserRoutes(
         id: updated.id,
         passwordSource: updated.passwordSource,
         passwordSourceHint: updated.passwordSourceHint,
+        kind: updated.kind,
       };
     },
   );
@@ -974,7 +1014,7 @@ export async function registerAdminUserRoutes(
       });
 
       if (outcome.ok) {
-        return { sessionsRevoked: outcome.sessionsRevoked, mustChange: true };
+        return { sessionsRevoked: outcome.sessionsRevoked, mustChange: outcome.mustChange };
       }
 
       switch (outcome.reason) {

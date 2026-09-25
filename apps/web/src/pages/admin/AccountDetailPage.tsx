@@ -38,6 +38,11 @@ interface AccountDetail {
    * server give the real answer.
    */
   passwordSource?: string;
+  /**
+   * 'person' or 'service'. Optional so a server that predates the column
+   * reads as a person's account, which is the behaviour it had.
+   */
+  kind?: string;
   /** Too many failed sign-ins. Orthogonal to `status`. */
   locked: boolean;
   /**
@@ -195,6 +200,23 @@ export function AccountDetailPage() {
   // the control is not offered where the write cannot follow.
   const writesDisable =
     local || Boolean(source?.writebackEnabled && source?.writebackDisable);
+  const service = data.kind === 'service';
+
+  const setKind = (kind: 'person' | 'service') =>
+    run(async () => {
+      try {
+        await api(`/api/admin/users/${data.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ kind }),
+        });
+        toast({
+          title: kind === 'service' ? 'Marked as a service account' : 'Marked as a person account',
+        });
+        reload();
+      } catch (cause) {
+        failed(cause, 'The account type could not be changed.');
+      }
+    });
 
   const unlock = () =>
     run(async () => {
@@ -307,6 +329,39 @@ export function AccountDetailPage() {
               <span className="flex flex-wrap items-center gap-2">
                 <Status tone="primary">{source?.name ?? 'Directory source'}</Status>
                 <span className="font-normal text-muted">read-only</span>
+              </span>
+            ),
+          },
+          {
+            label: 'Account type',
+            value: (
+              <span className="flex flex-col gap-2">
+                <span className="flex flex-wrap items-center gap-2">
+                  {service ? (
+                    <Status tone="primary">Service account</Status>
+                  ) : (
+                    <span className="font-normal text-muted">Person account</span>
+                  )}
+                  {/* Offered only where the server would accept it: a
+                      person's account cannot become a service account. */}
+                  {can('directory.write') && (service || !data.person) && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={busy}
+                      onClick={() => void setKind(service ? 'person' : 'service')}
+                    >
+                      {service ? 'Mark as person account' : 'Mark as service account'}
+                    </Button>
+                  )}
+                </span>
+                {service && (
+                  <span className="text-sm font-normal text-muted">
+                    Used by integrations through API tokens. A password set
+                    here is not forced to change at next sign-in, and a pending
+                    password change does not stop its tokens.
+                  </span>
+                )}
               </span>
             ),
           },
@@ -533,8 +588,9 @@ export function AccountDetailPage() {
                     server owns the rule and says so on refusal — the same
                     decision the portal's own change form made.
                   */}
-                  Every session is revoked immediately, and they must choose
-                  their own password the next time they sign in.
+                  {service
+                    ? 'Every session is revoked immediately. This is a service account, so the password is not forced to change at next sign-in and its API tokens keep working.'
+                    : 'Every session is revoked immediately, and they must choose their own password the next time they sign in.'}
                 </p>
                 <div className="mt-3">
                   <Field
@@ -552,7 +608,10 @@ export function AccountDetailPage() {
                     onClick={() =>
                       void run(async () => {
                         try {
-                          const result = await api<{ sessionsRevoked: number }>(
+                          const result = await api<{
+                            sessionsRevoked: number;
+                            mustChange?: boolean;
+                          }>(
                             `/api/admin/users/${data.id}/password`,
                             {
                               method: 'POST',
@@ -562,7 +621,13 @@ export function AccountDetailPage() {
                           setPasswordDone(
                             `Password set. ${result.sessionsRevoked} session${
                               result.sessionsRevoked === 1 ? ' was' : 's were'
-                            } revoked, and they must choose their own the next time they sign in.`,
+                            } revoked${
+                              // What the server recorded, not what this
+                              // screen assumed: absent reads as must-change.
+                              result.mustChange === false
+                                ? '. It is a service account, so it does not have to be changed at next sign-in.'
+                                : ', and they must choose their own the next time they sign in.'
+                            }`,
                           );
                           setSettingPassword(false);
                           setNewPassword('');

@@ -441,6 +441,33 @@ describe('AccountDetailPage set password', () => {
     expect(await screen.findByText(/too_short/)).toBeInTheDocument();
   });
 
+  it('says a service account is not forced to change the password', async () => {
+    const service = { ...ACCOUNT, kind: 'service', personId: null, person: null };
+    mockApi(service, {
+      '/password': () => json({ sessionsRevoked: 0, mustChange: false }),
+    });
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Set password' }),
+    );
+    // Before anything is typed: the dialog states the different rule.
+    expect(
+      await screen.findByText(/API tokens keep working/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/must choose their own password/i)).not.toBeInTheDocument();
+
+    await userEvent.type(
+      await screen.findByLabelText('New password'),
+      'a-long-enough-password',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
+
+    expect(
+      await screen.findByText(/does not have to be changed at next sign-in/i),
+    ).toBeInTheDocument();
+  });
+
   it('is not offered for an account whose password lives upstream', async () => {
     mockApi({ ...ACCOUNT, passwordSource: 'upstream' });
     renderPage();
@@ -613,6 +640,66 @@ describe('AccountDetailPage person suggestions', () => {
     expect(await screen.findByRole('link', { name: 'Jo Doe' })).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /^link /i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Service accounts: shown as such, and toggled only where the server would
+ * accept it (an account linked to a person is never a service account).
+ */
+describe('AccountDetailPage account type', () => {
+  const UNLINKED = { ...ACCOUNT, kind: 'person', personId: null, person: null };
+
+  it('shows a service account and explains what differs', async () => {
+    mockApi({ ...UNLINKED, kind: 'service' });
+    renderPage();
+
+    expect(await screen.findByText('Service account')).toBeInTheDocument();
+    expect(screen.getByText(/used by integrations through API tokens/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Mark as person account' }),
+    ).toBeInTheDocument();
+  });
+
+  it('marks an unlinked account as a service account', async () => {
+    let sent: unknown;
+    const fetchSpy = mockApi(UNLINKED);
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        sent = JSON.parse(String(init.body));
+        return Promise.resolve(json({ id: 'u1', kind: 'service' }));
+      }
+      return fallback(input, init);
+    }) as typeof fetch);
+    renderPage();
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Mark as service account' }),
+    );
+    await waitFor(() => expect(sent).toEqual({ kind: 'service' }));
+  });
+
+  it('does not offer it for an account a person owns', async () => {
+    mockApi();
+    renderPage();
+
+    await screen.findByText('jdoe');
+    expect(screen.getByText('Person account')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Mark as service account' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('is not offered without directory.write', async () => {
+    granted.delete('directory.write');
+    mockApi(UNLINKED);
+    renderPage();
+
+    await screen.findByText('jdoe');
+    expect(
+      screen.queryByRole('button', { name: 'Mark as service account' }),
     ).not.toBeInTheDocument();
   });
 });

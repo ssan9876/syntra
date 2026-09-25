@@ -216,8 +216,13 @@ export function AccountsTab() {
           // literal null, which is what says "service account" to the API; the
           // empty string is OMITTED, which is what asks it to match. Collapsing
           // them would turn "work it out" into "there is nobody".
+          //
+          // The option is labelled "service account", so it creates one: the
+          // account's password is then not forced to change when an
+          // administrator sets it, and its API tokens are not stopped by a
+          // pending renewal. Reversible on the account's own screen.
           ...(v.personId === 'none'
-            ? { personId: null }
+            ? { personId: null, kind: 'service' }
             : v.personId
               ? { personId: v.personId }
               : {}),

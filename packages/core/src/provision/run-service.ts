@@ -34,7 +34,11 @@ import {
   honouredCancellation,
   noActiveRequest,
 } from '../jobs/cancellation.js';
-import { cancellableRuns, honourProvisionCancellation } from './run-cancellation.js';
+import {
+  abandonProposedActions,
+  cancellableRuns,
+  honourProvisionCancellation,
+} from './run-cancellation.js';
 import type {
   ContractFacts,
   DesiredState,
@@ -147,7 +151,7 @@ async function adoptStaleRunsAndStart(
   const stale = await withTenant(tenantId, async (tx) => {
     const runs = await tx.provisionRun.findMany({
       where: { targetSystemId, status: { in: [...NON_TERMINAL] } },
-      select: { id: true, status: true },
+      select: { id: true, status: true, requiresConfirmation: true },
     });
 
     // A preview somebody had asked to stop, left behind by a dead process,
@@ -158,17 +162,60 @@ async function adoptStaleRunsAndStart(
       data: honouredCancellation(),
     });
 
+    // SUPERSESSION of a plan nobody applied, one run at a time so each is
+    // recorded as what it was. Its unapplied actions are marked superseded
+    // (the new plan re-proposes whatever is still desired), the revocation
+    // orders they carried are re-opened -- phase 7 reads only `open` orders,
+    // so one left `planned` by a discarded plan would never be carried out --
+    // and an audit event says which run was stepped over and why. Nothing is
+    // written to the target: a superseded plan was never applied.
+    //
+    // The status stays `failed` with the `superseded by a later run` error,
+    // which is how every reader (the runs list, the run page) already
+    // recognises a supersession.
+    //
+    // A `blocked` run superseded here cannot be a guard bypass: the guard is
+    // evaluated afresh on the new plan against baselines only an APPLIED run
+    // moves (`lastAppliedRunAt`, the last applied run's population), so a plan
+    // still over a threshold is held again. Callers that must not replace a
+    // question put to a person -- the schedule, a person's receipt -- check
+    // for a confirmable hold before they get here.
+    for (const stale of runs.filter((r) => r.status === 'previewed' || r.status === 'blocked')) {
+      const { count } = await tx.provisionRun.updateMany({
+        where: { id: stale.id, status: stale.status },
+        data: {
+          status: 'failed',
+          error: 'superseded by a later run',
+          finishedAt: new Date(),
+        },
+      });
+      if (count === 0) continue;
+      const notAttempted = await abandonProposedActions(
+        tx,
+        stale.id,
+        'not attempted: superseded by a later run',
+      );
+      await recordEvent(tx, {
+        actorUserId: null,
+        action: 'provision.run.superseded',
+        targetType: 'ProvisionRun',
+        targetId: stale.id,
+        outcome: 'success',
+        sourceIp: null,
+        payload: {
+          targetSystemId,
+          previousStatus: stale.status,
+          requiresConfirmation: stale.requiresConfirmation,
+          notAttempted,
+          ...(receiptId === undefined ? {} : { receiptId }),
+        },
+      });
+    }
+    // Anything still proposed on an OLDER, already-terminal run (an apply
+    // that ran only a selection leaves the rest proposed) is superseded too.
     await tx.provisionAction.updateMany({
       where: { status: 'proposed', run: { targetSystemId } },
       data: { status: 'superseded' },
-    });
-    await tx.provisionRun.updateMany({
-      where: { targetSystemId, status: { in: ['previewed', 'blocked'] } },
-      data: {
-        status: 'failed',
-        error: 'superseded by a later run',
-        finishedAt: new Date(),
-      },
     });
     await tx.provisionRun.updateMany({
       where: { targetSystemId, status: 'running' },

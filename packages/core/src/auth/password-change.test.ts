@@ -491,6 +491,36 @@ describe('setPasswordAsAdmin', () => {
     expect(outcome).toMatchObject({ sessionsRevoked: 2 });
   });
 
+  it('does not flag a service account must-change, and audits that it did not', async () => {
+    const actor = await seedActor();
+    await withTenant(tenantId, (tx) =>
+      tx.user.update({ where: { id: userId }, data: { kind: 'service' } }),
+    );
+
+    const outcome = await setIt(actor);
+
+    expect(outcome).toMatchObject({ ok: true, mustChange: false });
+    const credential = await withTenant(tenantId, (tx) =>
+      tx.passwordCredential.findUnique({ where: { userId } }),
+    );
+    expect(credential!.mustChange).toBe(false);
+    expect(await verifyPassword(credential!.hash, ADMIN_SET)).toBe(true);
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'user.setPassword', targetId: userId } }),
+    );
+    expect(event.payload).toMatchObject({ mustChange: false, accountKind: 'service' });
+  });
+
+  it('still flags a person account must-change, and says so', async () => {
+    const actor = await seedActor();
+    const outcome = await setIt(actor);
+    expect(outcome).toMatchObject({ ok: true, mustChange: true });
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'user.setPassword', targetId: userId } }),
+    );
+    expect(event.payload).toMatchObject({ mustChange: true, accountKind: 'person' });
+  });
+
   it('revokes the refresh tokens with them', async () => {
     const actor = await seedActor();
     await withTenant(tenantId, (tx) =>

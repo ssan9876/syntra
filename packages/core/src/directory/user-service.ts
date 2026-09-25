@@ -11,7 +11,11 @@ export interface CreateUserInput {
   email: string;
   displayName: string;
   orgUnitId?: string | undefined;
+  /** 'person' when omitted. See `User.kind`. */
+  kind?: UserKind | undefined;
 }
+
+export type UserKind = 'person' | 'service';
 
 export async function createUser(tx: TenantClient, input: CreateUserInput) {
   // Checked explicitly rather than relying on the unique constraints, so the
@@ -59,6 +63,7 @@ export async function createUser(tx: TenantClient, input: CreateUserInput) {
       email: input.email,
       displayName: input.displayName,
       orgUnitId: input.orgUnitId ?? null,
+      kind: input.kind ?? 'person',
     },
   });
 }

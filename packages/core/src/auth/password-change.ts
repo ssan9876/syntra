@@ -322,7 +322,11 @@ export async function changeOwnPassword(
  * directory they may well be able to reach from the same console.
  */
 export type SetPasswordAsAdminOutcome =
-  | { ok: true; sessionsRevoked: number }
+  /**
+   * `mustChange` is what was actually recorded: true for a person's account,
+   * false for a service account (see `setPasswordAsAdmin`).
+   */
+  | { ok: true; sessionsRevoked: number; mustChange: boolean }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'upstream'; hint: string | null }
   /** A directory owns this password. Carries the source so the caller names it. */
@@ -358,6 +362,15 @@ export interface SetPasswordAsAdminInput {
  * The new password is flagged must-change. Two people know it the moment it is
  * spoken, so it is a handover credential and not the user's password until the
  * user has chosen one.
+ *
+ * EXCEPT FOR A SERVICE ACCOUNT (`User.kind = 'service'`). Nobody signs in as
+ * an integration to "choose their own" password, so the flag would never be
+ * cleared -- and a pending renewal refuses the account's API tokens, which is
+ * how setting a password on `svc-…` used to stop the integration dead. The
+ * administrator who sets a service account's password is, by definition, the
+ * person who is meant to know it; the audit event records `mustChange: false`
+ * and the account kind so the exemption is never silent. A person's account is
+ * unchanged: always must-change.
  */
 export async function setPasswordAsAdmin(
   tenantId: string,
@@ -431,8 +444,10 @@ export async function setPasswordAsAdmin(
   // business inside Prisma's 5000 ms budget.
   const hash = await hashPassword(input.newPassword);
 
+  const mustChange = context.user.kind !== 'service';
+
   const sessionsRevoked = await withTenant(tenantId, async (tx) => {
-    await setPasswordHash(tx, input.userId, hash, { now, mustChange: true });
+    await setPasswordHash(tx, input.userId, hash, { now, mustChange });
     // An administrator setting somebody's password spares nothing: this is a
     // reset in everything but name.
     const { sessionsRevoked: revoked } = await endSessions(tx, input.userId, {
@@ -451,11 +466,12 @@ export async function setPasswordAsAdmin(
       payload: {
         at: now.toISOString(),
         sessionsRevoked: revoked,
-        mustChange: true,
+        mustChange,
+        accountKind: context.user.kind,
       },
     });
     return revoked;
   });
 
-  return { ok: true, sessionsRevoked };
+  return { ok: true, sessionsRevoked, mustChange };
 }

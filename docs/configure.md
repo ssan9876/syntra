@@ -1223,6 +1223,33 @@ Machine access is the access most worth reviewing and least often reviewed, and
 giving it its own concept would have put it outside every control that already
 exists.
 
+### Marking an account as a service account
+
+An account is marked **Service account** on its own page (**Account type →
+Mark as service account**), by `PATCH /api/admin/users/:id` with
+`{"kind": "service"}`, or at creation (**Person → No person — service
+account**, or `"kind": "service"` on `POST /api/admin/users`). It needs
+`directory.write`, and the change is audited as `user.kindChanged` with the
+before and after. An account linked to a person cannot be one, and a service
+account cannot be linked to a person: both are refused with `409`.
+
+Exactly two things differ, both about the password, because nobody signs in as
+an integration to change one:
+
+- **An administrator setting its password does not flag it must-change.** For a
+  person's account the set password is a handover credential two people know,
+  so they must choose their own at next sign-in; for a service account the
+  administrator setting it is the one meant to know it. The audit event
+  `user.setPassword` records `mustChange: false` and `accountKind: service`.
+- **A pending password renewal does not refuse its API tokens.** A person's
+  tokens are refused (`401`) while their password must change or has expired,
+  exactly as before. A service account's are not — which is what used to stop an
+  integration dead the moment somebody set its password.
+
+Everything else applies unchanged: deactivation, lockout, policy (including
+IP rules and the second-factor refusal below), break-glass, and interactive
+sign-in, which still meets scheduled password expiry if the tenant has it on.
+
 ### Issuing one
 
 **Sessions → the account → API tokens**, in the console, or

@@ -136,9 +136,10 @@ export async function readAttentionSummary(
   let changeRequests: AttentionSummary['changeRequests'] = null;
 
   if (allowed.provision) {
-    // `previewed` and `blocked` are exactly the statuses the scheduled job
-    // and the receipt worker treat as "awaiting review" — the ones that stop
-    // later runs on the same target.
+    // `previewed` and `blocked` are the statuses the scheduled job treats as
+    // "awaiting review". A person's receipt or a run started by hand now
+    // supersedes a `previewed` plan; a run held for confirmation still stops
+    // everything on its target (see `provision/run-gate.ts`).
     const where = { status: { in: ['previewed', 'blocked'] } };
     const [count, runs] = await Promise.all([
       tx.provisionRun.count({ where }),

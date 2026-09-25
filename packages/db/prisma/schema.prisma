@@ -376,6 +376,13 @@ model User {
   /// Human-readable destination for an upstream user: a provider name or a
   /// URL, rendered into the "reset it over there" mail.
   passwordSourceHint String?
+  /// 'person' or 'service'. A service account is used by an integration
+  /// through API tokens: an administrator setting its password does not flag
+  /// it must-change, and its tokens are not refused for a pending password
+  /// renewal. Everything else -- deactivation, lockout, policy -- applies to
+  /// it exactly as to a person's account. CHECK-constrained in migration
+  /// `20261106000000_user_service_account`.
+  kind               String           @default("person")
   orgUnitId          String?          @db.Uuid
   orgUnit            OrgUnit?         @relation(fields: [orgUnitId], references: [id])
   personId           String?          @db.Uuid

@@ -107,9 +107,13 @@ export async function registerAdminProvisionRunRoutes(
       // Enqueued rather than run in the request: a full target read outlasts a
       // proxy timeout, which is the shape Directory Sync's synchronous
       // `Run now` endpoint still has and this one deliberately does not.
+      //
+      // `requested`: a plan left `previewed` on the target is superseded by
+      // this one rather than making it skip. A run held for confirmation is
+      // not -- the job skips and says so on the target, as the schedule does.
       const jobId = await scheduler.enqueue(
         PROVISION_JOB,
-        provisionJobPayload(request.tenantId, id),
+        provisionJobPayload(request.tenantId, id, { requested: true }),
       );
       return reply.code(202).send({ jobId });
     },

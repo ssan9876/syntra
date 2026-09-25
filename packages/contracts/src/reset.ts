@@ -43,6 +43,12 @@ export const patchUserRequest = z
   .object({
     passwordSource: z.enum(["local", "upstream"]).optional(),
     passwordSourceHint: z.string().max(256).nullable().optional(),
+    /**
+     * Person or service account. A service account's admin-set password is
+     * not flagged must-change and its API tokens are not refused for a
+     * pending password renewal; refused for an account linked to a person.
+     */
+    kind: z.enum(["person", "service"]).optional(),
   })
   .strict();
 export type PatchUserRequest = z.input<typeof patchUserRequest>;

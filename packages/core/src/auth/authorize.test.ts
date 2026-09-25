@@ -1713,6 +1713,40 @@ describe('authorize — a machine token', () => {
     expect(attempts).toBe(0);
   });
 
+  const flagMustChange = () =>
+    withTenant(tenantId, (tx) =>
+      tx.passwordCredential.update({ where: { userId }, data: { mustChange: true } }),
+    );
+
+  it("is refused while a PERSON account's password must change, as before", async () => {
+    const { token } = await mint();
+    await flagMustChange();
+
+    expect(await present(token)).toMatchObject({ status: 'renew' });
+  });
+
+  it("works for a SERVICE account whose password must change", async () => {
+    // Nobody signs in as an integration to clear the flag, so honouring it
+    // here stopped the integration until a human did.
+    const { token } = await mint();
+    await withTenant(tenantId, (tx) =>
+      tx.user.update({ where: { id: userId }, data: { kind: 'service' } }),
+    );
+    await flagMustChange();
+
+    expect(await present(token)).toMatchObject({ status: 'allow', userId });
+  });
+
+  it('keeps every other gate for a service account', async () => {
+    const { token } = await mint();
+    await withTenant(tenantId, async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { kind: 'service' } });
+      await deactivateUser(tx, userId, 'retired');
+    });
+
+    expect(await present(token)).toMatchObject({ status: 'deny' });
+  });
+
   it('never lets a token elevate', async () => {
     const { token } = await mint();
 

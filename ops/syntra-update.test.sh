@@ -477,6 +477,91 @@ ok "and leaves the previous success in update.status" \
 ok "and downloads nothing" "$([ -d "$NN_ROOT/releases" ] && echo yes || echo no)" no
 rm -rf "$NN_ROOT"
 
+# --- every other pre-flight refusal -----------------------------------------
+#
+# The same promise as above, for each check that can fail before the first
+# `status` call: exit non-zero, say REFUSED, and leave update.status holding
+# the previous success. Each of these used die() and wrote `failed` over it.
+#
+# `preflight <running-version|dev> <function> [args...]` runs the function in
+# a subshell against a scratch install and prints "<code>|<status>|<output>".
+
+preflight() {
+  local running="$1"; shift
+  local root; root="$(mktemp -d)"
+  mkdir -p "$root/current" "$root/var" "$root/shared" "$root/backups"
+  if [ "$running" != dev ]; then
+    printf '{"version": "%s"}' "$running" > "$root/current/RELEASE.json"
+  fi
+  printf 'x\tsucceeded\tnow running v%s\n' "$running" > "$root/var/update.status"
+  : > "$root/shared/.env"
+  local out code
+  out="$(
+    CURRENT="$root/current" VAR="$root/var" STATUS="$root/var/update.status" \
+      RELEASES="$root/releases" SHARED="$root/shared" BACKUPS="$root/backups" \
+      PREVIOUS_FILE="$root/var/previous"
+    "$@" 2>&1
+  )" && code=0 || code=$?
+  printf '%s|%s|%s' "$code" "$(cut -f2 "$root/var/update.status")" "$out"
+  [ -d "$root/releases" ] && printf '|DOWNLOADED'
+  rm -rf "$root"
+}
+
+# Asserts one refusal: non-zero, REFUSED with `$3` in the message, the
+# previous success intact, and nothing downloaded.
+refused() {
+  local name="$1" result="$2" says="$3"
+  ok "$name: exits non-zero" "$([ "${result%%|*}" != 0 ] && echo yes || echo no)" yes
+  ok "$name: says REFUSED" \
+    "$(printf '%s' "$result" | grep -c "REFUSED: .*$says")" 1
+  ok "$name: leaves the previous success in update.status" \
+    "$(printf '%s' "$result" | cut -d'|' -f2)" succeeded
+  ok "$name: downloads nothing" \
+    "$(printf '%s' "$result" | grep -c '|DOWNLOADED')" 0
+}
+
+refused "an invalid version" \
+  "$(SYNTRA_RELEASE_TOKEN=t preflight 1.4.2 do_update '../../etc' '')" \
+  'is not a version this will install'
+
+refused "--adopt on a real release" \
+  "$(SYNTRA_RELEASE_TOKEN=t preflight 1.4.2 do_update 1.5.0 1)" \
+  '--adopt is for a working tree'
+
+refused "a working tree without --adopt" \
+  "$(SYNTRA_RELEASE_TOKEN=t preflight dev do_update 1.5.0 '')" \
+  'this install is a working tree'
+
+refused "no release token" \
+  "$(SYNTRA_RELEASE_TOKEN='' preflight 1.4.2 do_update 1.5.0 '')" \
+  'no release token was provided'
+
+refused "no DATABASE_URL" \
+  "$(SYNTRA_DATABASE_URL='' preflight 1.4.2 resolve_environment)" \
+  'no DATABASE_URL'
+
+refused "a rollback with nowhere to go" \
+  "$(preflight 1.4.2 do_rollback)" \
+  'there is no previous release to go back to'
+
+refused "no arguments at all" \
+  "$(preflight 1.4.2 main)" \
+  'usage: syntra-update'
+
+refused "--adopt with no version" \
+  "$(preflight dev main --adopt)" \
+  'usage: syntra-update --adopt'
+
+# die() is still what a failure AFTER work began uses: the console must see
+# `failed` then. Asserted so a future sweep does not convert the wrong ones.
+DIE_OUT="$(
+  ROOT="$(mktemp -d)"; mkdir -p "$ROOT/var"
+  VAR="$ROOT/var" STATUS="$ROOT/var/update.status"
+  ( die "the downloaded release does not match its checksum" ) >/dev/null 2>&1
+  cut -f2 "$ROOT/var/update.status"; rm -rf "$ROOT"
+)"
+ok "a failure once work began still records failed" "$DIE_OUT" failed
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

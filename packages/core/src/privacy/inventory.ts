@@ -345,6 +345,7 @@ const RAW = {
     statusReason: 'operational!literal:erased',
     passwordSource: 'operational',
     passwordSourceHint: 'operational!clear',
+    kind: 'operational',
     orgUnitId: 'operational',
     personId: 'identity',
     sourceId: 'operational',

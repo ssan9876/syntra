@@ -29244,6 +29244,13 @@
                   },
                   "allowSecondAccount": {
                     "type": "boolean"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "person",
+                      "service"
+                    ]
                   }
                 },
                 "required": [
@@ -29397,6 +29404,13 @@
                       {
                         "type": "null"
                       }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "person",
+                      "service"
                     ]
                   }
                 },

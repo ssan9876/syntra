@@ -358,6 +358,16 @@ export async function registerAdminPersonRoutes(
         if (!person || !user) {
           throw new ProblemError(404, 'not-found', 'Person or user not found');
         }
+        // A service account belongs to no person; linking one would put a
+        // person's account under the service-account password rules.
+        if (user.kind === 'service') {
+          throw new ProblemError(
+            409,
+            'service-account-person',
+            'A service account belongs to no person',
+            `${user.login} is a service account. Mark it as a person account first if it really is somebody's.`,
+          );
+        }
 
         await linkUserToPerson(tx, userId, id);
         await recordEvent(tx, {

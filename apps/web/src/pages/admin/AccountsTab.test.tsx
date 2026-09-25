@@ -423,6 +423,7 @@ describe('AccountsTab person picker', () => {
     await waitFor(() => expect(writes).toHaveLength(1));
     // Null is what says "service account" to the API and suppresses matching.
     expect((writes[0]!.body as Record<string, unknown>).personId).toBeNull();
+    expect(writes[0]!.body).toMatchObject({ kind: 'service' });
   });
 
   it('omits the field entirely when asked to match by email', async () => {

@@ -103,6 +103,14 @@ describe('provisionJobPayload', () => {
       targetSystemId: 'x',
     });
   });
+
+  it('marks a run a person asked for', () => {
+    expect(provisionJobPayload('t', 'x', { requested: true })).toEqual({
+      tenantId: 't',
+      targetSystemId: 'x',
+      requested: true,
+    });
+  });
 });
 
 describe('applyTargetSchedule', () => {
@@ -540,6 +548,56 @@ describe('runProvisionJob — the skip, made loud', () => {
     );
     expect(row.consecutiveSkippedRuns).toBe(1);
     expect(row.lastSkipReason).toContain('awaiting review');
+  });
+
+  it('supersedes a `previewed` plan when a person asked for the run, and audits it', async () => {
+    const old = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: { tenantId, targetSystemId: targetId, status: 'previewed' },
+      }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      provisionJobPayload(tenantId, targetId, { requested: true }),
+      { connector: target as never },
+    );
+    const runs = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findMany({ orderBy: { startedAt: 'asc' } }),
+    );
+    expect(runs).toHaveLength(2);
+    expect(runs[0]).toMatchObject({ id: old.id, status: 'failed', error: 'superseded by a later run' });
+    const event = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirst({ where: { action: 'provision.run.superseded', targetId: old.id } }),
+    );
+    expect(event?.payload).toMatchObject({ previousStatus: 'previewed' });
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(0);
+  });
+
+  it('still does not step over a run held for confirmation when a person asked', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({
+        data: {
+          tenantId,
+          targetSystemId: targetId,
+          status: 'blocked',
+          requiresConfirmation: true,
+          blockedReason: 'over the create threshold',
+        },
+      }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      provisionJobPayload(tenantId, targetId, { requested: true }),
+      { connector: target as never },
+    );
+    const runs = await withTenant(tenantId, (tx) => tx.provisionRun.findMany());
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.status).toBe('blocked');
   });
 
   it('starts normally when the only earlier run is terminal', async () => {
