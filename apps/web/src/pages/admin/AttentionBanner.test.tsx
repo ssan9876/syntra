@@ -100,6 +100,46 @@ describe('Activity → Attention', () => {
   });
 });
 
+describe('held actions in the attention summary', () => {
+  const held = {
+    count: 2,
+    items: [
+      {
+        targetSystemId: 'target-2',
+        targetName: 'Entra ID',
+        runId: 'run-9',
+        count: 2,
+        actionTypes: ['rename_account'],
+        finishedAt: '2026-09-25T10:00:00.000Z',
+        href: '/admin/targets/target-2/runs/run-9',
+      },
+    ],
+  };
+
+  it('counts them in the banner and links to the run', async () => {
+    mockApi(summary({ total: 4, heldActions: held }));
+    render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
+    const banner = await screen.findByRole('status', { name: 'Work that needs your attention' });
+    expect(within(banner).getByText('4 items need your attention')).toBeInTheDocument();
+    expect(banner).toHaveTextContent('2 renames on Entra ID are waiting for your approval');
+    expect(within(banner).getByRole('link', { name: 'Review and approve' })).toHaveAttribute(
+      'href',
+      '/admin/targets/target-2/runs/run-9',
+    );
+  });
+
+  it('lists them under Waiting for a decision', async () => {
+    mockApi(summary({ provisionRuns: { count: 0, items: [] }, lifecycle: null, total: 2, heldActions: held }));
+    render(<MemoryRouter><IncidentsTab /></MemoryRouter>);
+    expect(await screen.findByText('Waiting for a decision')).toBeInTheDocument();
+    expect(screen.getByText('2 renames on Entra ID are waiting for your approval')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review and approve' })).toHaveAttribute(
+      'href',
+      '/admin/targets/target-2/runs/run-9',
+    );
+  });
+});
+
 describe('thresholdHints', () => {
   it('maps each tripped reason to its setting', () => {
     const hints = thresholdHints(

@@ -137,6 +137,7 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
   // ---- provision -----------------------------------------------------------------
   ['targets/:id', 'target'],
   ['runs/:runId', 'provisionRun'],
+  ['actions/:actionId', 'provisionAction'],
   ['drift/:id', 'drift'],
   ['rules/:ruleId', 'businessRule'],
   ['provision-receipts/:receiptId', 'receipt'],

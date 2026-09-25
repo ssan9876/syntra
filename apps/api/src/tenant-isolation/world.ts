@@ -55,6 +55,7 @@ export const KINDS = [
   'claimSet',
   'target',
   'provisionRun',
+  'provisionAction',
   'drift',
   'businessRule',
   'receipt',
@@ -245,6 +246,9 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
     },
   });
   const provisionRun = await tx.provisionRun.create({ data: { tenantId, targetSystemId: target.id } });
+  const provisionAction = await tx.provisionAction.create({
+    data: { tenantId, runId: provisionRun.id, actionType: 'rename_account', requiresConfirmation: true },
+  });
   const drift = await tx.driftFinding.create({
     data: {
       tenantId,
@@ -641,6 +645,7 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
     claimSet: claimSet.id,
     target: target.id,
     provisionRun: provisionRun.id,
+    provisionAction: provisionAction.id,
     drift: drift.id,
     businessRule: businessRule.id,
     receipt: receipt.id,

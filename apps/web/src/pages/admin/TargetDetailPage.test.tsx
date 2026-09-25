@@ -1014,3 +1014,77 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Run now' })).toBeNull();
   });
 });
+
+describe('TargetDetailPage: Apply renames automatically', () => {
+  /** The target, and the adapter report the checkbox reads rename support from. */
+  const mockTarget = (overrides: Record<string, unknown>, renameRefusal: string | null = null) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'PATCH') return Promise.resolve(new Response(null, { status: 204 }) as never);
+      if (String(input).endsWith('/api/admin/targets/t1/adapter')) {
+        return Promise.resolve(
+          json({
+            type: overrides.type,
+            selection: { channel: 'stable', pinnedVersion: null, rollbackVersion: null, changedAt: null, reason: null },
+            effective: null,
+            resolutionError: null,
+            releases: [],
+            writesBlockedReason: null,
+            deprecationOverride: null,
+            capabilities: [
+              { capability: 'update_account', certified: true, refusal: null },
+              { capability: 'rename_account', certified: renameRefusal === null, refusal: renameRefusal },
+            ],
+            warnings: [],
+          }),
+        );
+      }
+      return Promise.resolve(json(target(overrides)));
+    });
+
+  it('is off by default, says what a rename changes, and warns louder on Active Directory', async () => {
+    mockTarget({ type: 'activeDirectory' });
+    renderExisting();
+    const box = await screen.findByRole('checkbox', { name: /apply renames automatically/i });
+    expect(box).not.toBeChecked();
+    expect(box).toBeEnabled();
+    const section = screen.getByTestId('auto-confirm-renames');
+    expect(section).toHaveTextContent(/changes the name the person signs in with/);
+    expect(section).toHaveTextContent(/Off by default/);
+    expect(section).toHaveTextContent(
+      /sAMAccountName\. That breaks cached logons, profile paths and anything else that stored the old name/,
+    );
+  });
+
+  it('gives an Entra target the help without the Active Directory warning', async () => {
+    mockTarget({ type: 'entraId', config: { tenantId: 'x', clientId: 'y' } });
+    renderExisting();
+    await screen.findByDisplayValue('Samba AD');
+    await waitFor(() =>
+      expect(screen.getByTestId('auto-confirm-renames')).not.toHaveTextContent(/sAMAccountName/),
+    );
+    expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(
+      /changes the name the person signs in with/,
+    );
+  });
+
+  it('saves the setting with the rest of the target', async () => {
+    const fetchMock = mockTarget({ type: 'activeDirectory' });
+    renderExisting();
+    await userEvent.click(await screen.findByRole('checkbox', { name: /apply renames automatically/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+    expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ autoConfirmRenames: true });
+  });
+
+  it('is disabled, with the reason, when the adapter cannot rename accounts', async () => {
+    mockTarget({ type: 'httpJson', autoConfirmRenames: false }, "refused: this target's configuration does not advertise the ability to rename accounts");
+    renderExisting();
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /apply renames automatically/i })).toBeDisabled(),
+    );
+    expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(/cannot rename accounts/);
+  });
+});

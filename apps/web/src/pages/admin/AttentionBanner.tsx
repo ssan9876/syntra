@@ -8,6 +8,7 @@ import {
   attentionHeadline,
   attentionSignature,
   changeRequestSentence,
+  heldActionsSentence,
   lifecycleSentences,
   runSentence,
   type AttentionSummary,
@@ -102,6 +103,12 @@ export function AttentionBanner() {
             {moreRuns} more provisioning {moreRuns === 1 ? 'run is' : 'runs are'} waiting for review.
           </li>
         )}
+        {summary.heldActions?.items.slice(0, RUNS_SHOWN).map((item) => (
+          <li key={`held-${item.runId}`}>
+            {heldActionsSentence(item)}.{' '}
+            <Link className="link" to={item.href}>Review and approve</Link>
+          </li>
+        ))}
         {lifecycle.map((line) => (
           <li key={line}>
             {line}.{' '}

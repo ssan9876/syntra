@@ -296,6 +296,7 @@ export * from './provision/syntra-user.js';
 // neither.
 export * from './provision/apply.js';
 export * from './provision/credential-pickup.js';
+export * from './provision/action-approval.js';
 // Grepped workspace-wide before adding, as the five lines above were: none of
 // `PROVISION_JOB`, `ProvisionJobPayload`, `provisionJobPayload`,
 // `provisionScheduleKey`, `SchedulableTarget`, `applyTargetSchedule`,

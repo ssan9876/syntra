@@ -655,3 +655,118 @@ describe('ProvisionRunDetailPage', () => {
     ).toBeVisible();
   });
 });
+
+describe('ProvisionRunDetailPage: held actions on a finished run', () => {
+  const RENAME_ID = '22222222-2222-4222-8222-222222222222';
+  const rename = action({
+    id: RENAME_ID,
+    actionType: 'rename_account',
+    requiresConfirmation: true,
+    message: 'not attempted: this action requires an explicit confirmation and this run was not confirmed',
+    before: { correlationKey: 'aadmin' },
+    after: { correlationKey: 'sadmin' },
+    person: { id: 'p2', givenName: 'Sam', familyName: 'Admin' },
+  });
+  const finished = (heldActions: unknown[]) =>
+    run({
+      status: 'partially_applied',
+      actions: [action({ status: 'applied', actionType: 'update_account' }), rename],
+      heldActions,
+    });
+
+  it('lists what waits for approval, before and after, with no Apply for the finished run', async () => {
+    mockFetch(finished([{ actionId: RENAME_ID, status: 'proposed', approvable: true, reason: null, approval: null }]));
+    renderPage();
+    const section = await screen.findByTestId('held-actions');
+    expect(screen.getByText('Waiting for your approval')).toBeVisible();
+    expect(section).toHaveTextContent('Rename the account');
+    expect(section).toHaveTextContent('Sam Admin');
+    expect(section).toHaveTextContent('aadmin → sadmin');
+    expect(section).toHaveTextContent('Waiting for approval');
+    expect(screen.queryByRole('button', { name: /^Apply / })).toBeNull();
+  });
+
+  it('asks first, says the sign-in name changes, then approves and says a run was queued', async () => {
+    let approved = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const path = String(input);
+      if (init?.method === 'POST' && path.endsWith(`/actions/${RENAME_ID}/approve`)) {
+        approved = true;
+        return Promise.resolve(json({ approval: { id: 'a1' }, jobId: 'job-1', runRequested: true }, 202));
+      }
+      if (path.includes('/drift')) return Promise.resolve(json({ findings: [] }));
+      return Promise.resolve(
+        json(
+          finished([
+            approved
+              ? {
+                  actionId: RENAME_ID,
+                  status: 'proposed',
+                  approvable: false,
+                  reason: 'already approved and waiting for the next run',
+                  approval: {
+                    id: 'a1',
+                    state: 'pending',
+                    approvedAt: '2026-09-25T10:00:00.000Z',
+                    expiresAt: '2026-09-26T10:00:00.000Z',
+                    consumedAt: null,
+                  },
+                }
+              : { actionId: RENAME_ID, status: 'proposed', approvable: true, reason: null, approval: null },
+          ]),
+        ),
+      );
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+
+    // The dialog says what will happen before anything is sent.
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Rename the account?');
+    expect(dialog).toHaveTextContent('The sign-in name for Sam Admin changes from aadmin to sadmin');
+    expect(dialog).toHaveTextContent(/A run is queued now/);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Approve and queue a run' }));
+    expect(await screen.findByText('Approved — a run has been queued')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'runs page' })).toHaveAttribute('href', '/admin/targets/t1/runs');
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')!;
+    expect(String(post[0])).toBe(`/api/admin/targets/t1/runs/r1/actions/${RENAME_ID}/approve`);
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ confirm: true });
+    expect(await screen.findByText('Approved — waiting for the next run')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Revoke approval' })).toBeVisible();
+  });
+
+  it('shows a consumed, an expired and a revoked approval for what they are', async () => {
+    const ids = [
+      '33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444',
+      '55555555-5555-4555-8555-555555555555',
+    ];
+    const view = (actionId: string, state: string) => ({
+      actionId,
+      status: 'superseded',
+      approvable: false,
+      reason: 'this action is superseded',
+      approval: {
+        id: `a-${state}`,
+        state,
+        approvedAt: '2026-09-25T10:00:00.000Z',
+        expiresAt: '2026-09-26T10:00:00.000Z',
+        consumedAt: null,
+      },
+    });
+    mockFetch(
+      run({
+        status: 'partially_applied',
+        actions: ids.map((id) => ({ ...rename, id, status: 'superseded' })),
+        heldActions: [view(ids[0]!, 'consumed'), view(ids[1]!, 'expired'), view(ids[2]!, 'revoked')],
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText('Approved and applied by a later run')).toBeVisible();
+    expect(screen.getByText('Approval expired unused')).toBeVisible();
+    expect(screen.getByText('Approval revoked')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+});

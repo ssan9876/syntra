@@ -243,6 +243,7 @@ model Tenant {
   lifecycleCaseEvents       LifecycleCaseEvent[]
   connectionReadinessChecks ConnectionReadinessCheck[]
   provisionActions          ProvisionAction[]
+  provisionActionApprovals  ProvisionActionApproval[]
   provisionExceptions       ProvisionException[]
   driftFindings             DriftFinding[]
   automateSettingses        AutomateSettings[]
@@ -2137,6 +2138,17 @@ model TargetSystem {
   /// A rename breaks certificate subjects, profile paths, file ownership and
   /// mailbox aliases. Off by default, and always confirmable when on.
   renameEnabled Boolean @default(false)
+  /// Whether an apply may confirm a `rename_account` on its own, on a
+  /// scheduled run as much as a requested one. Off by default.
+  ///
+  /// Renames ONLY. Not re-enables, not the re-create of a vanished account,
+  /// and never a run the guard held: those stay questions for a person. A
+  /// target that follows a person's business email into its sign-in name (an
+  /// Entra UPN, a SCIM userName) renames as a matter of course, and with
+  /// `autoApply` on every such rename otherwise sat `proposed` behind a
+  /// confirmation the unattended run can never give. Each rename it confirms
+  /// is audited as confirmed by this setting.
+  autoConfirmRenames Boolean @default(false)
 
   lastRunAt        DateTime?
   lastAppliedRunAt DateTime?
@@ -2158,6 +2170,7 @@ model TargetSystem {
   runs         ProvisionRun[]
   placements   AccountPlacement[]
   containers   OrgUnitContainer[]
+  actionApprovals ProvisionActionApproval[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -3082,6 +3095,57 @@ model ProvisionAction {
   @@index([tenantId])
   @@index([personId])
   @@index([tenantId, grantId])
+}
+
+/// A person's standing approval of ONE held action, given after the run that
+/// held it had finished.
+///
+/// A run that auto-applies (a schedule, or a Run now on an `autoApply` target)
+/// never confirms anything, so an action that needs an explicit tick -- a
+/// rename, a re-enable outside the window, a re-create of a vanished account --
+/// is left `proposed` on a run that has already ended, and a finished run
+/// cannot be applied again. Replaying that action would write a plan computed
+/// against an older observed state. This row does not replay it: it says "the
+/// next time a run proposes exactly this change, it is confirmed", and the
+/// next run re-derives the plan against the target as it then is.
+///
+/// Exactly this change, and nothing wider. `fingerprint` is the SHA-256 of the
+/// action's type, account and before/after values; an apply honours the
+/// approval only for an action whose fingerprint matches, so a plan that has
+/// moved on (a second name change, a different container) is not covered and
+/// the approval simply expires. Single-use: `consumedAt` is written in the
+/// same transaction as the action's intent. Never a substitute for confirming
+/// a run the guard held.
+model ProvisionActionApproval {
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetSystemId     String       @db.Uuid
+  target             TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  /// The account the approved change is about. A bare column: the approval is
+  /// matched on it, never joined through it.
+  accountId          String       @db.Uuid
+  actionType         String
+  /// sha256 over the stable JSON of `{ actionType, accountId, before, after }`.
+  fingerprint        String
+  /// The held action this approval was given on, in a finished run. Bare, like
+  /// every other action reference: pruning a run must not delete the record
+  /// of who approved what.
+  sourceActionId     String       @db.Uuid
+  approvedByUserId   String       @db.Uuid
+  approvedAt         DateTime     @default(now())
+  /// 24 hours after `approvedAt`: long enough for the next scheduled run,
+  /// short enough that nobody's tick outlives what they were looking at.
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  consumedByActionId String?      @db.Uuid
+  revokedAt          DateTime?
+  revokedByUserId    String?      @db.Uuid
+
+  /// The apply's lookup: live approvals for this account and type.
+  @@index([tenantId, targetSystemId, accountId, actionType], map: "ProvisionActionApproval_lookup_idx")
+  @@index([tenantId, sourceActionId])
+  @@index([tenantId])
 }
 
 /// A person Provision could not fully evaluate for a target. Deliberately a

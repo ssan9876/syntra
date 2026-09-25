@@ -973,6 +973,152 @@ describe('POST /api/admin/targets/:id/runs/:runId/apply', () => {
   });
 });
 
+describe('approving a held action of a finished run', () => {
+  /** A finished run holding one rename, as an auto-applied run leaves it. */
+  const seedHeld = async (runStatus = 'partially_applied', actionStatus = 'proposed') =>
+    withTenant(ctx.tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId: ctx.tenantId, givenName: 'Sam', familyName: 'Admin' } });
+      const account = await tx.targetAccount.create({
+        data: { tenantId: ctx.tenantId, targetSystemId: targetId, personId: person.id, anchor: 'obj-1', correlationKey: 'aadmin', status: 'active' },
+      });
+      const run = await tx.provisionRun.create({
+        data: { tenantId: ctx.tenantId, targetSystemId: targetId, status: runStatus },
+      });
+      const action = await tx.provisionAction.create({
+        data: {
+          tenantId: ctx.tenantId,
+          runId: run.id,
+          actionType: 'rename_account',
+          accountId: account.id,
+          personId: person.id,
+          status: actionStatus,
+          requiresConfirmation: true,
+          before: { correlationKey: 'aadmin' },
+          after: { correlationKey: 'sadmin' },
+        },
+      });
+      return { runId: run.id, actionId: action.id };
+    });
+  const approveUrl = (runId: string, actionId: string) =>
+    `/api/admin/targets/${targetId}/runs/${runId}/actions/${actionId}/approve`;
+
+  it('records the approval, audits it, and enqueues a run exactly as Run now does', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const { runId, actionId } = await seedHeld();
+    const before = scheduler.enqueued.length;
+
+    const response = await post(approveUrl(runId, actionId), cookie, { confirm: true });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ runRequested: true, approval: { sourceActionId: actionId, actionType: 'rename_account' } });
+    expect(scheduler.enqueued.slice(before)).toEqual([
+      { name: 'provision.run', data: { tenantId: ctx.tenantId, targetSystemId: targetId } },
+    ]);
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'provision.action.approved' } }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ targetId: actionId, outcome: 'success' });
+
+    // The run detail says where it stands, and the list counts it as held.
+    const detail = (await get(`/api/admin/targets/${targetId}/runs/${runId}`, cookie)).json();
+    expect(detail.heldActions).toEqual([
+      expect.objectContaining({ actionId, approvable: false, approval: expect.objectContaining({ state: 'pending' }) }),
+    ]);
+    const list = (await get(`/api/admin/targets/${targetId}/runs`, cookie)).json();
+    expect(list.runs[0]).toMatchObject({ id: runId, heldActions: 1 });
+
+    // A second approval of the same change is a 409; revoking is allowed once.
+    expect((await post(approveUrl(runId, actionId), cookie, { confirm: true })).statusCode).toBe(409);
+    const revoked = await del(approveUrl(runId, actionId), cookie);
+    expect(revoked.statusCode).toBe(200);
+    expect(revoked.json().approval.revokedAt).not.toBeNull();
+    const again = await del(approveUrl(runId, actionId), cookie);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().type).toMatch(/approval-not-revocable/);
+  });
+
+  it('demands confirm: true, as confirming a run does', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const { runId, actionId } = await seedHeld();
+    expect((await post(approveUrl(runId, actionId), cookie, {})).statusCode).toBe(400);
+    expect((await post(approveUrl(runId, actionId), cookie, { confirm: false })).statusCode).toBe(400);
+    expect(scheduler.enqueued.filter((job) => job.name === 'provision.run')).toHaveLength(0);
+  });
+
+  it('refuses without provision.manage', async () => {
+    const manage = await manager();
+    await create(manage);
+    const { runId, actionId } = await seedHeld();
+    const reader = await adminCookie([PERMISSIONS.PROVISION_READ]);
+    expect((await post(approveUrl(runId, actionId), reader, { confirm: true })).statusCode).toBe(403);
+    expect((await del(approveUrl(runId, actionId), reader)).statusCode).toBe(403);
+  });
+
+  it('answers 409 for a run that has not ended and for an action that is not held', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const previewed = await seedHeld('previewed');
+    const blocked = await post(approveUrl(previewed.runId, previewed.actionId), cookie, { confirm: true });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().type).toMatch(/run-not-finished/);
+
+    const applied = await withTenant(ctx.tenantId, async (tx) => {
+      await tx.provisionAction.deleteMany({});
+      await tx.provisionRun.deleteMany({});
+      await tx.targetAccount.deleteMany({});
+      return null;
+    }).then(() => seedHeld('applied', 'applied'));
+    const notHeld = await post(approveUrl(applied.runId, applied.actionId), cookie, { confirm: true });
+    expect(notHeld.statusCode).toBe(409);
+    expect(notHeld.json().type).toMatch(/action-not-held/);
+    expect(scheduler.enqueued.filter((job) => job.name === 'provision.run')).toHaveLength(0);
+  });
+
+  it('answers 404 through another target, and 503 without a scheduler', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const { runId, actionId } = await seedHeld();
+    const other = (
+      await post('/api/admin/targets', cookie, { name: 'Other', type: 'activeDirectory', config, bindPassword: 'x' })
+    ).json().id;
+    const wrong = await post(`/api/admin/targets/${other}/runs/${runId}/actions/${actionId}/approve`, cookie, { confirm: true });
+    expect(wrong.statusCode).toBe(404);
+
+    ctx = await buildTestApp();
+    await ctx.app.ready();
+    const noScheduler = await manager();
+    await create(noScheduler);
+    const held = await seedHeld();
+    expect((await post(approveUrl(held.runId, held.actionId), noScheduler, { confirm: true })).statusCode).toBe(503);
+    const recorded = await withTenant(ctx.tenantId, (tx) => tx.provisionActionApproval.count());
+    expect(recorded).toBe(0);
+  });
+});
+
+describe('PATCH /api/admin/targets/:id autoConfirmRenames', () => {
+  it('is off on a new target, saved by PATCH, returned, and audited from/to', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    expect((await get(`/api/admin/targets/${targetId}`, cookie)).json().autoConfirmRenames).toBe(false);
+    const response = await patch(`/api/admin/targets/${targetId}`, cookie, { autoConfirmRenames: true });
+    expect(response.statusCode).toBe(204);
+    expect((await get(`/api/admin/targets/${targetId}`, cookie)).json().autoConfirmRenames).toBe(true);
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'provision.target.update' }, orderBy: { sequence: 'asc' } }),
+    );
+    expect(events.at(-1)!.payload).toMatchObject({ autoConfirmRenames: { from: false, to: true } });
+  });
+
+  it('refuses a value that is not a boolean', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    const response = await patch(`/api/admin/targets/${targetId}`, cookie, { autoConfirmRenames: 'yes' });
+    expect(response.statusCode).toBe(400);
+  });
+});
+
 describe('the tenant-wide external-write stop', () => {
   it('is placed with a reason, refuses every apply, and needs a second administrator to lift', async () => {
     const first = await manager();
