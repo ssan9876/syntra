@@ -167,6 +167,11 @@ export function HttpConnectorFields({
   const parsed = parseDocument(documentJson);
   const unreadable = documentJson.trim() !== '' && parsed === null;
   const isEntra = documentKey === 'entra-id' || parsed?.name === 'Microsoft Entra ID';
+  const isSnipeIt = documentKey === 'snipe-it' || parsed?.name === 'Snipe-IT';
+  // The shipped Snipe-IT document cannot know the instance's host, and a
+  // placeholder left in place fails only at the first connection test.
+  const hostPlaceholder =
+    typeof parsed?.baseUrl === 'string' && parsed.baseUrl.includes('{instance}');
 
   return (
     <div className="sm:col-span-2 space-y-4">
@@ -206,7 +211,9 @@ export function HttpConnectorFields({
       )}
 
       <Field
-        label={isEntra ? 'Application client secret' : 'Client secret'}
+        label={
+          isEntra ? 'Application client secret' : isSnipeIt ? 'Personal API key' : 'Client secret'
+        }
         name="bindPassword"
         type="password"
         autoComplete="new-password"
@@ -214,6 +221,14 @@ export function HttpConnectorFields({
         onChange={onCredentialChange}
         placeholder={isNew ? undefined : 'Leave blank to keep the stored secret'}
       />
+
+      {hostPlaceholder && (
+        <Alert tone="warning">
+          Replace <code>{'{instance}'}</code> in the connector document&apos;s{' '}
+          <code>baseUrl</code> with your Snipe-IT host, e.g.{' '}
+          <code>https://assets.example.com/api/v1</code>.
+        </Alert>
+      )}
 
       <div className="space-y-2">
         <Button

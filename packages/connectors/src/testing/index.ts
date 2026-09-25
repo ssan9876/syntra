@@ -13,6 +13,7 @@ export * from './fake-target.js';
 export * from './fake-person-source.js';
 export * from './fake-scim-server.js';
 export * from './fake-graph-server.js';
+export * from './fake-snipe-it.js';
 export * from './target-connector-certification.js';
 
 /**

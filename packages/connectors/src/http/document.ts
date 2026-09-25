@@ -113,6 +113,20 @@ const paging = z.discriminatedUnion('style', [
     limitParam: trimmed.default('limit'),
     offsetParam: trimmed.default('offset'),
     pageSize: z.number().int().positive().max(1000).default(200),
+    /**
+     * Where the response states how many items the whole collection holds
+     * (Snipe-IT's `total`). Optional, and worth declaring wherever the API
+     * publishes one.
+     *
+     * Without it the only terminator an offset API has is a short page — and
+     * a server that silently caps `limit` below `pageSize` (Snipe-IT's
+     * `max_results` setting does exactly that) answers EVERY page short, so
+     * the walk would stop after the first one and return a partial list as a
+     * whole one. With it, the walk continues until `offset` reaches the
+     * total, and a page that comes back empty before then is an error rather
+     * than an ending.
+     */
+    totalAt: jsonPath.optional(),
   }),
 ]);
 
@@ -142,6 +156,20 @@ const writeSpec = <T extends z.ZodType<string>>(method: T) =>
      */
     anchorAt: jsonPath.optional(),
   });
+
+/**
+ * Reads ONE object by its anchor — `GET /users/{{anchor}}`.
+ *
+ * Optional. Without it, read-back after a write enumerates the whole
+ * collection to find one account, which is correct and, on a large target,
+ * slow. `itemAt` is where the object sits in the response; absent means the
+ * body IS the object.
+ */
+const readOneSpec = z.object({
+  path: requestPath,
+  query: z.record(z.string(), z.string()).default({}),
+  itemAt: jsonPath.optional(),
+});
 
 /**
  * How a target's own field names map to the attribute names Syntra uses.
@@ -180,6 +208,8 @@ const accountResource = z.object({
   provenance: provenanceSelector.optional(),
   /** Target field → Syntra attribute, for everything else worth reading. */
   fields: fieldMap.default({}),
+  /** Reads one account by anchor, for read-back. See `readOneSpec`. */
+  read: readOneSpec.optional(),
   create: writeSpec(accountMethod).optional(),
   update: writeSpec(accountMethod).optional(),
   enable: writeSpec(accountMethod).optional(),
@@ -262,13 +292,50 @@ const auth = z.discriminatedUnion('type', [
 ]);
 
 /**
+ * A case-insensitive substring of a failure message, as the document declares
+ * it. Plain text rather than a regular expression, for the same reason paths
+ * are not an expression language: a pattern an administrator can write is a
+ * pattern that can backtrack for a minute on a hostile response.
+ */
+const messageFragment = z.string().trim().min(1).max(200);
+
+/**
+ * How a target that answers a refused request with `200 OK` says so in the
+ * body.
+ *
+ * Snipe-IT is the case in point: "as long as the pipe is sound, the API
+ * returns 200" — a username already taken comes back as
+ * `{"status":"error","messages":{"username":["...already been taken."]}}`.
+ * Read by status alone, that refused create is a SUCCESS, the run records an
+ * account that does not exist, and the next run proposes creating it again.
+ *
+ * `at` and `equals` say which responses are failures; nothing else about the
+ * body is interpreted. `messageAt` is where the target's own explanation
+ * is, which is flattened, bounded and redacted before anybody sees it.
+ * `conflictWhen` and `notFoundWhen` refine the classification from the
+ * default `rejected` — `conflict` is what makes a run report a collision
+ * rather than an unexplained refusal, and `not_found` is what the
+ * missing-object contract requires of a write against an anchor that is gone.
+ */
+const bodyFailure = z
+  .object({
+    at: jsonPath,
+    /** The value at `at` that marks a failure, compared as text. */
+    equals: z.string().trim().min(1),
+    messageAt: jsonPath.optional(),
+    conflictWhen: z.array(messageFragment).max(20).default([]),
+    notFoundWhen: z.array(messageFragment).max(20).default([]),
+  })
+  .strict();
+
+/**
  * Which HTTP statuses mean what.
  *
  * Defaulted rather than required, because the defaults are right for almost
  * every API and a document that had to restate them would be mostly
  * boilerplate — and boilerplate is where a subtly wrong value hides. A target
- * that answers 200 with an error body in it is a target for a hand-written
- * connector.
+ * that answers 200 with an error body in it declares `body`; see
+ * `bodyFailure`.
  */
 const failureMap = z
   .object({
@@ -276,6 +343,7 @@ const failureMap = z
     notFound: z.array(z.number().int()).default([404]),
     conflict: z.array(z.number().int()).default([409]),
     throttled: z.array(z.number().int()).default([429]),
+    body: bodyFailure.optional(),
   })
   .default({
     unauthorized: [401, 403],
@@ -316,6 +384,8 @@ export type HttpConnectorDocument = z.input<typeof httpConnectorDocument>;
 export type ResolvedHttpConnectorDocument = z.output<typeof httpConnectorDocument>;
 export type ListSpec = z.output<typeof listSpec>;
 export type WriteSpec = z.output<ReturnType<typeof writeSpec>>;
+export type ReadOneSpec = z.output<typeof readOneSpec>;
+export type BodyFailureSpec = z.output<typeof bodyFailure>;
 
 /**
  * The stored configuration of one `httpJson` target.

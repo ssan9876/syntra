@@ -1,12 +1,16 @@
-import type {
-  DiscoveredEntitlement,
-  SchemaDescriptor,
-  SourceRecord,
-  TargetConnector,
-  WriteOperation,
-  WriteResult,
+import {
+  completeReadBack,
+  readBackByEnumeration,
+  type DiscoveredEntitlement,
+  type SchemaDescriptor,
+  type SourceRecord,
+  type TargetConnector,
+  type TargetReadBack,
+  type WriteOperation,
+  type WriteResult,
 } from '../types.js';
 import {
+  bodyFailure,
   classify,
   httpRequest,
   paginate,
@@ -157,6 +161,12 @@ async function runWrite(
     };
   }
 
+  // A 2xx is not yet a success for a target that reports refusals in the
+  // body. Its explanation is the target's own words, redacted, and never the
+  // request that provoked them.
+  const refused = bodyFailure(document, response.body, [credential, vars.initialPassword]);
+  if (refused) return { ok: false, message: refused.message, failure: refused.failure };
+
   const anchor = spec.anchorAt
     ? asValues(readPath(response.body, spec.anchorAt))?.[0]
     : undefined;
@@ -170,7 +180,9 @@ async function runWrite(
  * two structural rules it enforces: no `DELETE` on an account operation, and
  * no expression language anywhere.
  */
-export const httpTargetConnector: TargetConnector<Config> = {
+export const httpTargetConnector: TargetConnector<Config> & {
+  readBack(config: Config, anchor: string): Promise<TargetReadBack>;
+} = {
   async test(raw) {
     const config = normalise(raw);
     const { document, credential } = config;
@@ -186,6 +198,8 @@ export const httpTargetConnector: TargetConnector<Config> = {
       if (response.status >= 400) {
         return { ok: false, message: `the target answered HTTP ${response.status}` };
       }
+      const refused = bodyFailure(document, response.body, [credential]);
+      if (refused) return { ok: false, message: refused.message };
       const items = document.account.list.itemsAt
         ? readPath(response.body, document.account.list.itemsAt)
         : response.body;
@@ -284,6 +298,46 @@ export const httpTargetConnector: TargetConnector<Config> = {
       const dn = asValues(readPath(item, spec.dnAt))?.[0];
       if (dn !== undefined) yield { dn };
     }
+  },
+
+  /**
+   * One account, observed after a write.
+   *
+   * A single GET when the document declares `account.read`; otherwise the
+   * shared enumeration. Either way the entitlement half is the shared,
+   * all-or-incomplete walk — this only makes FINDING the account cheaper.
+   */
+  async readBack(raw, anchor): Promise<TargetReadBack> {
+    const config = normalise(raw);
+    const { document, credential } = config;
+    const spec = document.account.read;
+    if (spec === undefined) return readBackByEnumeration(httpTargetConnector, raw, anchor);
+
+    const response = await httpRequest(document, credential, {
+      method: 'GET',
+      path: renderPath(spec.path, { anchor }),
+      query: spec.query,
+    });
+    const absent = { account: null, entitlementIds: [], enabled: null, complete: true };
+    if (response.status >= 400) {
+      if (classify(document, response.status) === 'not_found') return absent;
+      throw new Error(`reading the account back answered HTTP ${response.status}`);
+    }
+    const refused = bodyFailure(document, response.body, [credential]);
+    if (refused) {
+      if (refused.failure === 'not_found') return absent;
+      throw new Error(`reading the account back failed: ${refused.message}`);
+    }
+    const item = spec.itemAt ? readPath(response.body, spec.itemAt) : response.body;
+    const account = toRecord(document, item);
+    if (account === null) {
+      throw new Error('reading the account back answered with no anchor');
+    }
+    if (account.anchor !== anchor) {
+      // Never a different account's state reported as this one's.
+      throw new Error('reading the account back answered with a different account');
+    }
+    return completeReadBack(httpTargetConnector, raw, account);
   },
 
   async readEntitlementMembers(raw, entitlementDn): Promise<string[]> {

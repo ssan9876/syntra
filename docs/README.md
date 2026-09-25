@@ -15,7 +15,8 @@
 - [connectors/](connectors/certification-and-rollout.md) — connector
   certification, capability enforcement, canary rollout and rollback, and
   deprecation; plus the native [Microsoft Entra ID](connectors/entra-id.md)
-  connector.
+  connector and the [Snipe-IT](connectors/snipe-it.md) document for the
+  REST API connector.
 - [lab/](lab/) — a complete worked build: Syntra over HTTPS, an Active
   Directory domain behind it, sync in both directions, and SAML single
   sign-on to a third-party application.

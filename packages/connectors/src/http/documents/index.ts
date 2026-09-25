@@ -1,6 +1,7 @@
 import type { HttpConnectorDocument } from '../document.js';
 import { entraIdDocument } from './entra-id.js';
 import { googleWorkspaceDocument } from './google-workspace.js';
+import { snipeItDocument } from './snipe-it.js';
 
 /**
  * Documents that ship with the product, as starting points.
@@ -12,13 +13,14 @@ import { googleWorkspaceDocument } from './google-workspace.js';
  * using it the moment somebody edited it for one of them, including between a
  * preview and the apply that was supposed to enact that preview.
  *
- * Two, not twenty. Each of these is a claim that the product talks to that
+ * A handful, not twenty. Each of these is a claim that the product talks to that
  * system correctly, and a claim nobody tests against the real API is a claim
  * that will be wrong within a release.
  */
 export const BUILTIN_CONNECTOR_DOCUMENTS: Record<string, HttpConnectorDocument> = {
   'entra-id': entraIdDocument,
   'google-workspace': googleWorkspaceDocument,
+  'snipe-it': snipeItDocument,
 };
 
-export { entraIdDocument, googleWorkspaceDocument };
+export { entraIdDocument, googleWorkspaceDocument, snipeItDocument };

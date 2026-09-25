@@ -490,6 +490,23 @@ export async function readBackTarget<C>(
     .readBack;
   if (typeof own === 'function') return own.call(connector, config, anchor);
 
+  return readBackByEnumeration(connector, config, anchor);
+}
+
+/**
+ * Read-back for a connector with no single-object read: walk the account
+ * collection for the anchor, then complete the observation.
+ *
+ * Exported for a connector whose `readBack` is only sometimes cheaper — the
+ * document-driven HTTP connector has one exactly when its document declares
+ * `account.read` — so it can fall back here without recursing through
+ * `readBackTarget`.
+ */
+export async function readBackByEnumeration<C>(
+  connector: TargetConnector<C>,
+  config: C,
+  anchor: string,
+): Promise<TargetReadBack> {
   let account: SourceRecord | null = null;
   for await (const candidate of connector.read(config)) {
     if (candidate.anchor === anchor) {
@@ -498,7 +515,19 @@ export async function readBackTarget<C>(
     }
   }
   if (!account) return { account: null, entitlementIds: [], enabled: null, complete: true };
+  return completeReadBack(connector, config, account);
+}
 
+/**
+ * Everything read-back needs beyond the account itself: its enabled state,
+ * and the entitlements that name it -- all of them, or `complete: false`.
+ */
+export async function completeReadBack<C>(
+  connector: TargetConnector<C>,
+  config: C,
+  account: SourceRecord,
+): Promise<TargetReadBack> {
+  const anchor = account.anchor;
   const enabled = observedEnabled(account);
 
   const entitlementIds: string[] = [];
