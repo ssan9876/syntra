@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { describe, expect, it } from 'vitest';
+import { EMAIL_KEY_POLICY, SAM_KEY_POLICY } from '@syntra/connectors';
 import { resolveContractForMapping } from '../identity/contract-service.js';
 import {
   activeBetween,
@@ -101,6 +102,7 @@ const evaluate = (
     entitlementStatus: present,
     existingCorrelationKey: null,
     takenCorrelationKeys: new Set<string>(),
+    correlationKeyPolicy: SAM_KEY_POLICY,
     containerOverride: null,
     orgUnitContainer: null,
     renameEnabled: false,
@@ -663,6 +665,7 @@ describe('desiredState — persons Provision cannot process', () => {
       entitlementStatus: present,
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
+      correlationKeyPolicy: SAM_KEY_POLICY,
       containerOverride: null,
       orgUnitContainer: null,
       renameEnabled: false,
@@ -783,6 +786,7 @@ describe('desiredState — persons Provision cannot process', () => {
       entitlementStatus: present,
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
+      correlationKeyPolicy: SAM_KEY_POLICY,
       containerOverride: null,
       orgUnitContainer: null,
       renameEnabled: false,
@@ -1026,6 +1030,47 @@ describe('desiredState — renaming', () => {
     });
     expect(result.unprocessable).toBeNull();
     expect(result.account?.correlationKey).toBe('a.novak');
+  });
+});
+
+describe('desiredState — the target’s key policy', () => {
+  const emailProfile = { ...profile, correlationKeyTemplate: '%person.businessEmail%' };
+
+  it('keeps the @ of an email-address key on a target whose policy allows it', () => {
+    // The Snipe-IT SSO case: the SAML NameID is the person's address, and the
+    // username must equal it. Under the Active Directory rule this rendered
+    // `annaacme.test`.
+    const result = evaluate([contract()], [financeRule], {
+      profile: emailProfile,
+      correlationKeyPolicy: EMAIL_KEY_POLICY,
+    });
+    expect(result.account?.correlationKey).toBe('anna@acme.test');
+  });
+
+  it('suffixes an email-address key before the @, never after the domain', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: emailProfile,
+      correlationKeyPolicy: EMAIL_KEY_POLICY,
+      takenCorrelationKeys: new Set(['Anna@Acme.test']),
+    });
+    expect(result.account?.correlationKey).toBe('anna2@acme.test');
+  });
+
+  it('folds the @ out under the Active Directory rule, exactly as before', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: emailProfile,
+      correlationKeyPolicy: SAM_KEY_POLICY,
+    });
+    expect(result.account?.correlationKey).toBe('annaacme.test');
+  });
+
+  it('makes a person unprocessable, by reason, when the key has two @', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: { ...profile, correlationKeyTemplate: '%person.businessEmail%@x.test' },
+      correlationKeyPolicy: EMAIL_KEY_POLICY,
+    });
+    expect(result.unprocessable?.kind).toBe('template_unresolvable');
+    expect(result.unprocessable?.message).toContain('more than one @');
   });
 });
 

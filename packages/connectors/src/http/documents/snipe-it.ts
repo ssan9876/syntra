@@ -59,6 +59,13 @@ export const snipeItDocument: HttpConnectorDocument = {
       notFoundWhen: ['not found', 'does not exist'],
     },
   },
+  // Snipe-IT's SAML login matches the assertion's NameID against `username`,
+  // and the NameID Syntra's IdP sends is the person's email address -- so the
+  // username has to be able to BE one. `%person.businessEmail%` as the
+  // profile's account-name template then gives SSO with no mapping at all.
+  // 191 is the width of Snipe-IT's `users.username` column (Laravel's
+  // utf8mb4 index limit), tighter than an address's own 254.
+  naming: { allow: 'email', maxLength: 191 },
   account: {
     list: {
       path: '/users',

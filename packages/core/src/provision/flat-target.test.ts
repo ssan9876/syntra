@@ -5,6 +5,7 @@ import {
   entraTargetConnector,
   forgetEntraTokens,
   scimTargetConnector,
+  snipeItDocument,
   type TargetConnector,
 } from '@syntra/connectors';
 import {
@@ -477,5 +478,71 @@ describe('a SCIM 2.0 target', () => {
       'anna.novak',
       'anna.novak2',
     ]);
+  });
+});
+
+describe('a Snipe-IT target (declarative HTTP document)', () => {
+  const createSnipeIt = (naming: unknown) => {
+    const document = {
+      ...structuredClone(snipeItDocument),
+      baseUrl: 'https://assets.acme.test/api/v1',
+    } as Record<string, unknown>;
+    if (naming === undefined) delete document.naming;
+    else document.naming = naming;
+    return createTarget(tenantId, provider, null, {
+      type: 'httpJson',
+      name: `Snipe-IT ${String(naming === undefined ? 'sam' : JSON.stringify(naming))}`,
+      config: { document },
+      bindPassword: 'snipe-token',
+    });
+  };
+
+  const seedAnnaWithEmail = () =>
+    withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: {
+          tenantId,
+          givenName: 'Anna',
+          familyName: 'Novak',
+          businessEmail: 'Anna.Novak@Acme.test',
+        },
+      });
+      return person.id;
+    });
+
+  const emailProfile = { ...flatProfile, correlationKeyTemplate: '%person.businessEmail%' };
+
+  it('the profile preview shows the email address as the username, for SSO', async () => {
+    // Snipe-IT's SAML login matches the NameID -- the person's address --
+    // against `username`. Under the Active Directory rule this previewed
+    // `anna.novakacme.test`, which no assertion ever matches.
+    const { id: targetId } = await createSnipeIt({ allow: 'email', maxLength: 191 });
+    const personId = await seedAnnaWithEmail();
+
+    const preview = await previewAccountProfile(tenantId, targetId, emailProfile, personId, NOW);
+
+    expect(preview.problems).toEqual([]);
+    expect(preview.correlationKey).toBe('anna.novak@acme.test');
+    expect(preview.userPrincipalName).toBeNull();
+  });
+
+  it('a document with no naming block keeps the Active Directory rule its keys were made under', async () => {
+    const { id: targetId } = await createSnipeIt(undefined);
+    const personId = await seedAnnaWithEmail();
+
+    const preview = await previewAccountProfile(tenantId, targetId, emailProfile, personId, NOW);
+
+    expect(preview.correlationKey).toBe('anna.novakacme.test');
+  });
+
+  it('a template without @ previews the same key under either rule', async () => {
+    const personId = await seedAnnaWithEmail();
+    const keys: Array<string | null> = [];
+    for (const naming of [undefined, { allow: 'email' }]) {
+      const { id: targetId } = await createSnipeIt(naming);
+      const preview = await previewAccountProfile(tenantId, targetId, flatProfile, personId, NOW);
+      keys.push(preview.correlationKey);
+    }
+    expect(keys).toEqual(['anna.novak', 'anna.novak']);
   });
 });

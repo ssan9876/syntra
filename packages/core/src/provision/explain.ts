@@ -1,6 +1,6 @@
 import { orgUnitPlacementDn } from './org-unit-mirror.js';
 import { withTenant } from '@syntra/db';
-import { entraUserPrincipalName, targetConnectorFor } from '@syntra/connectors';
+import { correlationKeyPolicyFor, entraUserPrincipalName, targetConnectorFor } from '@syntra/connectors';
 import { sodImpact, type PersonHolding } from '../govern/sod.js';
 import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import {
@@ -10,7 +10,7 @@ import {
   type ConditionFacts,
 } from './condition.js';
 import { activeOn, personDisplayName, resolveMappingContract } from './desired.js';
-import { generateCorrelationKey, SAM_ACCOUNT_NAME_MAX_LENGTH } from './names.js';
+import { generateCorrelationKey } from './names.js';
 import { renderContainer, renderTemplate, type TemplateContext } from './templates.js';
 import {
   accountProfileSchema,
@@ -956,18 +956,24 @@ export async function previewAccountProfile(
     const otherKeys = new Set(
       accounts.filter((a) => a.personId !== personId).map((a) => a.correlationKey),
     );
+    // The target's own rule, the one a run applies: a preview that folded the
+    // `@` out of a Snipe-IT username would show an administrator the key the
+    // run does NOT produce -- or, before this, the broken one it did.
+    const keyPolicy = correlationKeyPolicyFor(target.type, target.config);
     const base = generateCorrelationKey({
       template: profile.correlationKeyTemplate,
       context,
       taken: new Set<string>(),
-      maxLength: SAM_ACCOUNT_NAME_MAX_LENGTH,
+      maxLength: keyPolicy.maxLength,
+      charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
     });
     const unique = generateCorrelationKey({
       template: profile.correlationKeyTemplate,
       context,
       taken: otherKeys,
-      maxLength: SAM_ACCOUNT_NAME_MAX_LENGTH,
+      maxLength: keyPolicy.maxLength,
+      charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
     });
 
@@ -975,12 +981,15 @@ export async function previewAccountProfile(
       problems.push(
         unique.reason === 'exhausted'
           ? `no unique account name could be generated within ${profile.maxUniquenessAttempts} attempts`
-          : `the account name template references ${unique.missing.join(', ')}, which resolves to nothing for this person`,
+          : unique.reason === 'malformed'
+            ? `the account name template ${unique.message}`
+            : `the account name template references ${unique.missing.join(', ')}, which resolves to nothing for this person`,
       );
     }
 
     // The readiness check for Entra ID: a correlation key is never a full
-    // userPrincipalName (`names.ts` folds out the `@`), so a create needs a
+    // userPrincipalName (Entra keeps the `sam` key policy, under which `names.ts`
+    // folds out the `@`), so a create needs a
     // domain from somewhere. Raised here, where somebody is looking, rather
     // than as a failed create at apply time.
     let userPrincipalName: string | null = null;

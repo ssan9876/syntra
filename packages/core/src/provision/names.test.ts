@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { CorrelationKeyCharset } from '@syntra/connectors';
 import {
   SAM_ACCOUNT_NAME_MAX_LENGTH,
   foldToAscii,
@@ -15,13 +16,21 @@ const context = (givenName: string, familyName: string): TemplateContext => ({
 const generate = (
   ctx: TemplateContext,
   taken: string[] = [],
-  over: { maxAttempts?: number; template?: string; maxLength?: number } = {},
+  over: {
+    maxAttempts?: number;
+    template?: string;
+    maxLength?: number;
+    charset?: CorrelationKeyCharset;
+  } = {},
 ) =>
   generateCorrelationKey({
     template: over.template ?? '%person.givenName.first%.%person.familyName%',
     context: ctx,
     taken: new Set(taken),
     maxLength: over.maxLength ?? SAM_ACCOUNT_NAME_MAX_LENGTH,
+    // Every test above the `email` block is an Active Directory test, and
+    // passes unchanged under the rule it was written against.
+    charset: over.charset ?? 'sam',
     maxAttempts: over.maxAttempts ?? 20,
   });
 
@@ -401,5 +410,105 @@ describe('generateCorrelationKey', () => {
         );
       }
     });
+  });
+});
+
+describe('generateCorrelationKey — the email rule', () => {
+  const withEmail = (email: string, givenName = 'Anna', familyName = 'Novak'): TemplateContext => ({
+    person: { givenName, familyName, businessEmail: email },
+    contract: { department: 'Finance' },
+    baseDn: '',
+  });
+  const email = (
+    ctx: TemplateContext,
+    taken: string[] = [],
+    over: { template?: string; maxLength?: number; maxAttempts?: number } = {},
+  ) =>
+    generate(ctx, taken, {
+      template: '%person.businessEmail%',
+      maxLength: 254,
+      charset: 'email',
+      ...over,
+    });
+
+  it('keeps an email address intact, lowercased', () => {
+    expect(key(email(withEmail('SSander@Sander.xyz')))).toBe('ssander@sander.xyz');
+  });
+
+  it('keeps _ and + in the local part', () => {
+    expect(key(email(withEmail('anna_novak+it@contoso.com')))).toBe('anna_novak+it@contoso.com');
+  });
+
+  it('puts the uniqueness suffix before the @', () => {
+    const result = email(withEmail('anna.novak@x.com'), ['anna.novak@x.com', 'ANNA.NOVAK2@X.COM']);
+    expect(key(result)).toBe('anna.novak3@x.com');
+  });
+
+  it('truncates the local part, never the domain, and keeps the suffix', () => {
+    const local = 'a'.repeat(70);
+    const first = key(email(withEmail(`${local}@contoso.com`)));
+    expect(first).toBe(`${'a'.repeat(64)}@contoso.com`);
+    const second = key(email(withEmail(`${local}@contoso.com`), [first]));
+    expect(second).toBe(`${'a'.repeat(63)}2@contoso.com`);
+  });
+
+  it('fits the whole key under a tighter declared cap by shortening only the local part', () => {
+    const result = email(withEmail('anna.novak@contoso.com'), [], { maxLength: 18 });
+    // 18 - '@contoso.com'.length = 6 characters of local part.
+    expect(key(result)).toBe('anna.n@contoso.com');
+    expect(key(result).length).toBeLessThanOrEqual(18);
+  });
+
+  it('does not end a truncated local part on a separator', () => {
+    const result = email(withEmail('anna_.novak@contoso.com'), [], { maxLength: 17 });
+    expect(key(result)).toBe('anna@contoso.com');
+  });
+
+  it('refuses a domain that alone leaves no room, rather than cutting it', () => {
+    const result = email(withEmail('anna@very-long-domain.example'), [], { maxLength: 20 });
+    expect(result).toMatchObject({ ok: false, reason: 'malformed' });
+  });
+
+  it('refuses two @ rather than choosing one', () => {
+    const result = email(withEmail('anna@x.com'), [], { template: '%person.businessEmail%@y.com' });
+    expect(result).toMatchObject({ ok: false, reason: 'malformed' });
+  });
+
+  it('refuses an @ with nothing before it', () => {
+    const result = email(withEmail('@contoso.com'));
+    expect(result).toMatchObject({ ok: false, reason: 'malformed' });
+  });
+
+  it('refuses an @ with nothing after it', () => {
+    const result = email(withEmail('anna@'));
+    expect(result).toMatchObject({ ok: false, reason: 'malformed' });
+  });
+
+  it('renders a template without @ exactly as the Active Directory rule does', () => {
+    // The guarantee the default in `correlationKeyPolicyFor` rests on, and the
+    // one a document that opts in relies on for the people it already has:
+    // for an `@`-less template the two rules differ only in `_`, `+` and the
+    // cap. Every name here fits 20 characters and holds neither character.
+    const names: Array<[string, string]> = [
+      ['Anna', 'Novak'],
+      ['Zoë', "O'Brien-Müller"],
+      ['Ĳsbrand', 'de Vries'],
+      ['李', 'Anna'],
+      ['.Jan', 'Jansen.'],
+      ['Łukasz', 'Żółć'],
+    ];
+    for (const [given, family] of names) {
+      const ctx = context(given, family);
+      for (const taken of [[], ['a.novak', 'z.obrien-muller', 'i.devries']]) {
+        expect(generate(ctx, taken, { charset: 'email', maxLength: 254 })).toEqual(
+          generate(ctx, taken),
+        );
+      }
+    }
+  });
+
+  it('keeps an @-less key to 64 characters', () => {
+    const result = generate(context('A', 'b'.repeat(80)), [], { charset: 'email', maxLength: 254 });
+    expect(key(result)).toHaveLength(64);
   });
 });

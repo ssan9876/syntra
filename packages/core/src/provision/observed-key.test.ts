@@ -25,6 +25,17 @@ describe('observedCorrelationKey', () => {
     );
   });
 
+  it('httpJson: an email-shaped username is observed whole, @ and domain kept', () => {
+    // Only Entra strips a domain. A Snipe-IT username IS the address, and the
+    // key generated under the document's email rule is the whole address.
+    const config = {
+      document: { account: { correlationAt: 'username', fields: { username: 'userName' } } },
+    };
+    expect(
+      observedCorrelationKey('httpJson', config, record({ userName: ['Anna.Novak@Acme.test'] })),
+    ).toBe('Anna.Novak@Acme.test');
+  });
+
   it('httpJson: the Syntra attribute the document maps correlationAt to', () => {
     const config = {
       document: { account: { correlationAt: 'login', fields: { login: 'uid' } } },

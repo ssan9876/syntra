@@ -46,7 +46,13 @@ export function correlationAttributeFor(targetType: string, config: unknown): st
  * Not case-folded: callers fold where they compare, as they always have, so
  * the Active Directory value is exactly the one read before this existed.
  *
- * **Entra ID.** A Syntra key never contains `@` (`names.ts` folds it out);
+ * **Every target but Entra** reports its key whole, `@` and domain included.
+ * That is what an `email`-policy key (SCIM, an HTTP document that opted in)
+ * is compared against: `anna.novak@acme.test` in Snipe-IT reserves exactly
+ * the key the generator would otherwise hand out.
+ *
+ * **Entra ID.** An Entra key never contains `@`: its policy is `sam`
+ * (`correlationKeyPolicyFor`), under which `names.ts` folds the `@` out;
  * Graph reports the full `userPrincipalName`. The key becomes a UPN by
  * `entraUserPrincipalName`, which appends the configured domain, so the
  * inverse is taken here: the local part is returned ONLY when the UPN's

@@ -106,7 +106,8 @@ export const entraTargetConfigSchema = z
     /**
      * The domain a new user's `userPrincipalName` is completed with when the
      * correlation key has no `@` -- which a generated key never has, because
-     * `names.ts` folds it to `[a-z0-9.-]`. Must be a verified domain in the
+     * an Entra target keeps the `sam` key policy (`correlationKeyPolicyFor`),
+     * under which `names.ts` folds it to `[a-z0-9.-]`. Must be a verified domain in the
      * tenant. Optional only because a `tenantId` that is itself a domain can
      * stand in for it; with the directory GUID as `tenantId` (Microsoft's own
      * recommendation) no account can be created without it.

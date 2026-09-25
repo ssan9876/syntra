@@ -1,4 +1,8 @@
 import {
+  EMAIL_LOCAL_PART_MAX_LENGTH,
+  type CorrelationKeyCharset,
+} from '@syntra/connectors';
+import {
   renderTemplate,
   resolveReference,
   templateReferences,
@@ -6,10 +10,11 @@ import {
 } from './templates.js';
 
 /**
- * `sAMAccountName` is capped at 20 characters by Active Directory, must be
- * unique in the domain, and is the thing a collision actually collides on.
+ * Re-exported rather than redefined: the connector layer owns what a target
+ * accepts (`correlationKeyPolicyFor`), and a second copy of the number here
+ * would be a second place for Active Directory's limit to drift.
  */
-export const SAM_ACCOUNT_NAME_MAX_LENGTH = 20;
+export { SAM_ACCOUNT_NAME_MAX_LENGTH } from '@syntra/connectors';
 
 /**
  * Letters that survive NFKD decomposition with no ASCII inside them: strokes,
@@ -93,20 +98,79 @@ export interface NameGenerationInput {
    * round trip and one audit event too late.
    */
   taken: ReadonlySet<string>;
+  /** The whole key's cap, domain included. From `correlationKeyPolicyFor`. */
   maxLength: number;
+  /**
+   * Which characters the TARGET accepts, from `correlationKeyPolicyFor`.
+   * Required, not defaulted: a caller that forgot it would silently generate
+   * Active Directory keys for a target that needs email addresses, which is
+   * the bug this parameter exists to close.
+   */
+  charset: CorrelationKeyCharset;
   maxAttempts: number;
 }
 
 export type NameGenerationResult =
   | { ok: true; correlationKey: string }
   | { ok: false; reason: 'template_unresolvable'; missing: string[] }
-  | { ok: false; reason: 'exhausted'; attempts: number };
+  | { ok: false; reason: 'exhausted'; attempts: number }
+  /**
+   * The template rendered, but not into anything the target's rule can hold:
+   * two `@`, an `@` with nothing on one side, or a domain that alone leaves
+   * no room under the cap. Reported with the reason in words, rather than
+   * repaired: dropping one `@` of two picks an address nobody wrote.
+   */
+  | { ok: false; reason: 'malformed'; message: string };
 
-/** Lowercased, ASCII-folded, apostrophes and spaces and anything else stripped. */
-function sanitise(value: string): string {
-  return foldToAscii(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9.-]/g, '');
+/**
+ * Lowercased, ASCII-folded, apostrophes and spaces and anything else stripped.
+ *
+ * `sam` is Active Directory's `[a-z0-9.-]`, byte for byte what this function
+ * always did. `email` additionally keeps `_`, `+` and `@`; everything it
+ * strips, `sam` strips too, so a template with no `@` in it renders the same
+ * key under either rule apart from the underscores and plus signs `email`
+ * keeps (and the longer cap `generateCorrelationKey` applies).
+ */
+function sanitise(value: string, charset: CorrelationKeyCharset): string {
+  const lowered = foldToAscii(value).toLowerCase();
+  return charset === 'email'
+    ? lowered.replace(/[^a-z0-9._+@-]/g, '')
+    : lowered.replace(/[^a-z0-9.-]/g, '');
+}
+
+/**
+ * The rendered key split into the part a suffix and a truncation may touch and
+ * the part neither may: `{ local: 'anna.novak', domain: '@contoso.com' }`.
+ * Under `sam`, and for an email-rule key with no `@`, the domain is empty.
+ */
+type SplitKey = { ok: true; local: string; domain: string } | { ok: false; message: string };
+
+function splitKey(sanitised: string, charset: CorrelationKeyCharset): SplitKey {
+  if (charset === 'sam') {
+    return { ok: true, local: sanitised.replace(/^[.-]+|[.-]+$/g, ''), domain: '' };
+  }
+  const parts = sanitised.split('@');
+  if (parts.length > 2) {
+    return {
+      ok: false,
+      message: `renders "${sanitised}", which has more than one @; a username on this target may hold one address at most`,
+    };
+  }
+  // Separators are trimmed from the ends of the local part as `sam` trims
+  // them from the whole key -- `_` and `+` included, so `_anna` and `anna_`
+  // render `anna` exactly as they always did.
+  const local = (parts[0] ?? '').replace(/^[._+-]+|[._+-]+$/g, '');
+  if (parts.length === 1) return { ok: true, local, domain: '' };
+
+  // A domain holds no `_` or `+`, and never starts or ends on a separator.
+  const domain = (parts[1] ?? '').replace(/[_+]/g, '').replace(/^[.-]+|[.-]+$/g, '');
+  if (local === '' || domain === '') {
+    return {
+      ok: false,
+      message: `renders "${sanitised}", which has nothing on one side of its @; an address needs both a name and a domain`,
+    };
+  }
+  return { ok: true, local, domain: `@${domain}` };
 }
 
 /**
@@ -121,7 +185,7 @@ function sanitise(value: string): string {
 function foldedAwayFields(input: NameGenerationInput): string[] {
   const references = templateReferences(input.template);
   const folded = references.filter(
-    (name) => sanitise(resolveReference(input.context, name) ?? '') === '',
+    (name) => sanitise(resolveReference(input.context, name) ?? '', input.charset) === '',
   );
   if (folded.length > 0) return folded;
   // Every referenced value has ASCII in it somewhere, but what the modifiers
@@ -181,7 +245,10 @@ export function generateCorrelationKey(
     };
   }
 
-  const base = sanitise(rendered.value).replace(/^[.-]+|[.-]+$/g, '');
+  const split = splitKey(sanitise(rendered.value, input.charset), input.charset);
+  if (!split.ok) return { ok: false, reason: 'malformed', message: split.message };
+  const base = split.local;
+  const domain = split.domain;
   if (base === '') {
     // The template resolved, but every character folded away — a name written
     // entirely in a script with no ASCII equivalent. Report it the same way as
@@ -194,16 +261,36 @@ export function generateCorrelationKey(
     };
   }
 
+  // The local part's own cap. `maxLength` bounds the whole key; an address
+  // additionally caps the part before the `@` at 64 (RFC 5321), and an
+  // email-rule key without an `@` is a bare local part and takes the same cap.
+  // `sam` has no split, so its only cap is `maxLength` -- as before.
+  const localCap =
+    input.charset === 'email'
+      ? Math.min(EMAIL_LOCAL_PART_MAX_LENGTH, input.maxLength - domain.length)
+      : input.maxLength;
+  if (localCap < 1) {
+    // Truncating the domain would make a different address, and truncating
+    // the local part to nothing would make no address: the key cannot exist
+    // on this target, and saying so beats sending one the target refuses.
+    return {
+      ok: false,
+      reason: 'malformed',
+      message: `renders an address whose domain "${domain.slice(1)}" alone leaves no room under this target's ${input.maxLength}-character limit`,
+    };
+  }
+
   // `sAMAccountName` is case-insensitive at the target, and this generator
   // only ever emits lowercase, so the comparison is done in lowercase on both
-  // sides.
+  // sides. The targets the email rule serves compare usernames and addresses
+  // case-insensitively too, for the same reason.
   const reserved = new Set<string>();
   for (const key of input.taken) reserved.add(key.trim().toLowerCase());
 
   let attempted = 0;
   for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
     const suffix = attempt === 1 ? '' : String(attempt);
-    const room = input.maxLength - suffix.length;
+    const room = localCap - suffix.length;
     // The suffix alone has filled the cap. Every further attempt is longer, so
     // there is nothing left to try rather than a key to truncate into shape.
     if (room < 1) break;
@@ -213,8 +300,14 @@ export function generateCorrelationKey(
     // Active Directory refuses a `sAMAccountName` ending in a period outright,
     // and `anna.` is not a name anybody meant. Trimming can never empty the
     // candidate: `base` starts with a letter or a digit.
-    const truncated = base.slice(0, room).replace(/[.-]+$/, '');
-    const candidate = `${truncated}${suffix}`;
+    //
+    // Only the local part is truncated and only the local part is suffixed:
+    // `anna.novak2@contoso.com`, never `anna.novak@contoso.com2` (a different
+    // domain) nor an address cut off half way through its domain.
+    const truncated = base
+      .slice(0, room)
+      .replace(input.charset === 'email' ? /[._+-]+$/ : /[.-]+$/, '');
+    const candidate = `${truncated}${suffix}${domain}`;
     if (!reserved.has(candidate)) return { ok: true, correlationKey: candidate };
   }
 
