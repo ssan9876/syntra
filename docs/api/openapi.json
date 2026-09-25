@@ -23434,6 +23434,11 @@
                             "type": "string",
                             "minLength": 1
                           },
+                          "userPrincipalDomain": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
+                          },
                           "graphBaseUrl": {
                             "type": "string",
                             "minLength": 1,
@@ -23842,6 +23847,11 @@
                           "clientId": {
                             "type": "string",
                             "minLength": 1
+                          },
+                          "userPrincipalDomain": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
                           },
                           "graphBaseUrl": {
                             "type": "string",
@@ -27415,6 +27425,11 @@
                           "clientId": {
                             "type": "string",
                             "minLength": 1
+                          },
+                          "userPrincipalDomain": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$"
                           },
                           "graphBaseUrl": {
                             "type": "string",

@@ -1,4 +1,5 @@
 import { withTenant } from '@syntra/db';
+import { entraUserPrincipalName, targetConnectorFor } from '@syntra/connectors';
 import { sodImpact, type PersonHolding } from '../govern/sod.js';
 import { loadSodFactsIfEvaluable } from '../govern/sod-service.js';
 import {
@@ -762,8 +763,34 @@ export interface ProfilePreview {
    * questions about what happens when the department changes.
    */
   containerSource: 'override' | 'orgUnit' | 'template' | 'fallback';
+  /**
+   * Whether this target places accounts in containers at all, as its
+   * connector declares. False for Entra ID and SCIM: `container` is then
+   * `null`, the container templates are ignored, and no container problem is
+   * ever reported.
+   */
+  placesAccountsInContainers: boolean;
+  /**
+   * The full `userPrincipalName` an Entra ID account would be created with,
+   * or null for any other target (or when none can be formed, which is then
+   * one of `problems`).
+   */
+  userPrincipalName: string | null;
   attributes: Record<string, string>;
   problems: string[];
+}
+
+/**
+ * Whether a stored target places accounts in containers, as its connector
+ * declares. Configuration only, no I/O. A config the connector cannot read is
+ * answered `true`: the container check stays on, which is the safe side.
+ */
+function targetPlacesAccountsInContainers(type: string, config: unknown): boolean {
+  try {
+    return targetConnectorFor(type).placesAccountsInContainers(config as never);
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -912,10 +939,13 @@ export async function previewAccountProfile(
             ? containerRendered.value
             : profile.fallbackContainer;
 
+    const placesAccounts = targetPlacesAccountsInContainers(target.type, target.config);
+
     // Only the template rungs can fail to resolve, so only they raise the
     // problem. An override or an org unit answering means the template was
     // never consulted and its missing fields are not this person's problem.
-    if (container.trim() === '') {
+    // A flat target (Entra ID, SCIM) ignores containers, so it has none.
+    if (placesAccounts && container.trim() === '') {
       // The same condition `desiredState` reports as `container_missing`. The
       // schema requires a non-empty fallback, so reaching this means one made
       // entirely of whitespace.
@@ -952,11 +982,33 @@ export async function previewAccountProfile(
       );
     }
 
+    // The readiness check for Entra ID: a correlation key is never a full
+    // userPrincipalName (`names.ts` folds out the `@`), so a create needs a
+    // domain from somewhere. Raised here, where somebody is looking, rather
+    // than as a failed create at apply time.
+    let userPrincipalName: string | null = null;
+    if (target.type === 'entraId' && unique.ok) {
+      const stored = (target.config ?? {}) as { tenantId?: unknown; userPrincipalDomain?: unknown };
+      const named = entraUserPrincipalName(
+        {
+          tenantId: typeof stored.tenantId === 'string' ? stored.tenantId : '',
+          ...(typeof stored.userPrincipalDomain === 'string'
+            ? { userPrincipalDomain: stored.userPrincipalDomain }
+            : {}),
+        },
+        unique.correlationKey,
+      );
+      if ('upn' in named) userPrincipalName = named.upn;
+      else problems.push(named.message);
+    }
+
     return {
       correlationKey: unique.ok ? unique.correlationKey : null,
       taken: base.ok && unique.ok && base.correlationKey !== unique.correlationKey,
-      container,
+      container: placesAccounts ? container : null,
       containerSource,
+      placesAccountsInContainers: placesAccounts,
+      userPrincipalName,
       attributes,
       problems,
     };

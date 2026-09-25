@@ -103,6 +103,31 @@ describe('AccountProfilePage', () => {
     expect(screen.getByLabelText('Person')).toHaveValue('');
   });
 
+  it('shows the Entra user principal name and no container for a flat target', async () => {
+    mockFetch({
+      previewResponse: () =>
+        Promise.resolve(
+          json({
+            correlationKey: 'anna.novak',
+            taken: false,
+            container: null,
+            containerSource: 'fallback',
+            placesAccountsInContainers: false,
+            userPrincipalName: 'anna.novak@contoso.com',
+            attributes: {},
+            problems: [],
+          }),
+        ),
+    });
+    renderPage();
+    await screen.findByLabelText('Account name template');
+    expect(screen.getByText(/Entra ID and SCIM keep accounts in one flat directory/)).toBeVisible();
+    await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
+    await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(await screen.findByText('anna.novak@contoso.com')).toBeVisible();
+    expect(screen.getByText('Not used: this target has no containers.')).toBeVisible();
+  });
+
   it('keeps the newer person preview when an older response finishes last', async () => {
     const finish: ((response: Response) => void)[] = [];
     mockFetch({ previewResponse: () => new Promise((resolve) => { finish.push(resolve); }) });

@@ -399,6 +399,25 @@ export interface TargetConnector<C> extends Connector<C> {
   listContainers(config: C): AsyncIterable<{ dn: string }>;
 
   /**
+   * Whether this target places accounts in containers at all.
+   *
+   * DECLARED, never inferred from `listContainers` coming back empty -- the
+   * paragraph above is exactly why an empty list cannot be allowed to switch
+   * the container check off. Active Directory answers `true`, and an empty
+   * container list from it is still a configuration error somebody is told
+   * about by name. Entra ID and SCIM answer `false`: they hold users in one
+   * flat collection, so there is no container to check, none to report as
+   * `container_missing`, and none a manual move could name. A document-driven
+   * HTTP target answers `true` only when its document describes containers.
+   *
+   * Required, and synchronous with no I/O, so that a new connector cannot
+   * forget to say, and so that answering it can never be the thing that
+   * fails. Before this existed every flat target dropped every person as
+   * `container_missing` and could never create an account through a run.
+   */
+  placesAccountsInContainers(config: C): boolean;
+
+  /**
    * Every member of one entitlement, in full, or a throw.
    *
    * **Never a partial list.** Half a membership read as a whole one is the

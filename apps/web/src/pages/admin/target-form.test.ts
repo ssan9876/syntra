@@ -94,6 +94,22 @@ describe('the native Entra ID target form', () => {
     });
   });
 
+  it('reads and writes the user principal name domain, and sends nothing when blank', () => {
+    const form = formFrom(
+      target({
+        config: { tenantId: '99999999-8888-7777-6666-555555555555', clientId: 'c', userPrincipalDomain: 'contoso.com' },
+      }),
+    );
+    expect(form.entraUserPrincipalDomain).toBe('contoso.com');
+    expect(
+      configFromForm({ ...BLANK, type: 'entraId', entraTenantId: 't', entraClientId: 'c', entraUserPrincipalDomain: ' Contoso.COM ' }, {}),
+    ).toMatchObject({ userPrincipalDomain: 'contoso.com' });
+    // Cleared: absent, not '' (which the server refuses), and not carried
+    // through from the saved config either -- the form owns the key.
+    const cleared = configFromForm({ ...BLANK, type: 'entraId', entraTenantId: 't', entraClientId: 'c' }, {});
+    expect(cleared).not.toHaveProperty('userPrincipalDomain');
+  });
+
   it('still reads the document-driven Entra target from its OAuth block', () => {
     const form = formFrom(
       target({

@@ -11,12 +11,25 @@ import { provenanceActionId, withProvenanceMarker } from '../ad/provenance.js';
 import { scim2TargetConfigSchema, type ResolvedScim2TargetConfig, type Scim2TargetConfig } from './config.js';
 import { scimRequest, ScimMalformedBodyError } from './client.js';
 
-type Config = Scim2TargetConfig & { bearerToken: string };
+/**
+ * The stored config plus the credential, under either name.
+ *
+ * Core hands every target connector its vault value as `bindPassword`
+ * (`targetWithCredential`), exactly as it does for Entra's client secret.
+ * This connector used to read only `bearerToken`, so through a real run the
+ * token was dropped and every request went out as `Bearer undefined`: a SCIM
+ * target could be certified directly and never used through Provision.
+ */
+type Config = Scim2TargetConfig & { bearerToken?: string; bindPassword?: string };
 type Resolved = ResolvedScim2TargetConfig & { bearerToken: string };
 
 function normalise(config: Config): Resolved {
-  const { bearerToken, ...rest } = config;
-  return { ...scim2TargetConfigSchema.parse(rest), bearerToken };
+  const { bearerToken, bindPassword, ...rest } = config;
+  const token = bearerToken ?? bindPassword;
+  if (token === undefined || token === '') {
+    throw new Error('no SCIM bearer token was supplied');
+  }
+  return { ...scim2TargetConfigSchema.parse(rest), bearerToken: token };
 }
 
 interface ScimUserResource {
@@ -373,6 +386,11 @@ export const scimTargetConnector: TargetConnector<Config> = {
     // SCIM has no organizational-unit concept: there is nowhere for an
     // account to be placed other than the flat `Users` collection.
     return;
+  },
+
+  // The flat `Users` collection, declared: the run skips the container check.
+  placesAccountsInContainers(): boolean {
+    return false;
   },
 
   async readEntitlementMembers(rawConfig, entitlementDn): Promise<string[]> {

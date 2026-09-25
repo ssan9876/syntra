@@ -593,9 +593,18 @@ export async function previewProvisionRun(
      * can never become visible because no account can ever be created in it
      * (Ruling P9).
      */
+    //
+    // Only for a target that places accounts in containers, which the
+    // connector DECLARES. Entra ID and SCIM hold users in one flat collection;
+    // inferring that from the empty list below instead is what used to drop
+    // every person on them as `container_missing`, and it would switch the
+    // check off for an Active Directory that genuinely lists nothing.
+    const placesAccountsInContainers = connector.placesAccountsInContainers(config);
     const existingContainers = new Set<string>();
-    for await (const container of connector.listContainers(config)) {
-      existingContainers.add(container.dn.toLowerCase());
+    if (placesAccountsInContainers) {
+      for await (const container of connector.listContainers(config)) {
+        existingContainers.add(container.dn.toLowerCase());
+      }
     }
 
     /**
@@ -1062,6 +1071,7 @@ export async function previewProvisionRun(
       // case-insensitive and a profile written in one case and an OU created
       // in another is an ordinary configuration, not an error.
       existingContainers,
+      placesAccountsInContainers,
       // In the case the profile produced: `reconcile` lowercases for the
       // comparison and reports the original, so the exception names the
       // container the administrator wrote rather than a mangled one.
@@ -1109,6 +1119,7 @@ export async function previewProvisionRun(
       desired,
       actual: reconciled.actual,
       containersToCreate: reconciled.containersToCreate,
+      placesAccountsInContainers,
       contractsByPerson,
       departureOverrideByPerson,
       syntraUserByPerson,

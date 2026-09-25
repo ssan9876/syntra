@@ -34,6 +34,15 @@ Shipped releases (all 1.0.0, stable):
 | `httpJson` | passed | all account and entitlement writes; no containers |
 | `entraId` | partial | all account and entitlement writes; no containers |
 
+Whether a target places accounts in containers at all is a declaration every
+connector must make (`TargetConnector.placesAccountsInContainers`), never an
+inference from an empty container list: Active Directory places them, Entra ID
+and SCIM do not, and an HTTP target does only when its document describes
+`container`. A provisioning run skips the container check for a flat target
+and keeps it, empty list included, for every other. The certification runner
+checks the declaration: a connector that says it places accounts in
+containers must list at least one.
+
 A catalog release is runnable only when this build implements it
 (`implementedAdapterVersions` in `registry.ts`); a test enforces that the two
 agree.

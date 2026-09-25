@@ -81,6 +81,17 @@ const config = (document: HttpConnectorDocument = simple()) => ({
   bindPassword: 'a-secret',
 });
 
+describe('container placement', () => {
+  it('places accounts in containers only when the document describes containers', () => {
+    expect(httpTargetConnector.placesAccountsInContainers(config())).toBe(false);
+    expect(
+      httpTargetConnector.placesAccountsInContainers(
+        config(simple({ container: { list: { path: '/ous', itemsAt: 'items' }, dnAt: 'path' } })),
+      ),
+    ).toBe(true);
+  });
+});
+
 const collect = async <T>(source: AsyncIterable<T>): Promise<T[]> => {
   const out: T[] = [];
   for await (const item of source) out.push(item);

@@ -63,6 +63,7 @@ describe('target connector certification runner', () => {
 
     expect(report.checks).toEqual([
       'connection',
+      'container-placement',
       'create',
       'idempotent-create',
       'create-read-back',
@@ -80,6 +81,7 @@ describe('target connector certification runner', () => {
 
   it('fails when a connector claims success without an anchor', async () => {
     const connector = new FakeTarget();
+    connector.containers.push('OU=Users,DC=acme,DC=test');
     connector.write = async () => ({ ok: true, message: 'claimed success' });
 
     await expect(
@@ -98,5 +100,49 @@ describe('target connector certification runner', () => {
         missingAnchor: 'missing',
       }),
     ).rejects.toThrow(/without returning an anchor/);
+  });
+
+  it('fails a connector that places accounts in containers but lists none', async () => {
+    // What every flat target looked like to a run before placement was
+    // declared: every person dropped as `container_missing`, forever.
+    const connector = new FakeTarget();
+
+    await expect(
+      certifyTargetConnector({
+        name: 'containerless target',
+        connector,
+        config: { domain: 'acme.test' },
+        create: {
+          op: 'create_account',
+          actionId: 'containerless-create',
+          correlationKey: 'flat.user',
+          attributes: {},
+          enabled: true,
+          initialPassword: 'not-retained',
+        },
+        missingAnchor: 'missing',
+      }),
+    ).rejects.toThrow(/places accounts in containers but listed none/);
+  });
+
+  it('certifies a flat target that declares it places accounts nowhere', async () => {
+    const connector = new FakeTarget();
+    connector.placesInContainers = false;
+
+    const report = await certifyTargetConnector({
+      name: 'flat target',
+      connector,
+      config: { domain: 'acme.test' },
+      create: {
+        op: 'create_account',
+        actionId: 'flat-create',
+        correlationKey: 'flat.user',
+        attributes: {},
+        enabled: true,
+        initialPassword: 'not-retained',
+      },
+      missingAnchor: 'missing',
+    });
+    expect(report.checks).toContain('container-placement');
   });
 });

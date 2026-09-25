@@ -71,8 +71,9 @@ message. Record consent in the readiness check rather than assuming it.
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `tenantId` | required | Directory id or a verified domain. A domain lets a correlation key without `@` be completed to a UPN. |
+| `tenantId` | required | Directory id (the GUID, which Microsoft recommends) or a verified domain. |
 | `clientId` | required | Application (client) id. Not a secret. |
+| `userPrincipalDomain` | none | The domain new users sign in with, e.g. `contoso.com`. Must be a verified domain of the tenant; a lowercase domain name only (no `@`, scheme or path). Required whenever `tenantId` is the directory GUID. See *User principal names*. Console: **User principal name domain**. |
 | client secret | vault | Arrives at the connector as `bindPassword`, like every target's one credential. |
 | `graphBaseUrl` | `https://graph.microsoft.com/v1.0` | Page pointers are pinned to this origin. |
 | `tokenUrl` | `https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token` | |
@@ -114,6 +115,39 @@ what leads to a second account.
 
 `userPrincipalName` is the correlation key and the login. It is written on
 create and on `rename_account` only.
+
+## User principal names
+
+A generated correlation key never contains `@`: the account-name template is
+normalised to lowercase letters, digits, `.` and `-`. The connector therefore
+completes it to a UPN, in this order:
+
+1. a key that already contains `@` is used as it is;
+2. otherwise `<key>@<userPrincipalDomain>`;
+3. otherwise `<key>@<tenantId>`, when `tenantId` is itself a domain;
+4. otherwise the create is refused, naming `userPrincipalDomain`.
+
+With the directory GUID as `tenantId` and no `userPrincipalDomain`, no account
+can be created. This is caught before apply: the account-profile preview
+(`POST /api/admin/targets/:id/profile/preview`, the **Preview** button on the
+account profile) shows the full UPN each person would get, and reports a
+problem when none can be formed.
+
+`userPrincipalDomain` is not part of the transport. Changing it never
+requires re-entering the client secret, and a connection test may still
+borrow the saved secret, because it changes what users are called, not where
+the secret is sent.
+
+## Containers are not used
+
+Entra ID has no organizational units. The connector declares that it places
+accounts in no container (`placesAccountsInContainers` is `false`), so a
+provisioning run skips the container check entirely for this target: no
+`container_missing`, no `container_vanished`, no container creation. The
+account profile's **Container template** and **Fallback container** are
+ignored; the schema still requires them, and `/` is the conventional value.
+Manually moving an account on this target is refused with `409
+no-containers`, and so is mapping an org unit to a container on it.
 
 ## Nested and dynamic groups
 

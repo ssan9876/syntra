@@ -607,6 +607,8 @@ describe('TargetDetailPage', () => {
     await userEvent.type(screen.getByLabelText(/application \(client\) id/i), 'client-1');
     await userEvent.type(screen.getByLabelText(/application client secret/i), 'a-secret');
     await userEvent.selectOptions(screen.getByLabelText(/correlation field/i), 'extensionAttribute1');
+    expect(screen.getByText(/the domain new users sign in with/i)).toBeVisible();
+    await userEvent.type(screen.getByLabelText(/user principal name domain/i), 'contoso.com');
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     await waitFor(() => {
@@ -621,6 +623,7 @@ describe('TargetDetailPage', () => {
         tenantId: 'contoso.onmicrosoft.com',
         clientId: 'client-1',
         correlationField: 'extensionAttribute1',
+        userPrincipalDomain: 'contoso.com',
       });
     });
   });
@@ -697,6 +700,74 @@ describe('TargetDetailPage', () => {
     // in the same colour as "available".
     const tone = (text: string) => screen.getByText(text).className;
     expect(new Set([tone('available'), tone('not supported'), tone('never')]).size).toBe(3);
+  });
+
+  describe('the configuration panel', () => {
+    const problem404 = () =>
+      new Response(JSON.stringify({ title: 'Not found', status: 404 }), {
+        status: 404,
+        headers: { 'content-type': 'application/problem+json' },
+      }) as never;
+
+    it('warns when there is no account profile and no rule grants an account', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+        const url = String(input);
+        if (url.endsWith('/api/admin/targets/t1/profile')) return Promise.resolve(problem404());
+        if (url.endsWith('/api/admin/targets/t1/rules')) {
+          // A rule that grants only entitlements, and a disabled one that
+          // would grant an account: neither provisions anybody.
+          return Promise.resolve(
+            json({
+              rules: [
+                { id: 'r1', enabled: true, grantsAccount: false },
+                { id: 'r2', enabled: false, grantsAccount: true },
+              ],
+            }),
+          );
+        }
+        return Promise.resolve(json(target()));
+      });
+      renderExisting();
+
+      expect(
+        await screen.findByText('This target has no account profile, so it cannot create accounts.'),
+      ).toBeVisible();
+      expect(
+        screen.getByText('No business rule grants an account on this target, so no one will be provisioned.'),
+      ).toBeVisible();
+    });
+
+    it('sits directly below the connection panel', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(json(target())));
+      renderExisting();
+      await screen.findByDisplayValue('Samba AD');
+
+      const titles = screen
+        .getAllByRole('heading')
+        .map((heading) => heading.textContent ?? '');
+      const connection = titles.indexOf('Connection');
+      expect(connection).toBeGreaterThanOrEqual(0);
+      expect(titles[connection + 1]).toBe('Configuration');
+    });
+
+    it('says nothing when a profile exists and an enabled rule grants an account', async () => {
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+        const url = String(input);
+        if (url.endsWith('/api/admin/targets/t1/profile')) {
+          return Promise.resolve(json({ correlationKeyTemplate: '%person.givenName%' }));
+        }
+        if (url.endsWith('/api/admin/targets/t1/rules')) {
+          return Promise.resolve(json({ rules: [{ id: 'r1', enabled: true, grantsAccount: true }] }));
+        }
+        return Promise.resolve(json(target()));
+      });
+      renderExisting();
+
+      expect(await screen.findByDisplayValue('Samba AD')).toBeVisible();
+      await waitFor(() => expect(screen.getByRole('link', { name: 'Account profile' })).toBeVisible());
+      expect(screen.queryByText(/has no account profile/)).toBeNull();
+      expect(screen.queryByText(/No business rule grants an account/)).toBeNull();
+    });
   });
 
   it('cannot change type once a target exists', async () => {

@@ -737,6 +737,33 @@ describe('reconcile — the container check', () => {
     expect(result.actual.has('person-1')).toBe(false);
   });
 
+  it('still reports container_missing when the target lists no containers at all', () => {
+    // Ruling P9: a container-placing target with an EMPTY list is not a flat
+    // target. The check does not disable itself on the input that should
+    // trigger it -- flatness is declared, never inferred.
+    const result = run({ existingContainers: new Set() });
+    expect(result.extraUnprocessable.get('person-1')?.kind).toBe('container_missing');
+    expect(result.actual.has('person-1')).toBe(false);
+  });
+
+  it('checks no container at all for a target that declares itself flat', () => {
+    // Entra ID and SCIM: the rendered container is irrelevant, nothing is
+    // missing, nothing vanishes, nothing is created.
+    const result = run({
+      placesAccountsInContainers: false,
+      existingContainers: new Set(),
+      desiredContainers: new Map([['person-1', 'OU=Nowhere,DC=acme,DC=test']]),
+      desiredContainerRows: new Map([
+        ['ou=nowhere,dc=acme,dc=test', { id: 'row-1', state: 'desired', dn: 'OU=Nowhere,DC=acme,DC=test' }],
+        ['ou=gone,dc=acme,dc=test', { id: 'row-2', state: 'live', dn: 'OU=Gone,DC=acme,DC=test' }],
+      ]),
+    });
+    expect(result.extraUnprocessable.size).toBe(0);
+    expect(result.actual.has('person-1')).toBe(true);
+    expect(result.containersToCreate.size).toBe(0);
+    expect(result.findings.map((f) => f.kind)).not.toContain('container_vanished');
+  });
+
   it('tolerates whitespace around the DNs on both sides', () => {
     // Both sides are trimmed: the profile's template and the connector's
     // reply are both strings somebody or something else composed, and a

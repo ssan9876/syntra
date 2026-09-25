@@ -79,6 +79,11 @@ export interface Form {
   // Native Entra ID only: where the ProvisionAction id is recorded on a
   // created user. `employeeId` or one of the fifteen extension attributes.
   entraCorrelationField: string;
+  // Native Entra ID only: the domain a new user's userPrincipalName is
+  // completed with. Blank sends nothing, which is right only when the tenant
+  // id is itself a domain. Not a transport setting: changing it never asks
+  // for the client secret again.
+  entraUserPrincipalDomain: string;
   schedule: string;
   enabled: boolean;
   autoApply: boolean;
@@ -119,6 +124,7 @@ export const BLANK: Form = {
   entraTenantId: '',
   entraClientId: '',
   entraCorrelationField: 'employeeId',
+  entraUserPrincipalDomain: '',
   schedule: '',
   enabled: true,
   autoApply: false,
@@ -154,6 +160,7 @@ export const OWNED_CONFIG_KEYS = [
   'tenantId',
   'clientId',
   'correlationField',
+  'userPrincipalDomain',
 ];
 
 export const ENTRA_CORRELATION_FIELDS = [
@@ -274,6 +281,8 @@ export function formFrom(target: Target): Form {
           ? auth.clientId
           : '',
     entraCorrelationField: text(config.correlationField, BLANK.entraCorrelationField),
+    entraUserPrincipalDomain:
+      target.type === 'entraId' ? text(config.userPrincipalDomain) : '',
     baseUrl: text(config.baseUrl, BLANK.baseUrl),
     url,
     tlsMode:
@@ -336,11 +345,15 @@ export function configFromForm(
     return { ...extraConfig, baseUrl: form.baseUrl.trim() };
   }
   if (form.type === 'entraId') {
+    // Lowercased: DNS is case-insensitive and the server accepts only the
+    // lowercase spelling. Absent when blank, never `''`, which is refused.
+    const domain = form.entraUserPrincipalDomain.trim().toLowerCase();
     return {
       ...extraConfig,
       tenantId: form.entraTenantId.trim(),
       clientId: form.entraClientId.trim(),
       correlationField: form.entraCorrelationField,
+      ...(domain === '' ? {} : { userPrincipalDomain: domain }),
     };
   }
   return {

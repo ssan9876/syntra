@@ -1071,6 +1071,12 @@ export const adTargetConnector: TargetConnector<Config> = {
     }
   },
 
+  // Active Directory is the reason the container check exists. Always true,
+  // and an empty `listContainers` from it is still an error, not a flat target.
+  placesAccountsInContainers(): boolean {
+    return true;
+  },
+
   async *listContainers(rawConfig): AsyncIterable<{ dn: string }> {
     const config = normalise(rawConfig);
     const client = await connect(config);

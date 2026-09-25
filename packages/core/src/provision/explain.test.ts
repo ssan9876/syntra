@@ -960,6 +960,8 @@ describe('previewAccountProfile', () => {
       taken: false,
       container: 'OU=Finance,OU=Users,DC=acme,DC=test',
       containerSource: 'template',
+      placesAccountsInContainers: true,
+      userPrincipalName: null,
       attributes: { displayName: 'Anna Novak', mail: 'anna@acme.test' },
       problems: [],
     });

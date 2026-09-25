@@ -267,6 +267,12 @@ export const httpTargetConnector: TargetConnector<Config> = {
     }
   },
 
+  // Only a document that describes containers places accounts in them. One
+  // that does not is a flat target, and the run skips the container check.
+  placesAccountsInContainers(raw): boolean {
+    return normalise(raw).document.container !== undefined;
+  },
+
   async *listContainers(raw): AsyncIterable<{ dn: string }> {
     const config = normalise(raw);
     const spec = config.document.container;

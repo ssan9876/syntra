@@ -49,6 +49,17 @@ describe('registry', () => {
     }
   });
 
+  it('has every connector declare whether it places accounts in containers', () => {
+    // Declared, never inferred from an empty container list: that inference
+    // is what dropped every person on a flat target as `container_missing`.
+    expect(adTargetConnector.placesAccountsInContainers({} as never)).toBe(true);
+    expect(entraTargetConnector.placesAccountsInContainers({} as never)).toBe(false);
+    expect(scimTargetConnector.placesAccountsInContainers({} as never)).toBe(false);
+    for (const type of TARGET_CONNECTOR_TYPES) {
+      expect(typeof targetConnectorFor(type).placesAccountsInContainers).toBe('function');
+    }
+  });
+
   it('refuses a type nothing implements, by name', () => {
     expect(() => targetConnectorFor('okta')).toThrow(UnknownTargetConnectorTypeError);
     expect(() => targetConnectorFor('okta')).toThrow(/okta/);

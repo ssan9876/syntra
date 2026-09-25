@@ -118,6 +118,7 @@ const mapping = (map: (record: SourceRecord) => SourceRecord) => ({
   discoverSchema: (c: never) => target.discoverSchema(c),
   listEntitlements: (c: never) => target.listEntitlements(c),
   listContainers: (c: never) => target.listContainers(c),
+  placesAccountsInContainers: (c: never) => target.placesAccountsInContainers(c),
   readEntitlementMembers: (c: never, dn: string) =>
     target.readEntitlementMembers(c, dn),
   write: (c: never, op: never) => target.write(c, op),
@@ -347,6 +348,41 @@ describe('previewProvisionRun', () => {
     expect(exceptions).toHaveLength(1);
     expect(exceptions[0]!.kind).toBe('container_missing');
     expect(exceptions[0]!.message).toContain('OU=Nowhere,DC=acme,DC=test');
+  });
+
+  it('still refuses every person when a container-placing target lists no containers at all', async () => {
+    // Ruling P9 again, on the one input a lazy check would skip itself on:
+    // the target DECLARES it places accounts in containers, so an empty list
+    // is a configuration error named per person -- never "flat, skip it".
+    await seedPerson('Anna', 'Novak', null);
+    target.containers.length = 0;
+    const run = await preview();
+    expect(await actionsOf(run.id)).toEqual([]);
+    const exceptions = await withTenant(tenantId, (tx) => tx.provisionException.findMany());
+    expect(exceptions.map((e) => e.kind)).toEqual(['container_missing']);
+  });
+
+  it('skips the container check entirely for a target that declares itself flat', async () => {
+    // Entra ID and SCIM: users live in one flat collection. The rendered
+    // container is irrelevant and nothing is checked against the empty list.
+    await seedPerson('Anna', 'Novak', null);
+    target.containers.length = 0;
+    target.placesInContainers = false;
+    await upsertAccountProfile(tenantId, null, targetId, {
+      correlationKeyTemplate: '%person.givenName.first%.%person.familyName%',
+      maxUniquenessAttempts: 20,
+      containerTemplate: 'OU=Nowhere,DC=acme,DC=test',
+      fallbackContainer: '/',
+      attributeTemplates: { displayName: '%person.givenName% %person.familyName%' },
+      initialPasswordPolicy: { length: 24 },
+      initialPasswordDelivery: 'vaultOnly',
+    });
+    const run = await preview();
+    expect((await actionsOf(run.id)).map((a) => a.actionType)).toEqual([
+      'create_account',
+      'grant_entitlement',
+    ]);
+    expect(await withTenant(tenantId, (tx) => tx.provisionException.findMany())).toEqual([]);
   });
 
   it('reserves no account for a person reconciliation refused', async () => {

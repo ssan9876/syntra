@@ -133,6 +133,11 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
   /** The containers this target holds. Read by `listContainers`, never inferred. */
   readonly containers: string[] = [];
   /**
+   * What `placesAccountsInContainers` answers. True, like Active Directory,
+   * unless a test sets it to model a flat target such as Entra ID or SCIM.
+   */
+  placesInContainers = true;
+  /**
    * Entitlement DNs whose membership cannot be read.
    *
    * Seedable so the run-service tests can exercise the path a truncated Active
@@ -230,6 +235,10 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
       if (object) members.push(object.dn);
     }
     return members;
+  }
+
+  placesAccountsInContainers(_config: FakeTargetConfig): boolean {
+    return this.placesInContainers;
   }
 
   async *listContainers(_config: FakeTargetConfig): AsyncIterable<{ dn: string }> {

@@ -64,6 +64,28 @@ export async function certifyTargetConnector<C>(
   if (!connection.ok) throw new Error(`connection test failed certification: ${connection.message}`);
   checks.push('connection');
 
+  // Placement is a declaration, and a run relies on it: a target that says it
+  // places accounts in containers but lists none would drop every person as
+  // `container_missing`, which is what flat targets did before they could say
+  // they were flat. Checked here because nothing else calls both.
+  const places = scenario.connector.placesAccountsInContainers(scenario.config);
+  if (typeof places !== 'boolean') {
+    throw new Error('placesAccountsInContainers must answer true or false');
+  }
+  if (places) {
+    let listed = 0;
+    for await (const container of scenario.connector.listContainers(scenario.config)) {
+      void container;
+      listed += 1;
+    }
+    if (listed === 0) {
+      throw new Error(
+        'the connector places accounts in containers but listed none, so a run could never create an account',
+      );
+    }
+  }
+  checks.push('container-placement');
+
   const created = await scenario.connector.write(scenario.config, scenario.create);
   const anchor = requireSuccess(created, 'create');
   if (!anchor) throw new Error('create succeeded without returning an anchor');

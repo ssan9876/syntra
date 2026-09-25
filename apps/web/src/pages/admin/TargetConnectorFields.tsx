@@ -19,10 +19,12 @@ export function EntraConnectorFields({
   clientId,
   credential,
   correlationField,
+  userPrincipalDomain,
   onTenantIdChange,
   onClientIdChange,
   onCredentialChange,
   onCorrelationFieldChange,
+  onUserPrincipalDomainChange,
   mark,
 }: {
   isNew: boolean;
@@ -30,10 +32,12 @@ export function EntraConnectorFields({
   clientId: string;
   credential: string;
   correlationField: string;
+  userPrincipalDomain: string;
   onTenantIdChange(value: string): void;
   onClientIdChange(value: string): void;
   onCredentialChange(value: string): void;
   onCorrelationFieldChange(value: string): void;
+  onUserPrincipalDomainChange(value: string): void;
   mark(field: string): { error?: string };
 }) {
   return (
@@ -52,6 +56,21 @@ export function EntraConnectorFields({
         autoComplete="off"
         {...mark('clientId')}
       />
+      <Field
+        label="User principal name domain"
+        value={userPrincipalDomain}
+        onChange={onUserPrincipalDomainChange}
+        autoComplete="off"
+        {...mark('userPrincipalDomain')}
+      />
+      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
+        The domain new users sign in with, e.g. contoso.com — must be a
+        verified domain in the tenant; leave empty only if Tenant ID is itself
+        a domain. A new account is named{' '}
+        <code>&lt;account name&gt;@&lt;this domain&gt;</code>. Entra ID has no
+        containers, so the account profile&apos;s container settings are
+        ignored for this target.
+      </p>
       <Field
         label="Application client secret"
         type="password"

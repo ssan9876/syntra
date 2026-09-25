@@ -110,6 +110,16 @@ export const entraTargetConfigSchema = z
   .object({
     tenantId: directoryString,
     clientId: directoryString,
+    /**
+     * The domain a new user's userPrincipalName is completed with, e.g.
+     * `contoso.com`. Lowercase host name only: no `@`, scheme or path.
+     */
+    userPrincipalDomain: directoryString
+      .regex(/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, {
+        message:
+          'userPrincipalDomain must be a lowercase domain name such as contoso.com, with no @, scheme or path',
+      })
+      .optional(),
     graphBaseUrl: directoryString.url().optional(),
     tokenUrl: directoryString.url().optional(),
     allowPrivateAddresses: z.boolean().optional(),

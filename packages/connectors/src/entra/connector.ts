@@ -15,7 +15,7 @@ import {
   correlationFilterPath,
   correlationSelect,
   resolveEntraConfig,
-  tenantIsDomain,
+  entraUserPrincipalName,
   type EntraConnection,
   type EntraCorrelationField,
   type EntraManagedAttribute,
@@ -475,15 +475,7 @@ function principalName(
   connection: EntraConnection,
   correlationKey: string,
 ): { upn: string } | { message: string } {
-  const key = correlationKey.trim();
-  if (key === '') return { message: 'the correlation key is blank' };
-  if (key.includes('@')) return { upn: key };
-  if (tenantIsDomain(connection.tenantId)) return { upn: `${key}@${connection.tenantId}` };
-  return {
-    message:
-      `the correlation key "${key}" has no domain and tenantId is a directory id, not a domain; ` +
-      'either make the correlation key template produce a full userPrincipalName or set tenantId to a verified domain',
-  };
+  return entraUserPrincipalName(connection, correlationKey);
 }
 
 function managedBody(
@@ -659,6 +651,12 @@ export const entraTargetConnector: EntraTargetConnector = {
   // Entra has no organizational units. An empty set from a reachable target
   // is the honest answer, and it is how `httpJson` spells the same thing.
   async *listContainers(): AsyncIterable<{ dn: string }> {},
+
+  // Declared rather than inferred from the empty list above: users live in
+  // one flat directory, so the run skips the container check for this target.
+  placesAccountsInContainers(): boolean {
+    return false;
+  },
 
   async readEntitlementMembers(raw, entitlementDn): Promise<string[]> {
     const connection = resolveEntraConfig(raw);

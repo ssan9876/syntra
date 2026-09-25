@@ -36,6 +36,21 @@ export class ContainerNotInTargetError extends Error {
   }
 }
 
+/**
+ * The target places accounts in no container at all -- Entra ID, SCIM, a
+ * document-driven target whose document describes none. There is nothing to
+ * move an account to, and saying so is better than an empty list and a
+ * "that container does not exist" for every name somebody tries.
+ */
+export class TargetHasNoContainersError extends Error {
+  constructor() {
+    super(
+      'this target has no containers: it keeps accounts in one flat directory, so an account cannot be moved within it',
+    );
+    this.name = 'TargetHasNoContainersError';
+  }
+}
+
 export class NoCorrelationKeyError extends Error {
   constructor() {
     super(
@@ -217,6 +232,12 @@ export async function targetContainers(
   if (!config) throw new Error('target configuration or credential missing');
 
   const connector = targetConnectorFor(target.type);
+  // Declared by the connector, never inferred from an empty list below: an
+  // Active Directory that lists nothing is a misconfiguration, not a flat
+  // target, and still answers with its (empty) list.
+  if (!connector.placesAccountsInContainers(config as never)) {
+    throw new TargetHasNoContainersError();
+  }
   const containers: string[] = [];
   for await (const container of connector.listContainers(config as never)) {
     containers.push(container.dn);

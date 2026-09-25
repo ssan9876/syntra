@@ -10,6 +10,14 @@ interface Preview {
   correlationKey: string | null;
   taken: boolean;
   container: string | null;
+  /**
+   * False for a flat target (Entra ID, SCIM): it places accounts in no
+   * container, so `container` is null and the container fields are ignored.
+   * Optional so an older API that does not send it reads as "places".
+   */
+  placesAccountsInContainers?: boolean;
+  /** The full UPN an Entra ID account would get; null for other targets. */
+  userPrincipalName?: string | null;
   attributes: Record<string, string>;
   problems: string[];
 }
@@ -478,6 +486,13 @@ function AccountProfileEditor() {
             onChange={(v) => set('fallbackContainer', v)}
             {...mark('fallbackContainer')}
           />
+          <p className="-mt-2 text-sm text-ink-muted">
+            Containers are where Active Directory places an account (and an HTTP
+            target whose document describes containers). Entra ID and SCIM keep
+            accounts in one flat directory, so both container settings are
+            ignored for them; they are still required, and <code>/</code> is the
+            conventional value.
+          </p>
         </Panel>
 
         <Panel
@@ -645,8 +660,18 @@ function AccountProfileEditor() {
                     </span>
                   )}
                 </dd>
+                {preview.userPrincipalName && (
+                  <>
+                    <dt className="mt-3 font-medium text-ink">User principal name</dt>
+                    <dd className="font-mono text-ink">{preview.userPrincipalName}</dd>
+                  </>
+                )}
                 <dt className="mt-3 font-medium text-ink">Container</dt>
-                <dd className="font-mono text-ink">{preview.container ?? '—'}</dd>
+                {preview.placesAccountsInContainers === false ? (
+                  <dd className="text-muted">Not used: this target has no containers.</dd>
+                ) : (
+                  <dd className="font-mono text-ink">{preview.container ?? '—'}</dd>
+                )}
                 {Object.entries(preview.attributes).map(([name, value]) => (
                   <div key={name}>
                     <dt className="mt-3 font-medium text-ink">{name}</dt>
