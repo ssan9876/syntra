@@ -324,7 +324,18 @@ export function TargetsPage() {
                         </Status>
                       </td>
                       <td className="max-sm:hidden">
-                        {target.schedule ?? 'By hand only'}
+                        {/* A link to where the schedule is set, and a title
+                            saying so: "By hand only" read as a verdict
+                            somebody had to go and find the cure for. */}
+                        {target.schedule ?? (
+                          <Link
+                            to={`/admin/targets/${target.id}`}
+                            title="No schedule is set. Open the target and enter a cron expression under Schedule and enforcement to run it automatically."
+                            className="text-muted underline-offset-2 hover:text-ink hover:underline"
+                          >
+                            By hand only
+                          </Link>
+                        )}
                       </td>
                       <td>
                         {when(target.lastRunAt)}

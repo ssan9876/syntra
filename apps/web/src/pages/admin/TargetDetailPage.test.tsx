@@ -4,6 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { TargetDetailPage } from './TargetDetailPage.js';
 
+const granted = new Set<string>();
+
+vi.mock('../../session/SessionProvider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../session/SessionProvider.js')>()),
+  useCan: () => (permission: string) => granted.has(permission),
+}));
+
 const json = (body: unknown) =>
   new Response(JSON.stringify(body), {
     status: 200,
@@ -24,6 +31,7 @@ const renderExisting = () =>
     <MemoryRouter initialEntries={['/admin/targets/t1']}>
       <Routes>
         <Route path="/admin/targets/:id" element={<TargetDetailPage />} />
+        <Route path="/admin/targets/:id/runs" element={<p>Runs for this target</p>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -64,6 +72,7 @@ const target = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  granted.clear();
 });
 
 describe('TargetDetailPage', () => {
@@ -896,5 +905,112 @@ describe('TargetDetailPage', () => {
     expect(screen.getByRole('button', { name: 'Bind DN: is required' })).toBeVisible();
     // And each stage says how many of its fields need fixing.
     expect(screen.getAllByText('1 to fix')).toHaveLength(2);
+  });
+
+  it('does not offer an example cron expression as though it were the saved schedule', async () => {
+    // The report this answers: an empty box showing `0 3 * * *` was read as
+    // a target scheduled nightly, and the overview then said "By hand only".
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target()));
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    const schedule = screen.getByLabelText('Schedule');
+    expect(schedule).toHaveValue('');
+    expect(schedule).toHaveAttribute('placeholder', 'Blank — runs only when started by hand');
+    // The zone is the scheduler's, not the browser's: pg-boss's default.
+    expect(screen.getByText(/A cron expression, evaluated in UTC/)).toBeVisible();
+  });
+
+  it('warns that automatic apply does nothing while there is no schedule, and only then', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target({ autoApply: true })));
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    const warning = /no schedule, so no scheduled run will happen/;
+    expect(screen.getByText(warning)).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /Apply scheduled runs automatically/ })).toHaveAccessibleDescription(warning);
+
+    await userEvent.type(screen.getByLabelText('Schedule'), '0 3 * * *');
+    expect(screen.queryByText(warning)).toBeNull();
+  });
+
+  it('starts a run from the target and goes to its runs', async () => {
+    granted.add('provision.manage');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/runs') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(JSON.stringify({ jobId: 'j1' }), {
+            status: 202,
+            headers: { 'content-type': 'application/json' },
+          }) as never,
+        );
+      }
+      return Promise.resolve(json(target()));
+    });
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    expect(await screen.findByText('Runs for this target')).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/targets/t1/runs',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('says why a run could not be started, and stays on the target', async () => {
+    granted.add('provision.manage');
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/runs') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: 503,
+              title: 'Background jobs are not running',
+              detail: 'the run could not be enqueued; the API is up but the job scheduler is not',
+            }),
+            { status: 503, headers: { 'content-type': 'application/problem+json' } },
+          ) as never,
+        );
+      }
+      return Promise.resolve(json(target()));
+    });
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    expect(await screen.findByText(/the job scheduler is not/)).toBeVisible();
+    expect(screen.queryByText('Runs for this target')).toBeNull();
+  });
+
+  it('holds Run now on a disabled target and says why', async () => {
+    // The worker drops a disabled target's job without recording a run, so
+    // an enabled button here would appear to do nothing at all.
+    granted.add('provision.manage');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target({ enabled: false })));
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    const button = screen.getByRole('button', { name: 'Run now' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', expect.stringMatching(/disabled, so a run would not start/));
+  });
+
+  it('offers Run now only to somebody the API would let start one', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json(target()));
+    renderExisting();
+
+    await screen.findByDisplayValue('Samba AD');
+    expect(screen.queryByRole('button', { name: 'Run now' })).toBeNull();
+  });
+
+  it('has nothing to run before the target exists', () => {
+    granted.add('provision.manage');
+    vi.spyOn(globalThis, 'fetch');
+    renderNew();
+
+    expect(screen.queryByRole('button', { name: 'Run now' })).toBeNull();
   });
 });

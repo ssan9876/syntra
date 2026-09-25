@@ -197,6 +197,17 @@ describe('TargetsPage', () => {
     expect(screen.getAllByText('Never run')).toHaveLength(2);
   });
 
+  it('points "By hand only" at the target, saying where a schedule is set', async () => {
+    // Read as a verdict with no route to changing it: somebody who believed
+    // their target was scheduled had nothing here telling them how it would be.
+    mockFetch([target({ schedule: null })]);
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'By hand only' });
+    expect(link).toHaveAttribute('href', '/admin/targets/t1');
+    expect(link).toHaveAttribute('title', expect.stringMatching(/cron expression under Schedule and enforcement/));
+  });
+
   it('does not call an unscheduled target late however long it has been', async () => {
     mockFetch([target({ schedule: null, lastRunAt: hoursAgo(24 * 90) })]);
     renderPage();

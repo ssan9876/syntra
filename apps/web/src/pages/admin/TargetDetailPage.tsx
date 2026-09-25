@@ -16,6 +16,7 @@ import {
   useToast,
 } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
+import { useCan } from '../../session/SessionProvider.js';
 import { fieldErrors, useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { EntraConnectorFields, HttpConnectorFields } from './TargetConnectorFields.js';
@@ -135,6 +136,7 @@ export function TargetDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
+  const can = useCan();
 
   /**
    * The target this form is editing when the URL does not yet name one.
@@ -169,7 +171,7 @@ export function TargetDetailPage() {
   const [invalid, setInvalid] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | 'save' | 'test'>(null);
+  const [busy, setBusy] = useState<null | 'save' | 'test' | 'run'>(null);
   const [result, setResult] = useState<TestResult | null>(null);
   const gaps = useConfigurationGaps(isNew ? null : targetId);
   // The draft the result above was produced from. See `testStale`.
@@ -372,6 +374,29 @@ export function TargetDetailPage() {
     }
   }
 
+  /**
+   * The runs page's Run now, from the target itself, so a target that has
+   * just been set up can be tried without first finding the page that runs
+   * it. The run is enqueued, not performed, so the runs page — which polls
+   * for it — is where this lands.
+   */
+  async function onRun() {
+    setBusy('run');
+    setProblem(null);
+    try {
+      await api(`/api/admin/targets/${targetId}/runs`, { method: 'POST' });
+      navigate(`/admin/targets/${targetId}/runs`);
+    } catch (cause) {
+      setProblem(
+        cause instanceof ApiError
+          ? (cause.problem.detail ?? cause.problem.title)
+          : 'The run could not be started.',
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (!isNew && loading && !data) {
     return (
@@ -405,7 +430,31 @@ export function TargetDetailPage() {
 
   return (
     <>
-      <PageHeader title={isNew ? 'New target' : form.name || 'Target system'} />
+      <PageHeader
+        title={isNew ? 'New target' : form.name || 'Target system'}
+        actions={
+          // The same permission the API asks of `POST .../runs`. Read off
+          // the SAVED target, not the form: an unticked-but-unsaved Enabled
+          // has not stopped anything yet. A disabled target's job is dropped
+          // by the worker without a run being recorded, so the button is
+          // held and says why rather than appearing to do nothing.
+          !isNew && data && can('provision.manage') ? (
+            <Button
+              variant="primary"
+              onClick={() => void onRun()}
+              loading={busy === 'run'}
+              disabled={!!busy || !data.enabled}
+              title={
+                data.enabled
+                  ? undefined
+                  : 'This target is disabled, so a run would not start. Enable it and save first.'
+              }
+            >
+              Run now
+            </Button>
+          ) : undefined
+        }
+      />
 
       <div className="space-y-6">
         {notice && <Alert tone="info">{notice}</Alert>}
@@ -687,9 +736,26 @@ export function TargetDetailPage() {
               name="schedule"
               value={form.schedule}
               onChange={(v) => set('schedule', v)}
-              placeholder="0 3 * * *"
+              // Not an example cron expression: an administrator read one here
+              // as the target's saved schedule, and the overview then said
+              // "By hand only".
+              placeholder="Blank — runs only when started by hand"
               {...mark('schedule')}
             />
+            {/*
+              Permanent, unlike the warnings the form controls carry: a cron
+              expression is not something a label can explain, and the zone
+              it fires in is not something a reader can guess. UTC because
+              `boss.schedule` is called without a `tz`, and pg-boss defaults
+              it to UTC — the same zone `cronExpression` validates in.
+            */}
+            <p className="text-sm text-muted sm:col-span-2">
+              A cron expression, evaluated in UTC: <code>0 * * * *</code> runs
+              hourly, <code>*/15 * * * *</code> every 15 minutes,{' '}
+              <code>0 3 * * *</code> daily at 03:00 UTC. Leave it blank to run
+              this target only when somebody starts a run, in which case
+              applying scheduled runs automatically does nothing.
+            </p>
             <Check
               className="sm:col-span-2"
               checked={form.enabled}
@@ -701,6 +767,11 @@ export function TargetDetailPage() {
               checked={form.autoApply}
               onChange={(v) => set('autoApply', v)}
               label="Apply scheduled runs automatically"
+              warning={
+                form.autoApply && form.schedule.trim() === ''
+                  ? 'There is no schedule, so no scheduled run will happen for this to apply.'
+                  : undefined
+              }
             />
             <Field
               label="Maximum attempts per action"
