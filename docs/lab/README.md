@@ -20,10 +20,10 @@ Addresses and names are from the reference build; substitute your own.
 
 | Role | Reference value |
 |---|---|
-| Proxmox host | `192.168.88.4` |
-| Syntra | `192.168.88.20:3000`, published at `syntra.example.com` |
-| Domain controller | `192.168.88.21` |
-| Tunnel connector | `192.168.88.200` |
+| Proxmox host | `192.0.2.4` |
+| Syntra | `192.0.2.20:3000`, published at `syntra.example.com` |
+| Domain controller | `192.0.2.21` |
+| Tunnel connector | `192.0.2.200` |
 | AD forest | `example.local` (NetBIOS `EXAMPLE`), DC named `AD-DC` |
 | Service account | `svc-syntra` |
 
@@ -68,7 +68,7 @@ mean Windows is up; 389, 88 and 53 mean the forest exists.
 
 ```bash
 for p in 389 636 53 88 445; do
-  timeout 2 bash -c "echo >/dev/tcp/192.168.88.21/$p" 2>/dev/null \
+  timeout 2 bash -c "echo >/dev/tcp/192.0.2.21/$p" 2>/dev/null \
     && echo "  $p open" || echo "  $p closed"
 done
 ```
@@ -104,7 +104,7 @@ Server 2022** and is enough to drive everything else without a rebuild.
 ```python
 # ps.py — pipe PowerShell in on stdin
 import sys, winrm
-s = winrm.Session("http://192.168.88.21:5985/wsman",
+s = winrm.Session("http://192.0.2.21:5985/wsman",
                   auth=(r"EXAMPLE\Administrator", "<DOMAIN_ADMIN_PW>"),
                   transport="ntlm")
 r = s.run_ps(sys.stdin.read())
@@ -196,7 +196,7 @@ pnpm build                       # vite build -> apps/web/dist
 # .env
 PUBLIC_URL=https://syntra.example.com
 WEB_ROOT=/root/syntra/apps/web/dist
-TRUST_PROXY=192.168.88.200
+TRUST_PROXY=192.0.2.200
 NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/example-ca.crt
 ```
 
@@ -220,7 +220,7 @@ journalctl -u syntra -b | grep -ciE "scheduler failed|ECONNREFUSED"   # expect 0
 
 ### Publishing it
 
-Point a Cloudflare tunnel (or any reverse proxy) at `192.168.88.20:3000` over
+Point a Cloudflare tunnel (or any reverse proxy) at `192.0.2.20:3000` over
 **plain HTTP**, with the **Host header left untouched**. Two mistakes produce
 an identical `Request failed` at the connector: an `https://` service URL when
 the origin speaks HTTP, and a stale origin address.
@@ -258,8 +258,8 @@ treats every server on a link as equivalent for every name, picks one as its
 Current DNS Server and switches between them freely.
 
 ```
-       DNS Servers: 192.168.88.21 1.1.1.1
-Current DNS Server: 1.1.1.1              <- and every ssander.local lookup NXDOMAINs
+       DNS Servers: 192.0.2.21 1.1.1.1
+Current DNS Server: 1.1.1.1              <- and every example.local lookup NXDOMAINs
 ```
 
 Whenever it settles on the public one, LDAP and Kerberos lookups fail with
@@ -268,8 +268,8 @@ what it cannot answer, so name it alone:
 
 ```yaml
       nameservers:
-        addresses: [192.168.88.21]        # the DC, and only the DC
-        search: [ssander.local]
+        addresses: [192.0.2.21]        # the DC, and only the DC
+        search: [example.local]
 ```
 
 Losing the public resolver loses nothing real. If the DC is down, a host whose
@@ -941,8 +941,8 @@ $uacGuid  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"   # userAccountControl
 $userGuid = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"   # the user class
 
 foreach ($ouDn in @(
-  "OU=Company,DC=ssander,DC=local",   # what the directory source reads
-  "OU=Syntra,DC=ssander,DC=local"     # what Provision writes to
+  "OU=Company,DC=example,DC=local",   # what the directory source reads
+  "OU=Syntra,DC=example,DC=local"     # what Provision writes to
 )) {
   $ou  = [ADSI]"LDAP://$ouDn"
   $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
@@ -959,7 +959,7 @@ rewrite everybody's group memberships, which is not what it is for.
 To check it took:
 
 ```powershell
-(Get-Acl "AD:OU=Company,DC=ssander,DC=local").Access |
+(Get-Acl "AD:OU=Company,DC=example,DC=local").Access |
   Where-Object { $_.IdentityReference -like "*svc-syntra*" }
 ```
 
@@ -1169,7 +1169,7 @@ cat /opt/syntra/var/update.status            # what it is doing right now
 
 ## Org-unit-driven placement: the first run
 
-The `ssander.local (AD)` target runs with `autoApply: true` and
+The `example.local (AD)` target runs with `autoApply: true` and
 `archiveAccountThresholdPercent: 2`. Container MOVES share the archive axis
 (`guard.ts`, the `update_account` population), and the tenant holds four
 people, so ONE account move is 25% and the first run will SKIP rather than
@@ -1178,7 +1178,7 @@ apply.
 That is the guard working, not a fault — but it presents as a mysterious
 no-op, so do it in this order:
 
-1. **Materialise `Users` first.** `OU=Users,OU=Syntra,DC=ssander,DC=local`
+1. **Materialise `Users` first.** `OU=Users,OU=Syntra,DC=example,DC=local`
    already exists in AD, so it adopts and no container is created. This proves
    the placement half without exercising `create_container` at all.
 2. **Assign one person and PREVIEW.** Confirm the plan proposes the move you

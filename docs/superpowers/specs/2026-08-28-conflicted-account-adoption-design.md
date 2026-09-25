@@ -146,8 +146,8 @@ The POST body carries an explicit second answer:
 
 The default refuses, naming the base DN:
 
-> the account `ssander` was refused as already existing, and no object with that
-> name is inside `OU=Users,OU=Syntra,DC=ssander,DC=local`. Either it is elsewhere
+> the account `jdoe` was refused as already existing, and no object with that
+> name is inside `OU=Users,OU=Syntra,DC=example,DC=local`. Either it is elsewhere
 > in the domain where this target cannot see it — move it into the managed
 > subtree, or widen the target's base DN — or it has since been deleted, in which
 > case the account can be created again.

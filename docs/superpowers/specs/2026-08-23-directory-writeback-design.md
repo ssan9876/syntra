@@ -10,7 +10,7 @@
 
 Syntra reads Active Directory and never writes back to it. Two visible consequences:
 
-- Self-service password change writes an Argon2id hash into Syntra's own `PasswordCredential` and stops there. A directory-sourced user ends up with two passwords: one for the portal, one for Windows. The lab demonstrates this right now — `ssander` signs into Syntra with one string and into the domain with another.
+- Self-service password change writes an Argon2id hash into Syntra's own `PasswordCredential` and stops there. A directory-sourced user ends up with two passwords: one for the portal, one for Windows. The lab demonstrates this right now — `jdoe` signs into Syntra with one string and into the domain with another.
 - The admin console refuses to deactivate a user carrying a `sourceId`, offering the text *"managed by a directory source"* instead of a button.
 
 The second refusal is honest about a real constraint rather than arbitrary. `diff.ts:104` proposes `reactivate_user` for **any** matched object whose Syntra status is not `active`:
@@ -351,7 +351,7 @@ The ladder consumes this unchanged. `entitlementRevocationDelayDays` and `archiv
 - Return `unsupported` from `setEnabled` → the refusal test must fail rather than silently pass.
 
 **Lab verification** — the end that actually counts:
-1. Change `ssander`'s password in the portal; confirm the **same** string then authenticates against AD over LDAPS, closing the divergence the lab is sitting in today.
+1. Change `jdoe`'s password in the portal; confirm the **same** string then authenticates against AD over LDAPS, closing the divergence the lab is sitting in today.
 2. Wrong current password → refused, and AD's `badPwdCount` incremented (lockout is being honoured, not bypassed).
 3. Disable a test user directly in AD; run a sync; confirm Syntra moves them to `inactive` and that their portal login and Snipe-IT SSO both stop working. This is §1.1, demonstrated end to end.
 4. Deactivate a directory-managed user from the console; confirm the AD account is disabled within seconds, the next sync leaves them deactivated rather than resurrecting them, and the ladder stamps the archive OU and the reap date.

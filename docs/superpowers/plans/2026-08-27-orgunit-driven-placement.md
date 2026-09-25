@@ -240,7 +240,7 @@ Create `packages/core/src/provision/org-unit-container-service.test.ts`:
 import { describe, expect, it } from 'vitest';
 import { validateContainerDn } from './org-unit-container-service.js';
 
-const base = 'OU=Users,OU=Syntra,DC=ssander,DC=local';
+const base = 'OU=Users,OU=Syntra,DC=example,DC=local';
 
 describe('validateContainerDn', () => {
   it('accepts a DN one level below the base', () => {
@@ -256,7 +256,7 @@ describe('validateContainerDn', () => {
     // The failure this closes: a materialisation pointing at CN=Users, or at
     // another domain's subtree, would have Provision writing where the target
     // configuration never said it could.
-    const result = validateContainerDn('CN=Users,DC=ssander,DC=local', base);
+    const result = validateContainerDn('CN=Users,DC=example,DC=local', base);
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.reason).toBe('outside_base');
@@ -285,7 +285,7 @@ describe('validateContainerDn', () => {
     // `OU=Evil,OU=NotUsers,OU=Syntra,...` ends with a STRING that contains the
     // base's tail but is not below it. A naive endsWith() accepts this.
     const result = validateContainerDn(
-      'OU=Evil,OU=XUsers,OU=Syntra,DC=ssander,DC=local',
+      'OU=Evil,OU=XUsers,OU=Syntra,DC=example,DC=local',
       base,
     );
     expect(result.ok).toBe(false);
@@ -1850,7 +1850,7 @@ Append to `docs/lab/README.md`:
 ```markdown
 ## Org-unit-driven placement, first run
 
-The `ssander.local (AD)` target runs `autoApply: true` with
+The `example.local (AD)` target runs `autoApply: true` with
 `archiveAccountThresholdPercent: 2`. Container MOVES share the archive axis
 (`guard.ts:168`), and the tenant holds four people, so ONE account move is 25%
 and the first run will skip rather than apply.
