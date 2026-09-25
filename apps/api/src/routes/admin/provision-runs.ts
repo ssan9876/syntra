@@ -390,10 +390,12 @@ export async function registerAdminProvisionRunRoutes(
         throw heldActionProblem(cause);
       }
       // After the commit. A failure to enqueue leaves the approval standing,
-      // which the next scheduled run honours.
+      // which the next scheduled run honours. `requested`, as Run now is: a
+      // person asked for this run, so a plan left `previewed` on the target
+      // is superseded rather than making the approval wait behind it.
       const jobId = await scheduler.enqueue(
         PROVISION_JOB,
-        provisionJobPayload(request.tenantId, ref.id),
+        provisionJobPayload(request.tenantId, ref.id, { requested: true }),
       );
       return reply.code(202).send({ approval, jobId, runRequested: true });
     },
