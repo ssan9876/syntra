@@ -65,6 +65,9 @@ export function targetConnectorCapabilities(type: string): ConnectorCapabilities
   return capabilities[type] ?? unavailable;
 }
 
+/** The attribute names `observedEnabled` reads an enabled state from. */
+const ENABLED_SPELLINGS = new Set(['active', 'enabled', 'accountenabled']);
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -87,9 +90,20 @@ export function capabilitiesForTarget(type: string, config: unknown): ConnectorC
   if (!isObject(document)) return { ...unavailable, available: base.available };
   const account = isObject(document.account) ? document.account : {};
   const entitlement = isObject(document.entitlement) ? document.entitlement : {};
+  // Read-back is complete when every entitlement's membership can be read AND
+  // the account's enabled state is observable. A document with no
+  // entitlements at all has nothing to read incompletely, so it needs only
+  // the second -- a field mapped to one of the spellings `observedEnabled`
+  // understands.
+  const fields = isObject(account.fields) ? Object.values(account.fields) : [];
+  const enabledObservable = fields.some(
+    (name) => typeof name === 'string' && ENABLED_SPELLINGS.has(name.toLowerCase()),
+  );
   return {
     available: true,
-    readBack: isObject(entitlement.members),
+    readBack: isObject(document.entitlement)
+      ? isObject(entitlement.members)
+      : enabledObservable,
     createAccount:
       isObject(account.create) &&
       typeof account.correlationAt === 'string' &&

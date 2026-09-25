@@ -1,4 +1,5 @@
 import { guardedFetch } from '../net/guarded-fetch.js';
+import { REDACTED, scrubText } from '../observability/redact.js';
 import type { WriteFailure } from '../types.js';
 import type { ListSpec, ResolvedHttpConnectorDocument } from './document.js';
 
@@ -225,6 +226,72 @@ export function classify(
   return 'rejected';
 }
 
+/** The longest failure message a body rule surfaces, after redaction. */
+const BODY_MESSAGE_MAX = 300;
+
+/** Every string in a target's `messages` value, depth-first and bounded. */
+function flattenMessages(value: unknown, out: string[], depth = 0): void {
+  if (out.length >= 20 || depth > 4) return;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text !== '') out.push(text);
+    return;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    out.push(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) flattenMessages(entry, out, depth + 1);
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    // Values only. The keys of a validation map are field names, and every
+    // message this has been seen against already names its field.
+    for (const entry of Object.values(value)) flattenMessages(entry, out, depth + 1);
+  }
+}
+
+/**
+ * The failure a `2xx` body declares, or undefined when it declares none.
+ *
+ * `secrets` are values this request carried that must never come back out —
+ * the vault credential, an initial password — and are removed by literal
+ * match before the shape-based scrub, because a password has no shape a
+ * pattern can recognise. The request body itself is never read here.
+ */
+export function bodyFailure(
+  document: ResolvedHttpConnectorDocument,
+  body: unknown,
+  secrets: readonly (string | undefined)[] = [],
+): { failure: WriteFailure; message: string } | undefined {
+  const rule = document.failures.body;
+  if (rule === undefined) return undefined;
+  const marker = readPath(body, rule.at);
+  if (marker === undefined || marker === null || typeof marker === 'object') return undefined;
+  if (String(marker) !== rule.equals) return undefined;
+
+  const parts: string[] = [];
+  if (rule.messageAt !== undefined) flattenMessages(readPath(body, rule.messageAt), parts);
+  const raw = parts.join('; ');
+  const lowered = raw.toLocaleLowerCase();
+  const matches = (fragments: readonly string[]) =>
+    fragments.some((fragment) => lowered.includes(fragment.toLocaleLowerCase()));
+  const failure: WriteFailure = matches(rule.conflictWhen)
+    ? 'conflict'
+    : matches(rule.notFoundWhen)
+      ? 'not_found'
+      : 'rejected';
+
+  let text = raw;
+  for (const secret of secrets) {
+    // Four characters or more: a shorter "secret" would redact ordinary words.
+    if (secret !== undefined && secret.length >= 4) text = text.split(secret).join(REDACTED);
+  }
+  const explained = text === '' ? '' : `: ${scrubText(text, BODY_MESSAGE_MAX)}`;
+  return { failure, message: `the target refused the request${explained}` };
+}
+
 /** `Retry-After` in seconds, where the target sent one. */
 export function retryAfterMs(headers: Headers): number | undefined {
   const value = headers.get('retry-after');
@@ -289,6 +356,8 @@ export async function* paginate(
     if (response.status >= 400) {
       throw new PagingError(`${spec.path} answered HTTP ${response.status}`);
     }
+    const refused = bodyFailure(document, response.body, [credential]);
+    if (refused) throw new PagingError(`${spec.path}: ${refused.message}`);
 
     const items = spec.itemsAt ? readPath(response.body, spec.itemsAt) : response.body;
     if (!Array.isArray(items)) {
@@ -303,10 +372,28 @@ export async function* paginate(
     if (spec.paging.style === 'none') return;
 
     if (spec.paging.style === 'offset') {
-      // A short page is the end. A full one might be, and asking once more is
-      // the only way to find out — an offset API has no other terminator.
-      if (items.length < spec.paging.pageSize) return;
       offset += items.length;
+      if (spec.paging.totalAt !== undefined) {
+        const stated = Number(readPath(response.body, spec.paging.totalAt));
+        if (!Number.isInteger(stated) || stated < 0) {
+          throw new PagingError(`${spec.path} has no item count at "${spec.paging.totalAt}"`);
+        }
+        // Each page's own count: a collection that shrinks while it is walked
+        // ends where it now ends, rather than failing on an empty page it was
+        // told to expect.
+        const total = stated;
+        if (offset >= total) return;
+        if (items.length === 0) {
+          throw new PagingError(
+            `${spec.path} stopped answering at ${offset} of ${total} items; refusing to return a partial list`,
+          );
+        }
+        continue;
+      }
+      // A short page is the end. A full one might be, and asking once more is
+      // the only way to find out — an offset API with no stated total has no
+      // other terminator.
+      if (items.length < spec.paging.pageSize) return;
       continue;
     }
 

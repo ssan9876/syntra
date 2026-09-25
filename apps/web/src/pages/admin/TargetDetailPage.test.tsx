@@ -525,6 +525,41 @@ describe('TargetDetailPage', () => {
     });
   });
 
+  it('offers Snipe-IT and fills its document, asking for an API key and the host', async () => {
+    const document = {
+      name: 'Snipe-IT',
+      version: 1,
+      baseUrl: 'https://{instance}/api/v1',
+      auth: { type: 'bearer' },
+      headers: { 'User-Agent': 'Syntra-Provisioning/1' },
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>
+      Promise.resolve(
+        String(input).includes('/connector-documents')
+          ? json({
+              documents: [
+                { key: 'entra-id', name: 'Microsoft Entra ID', document: { name: 'Microsoft Entra ID', version: 1 } },
+                { key: 'snipe-it', name: 'Snipe-IT', document },
+              ],
+            })
+          : json(target()),
+      ),
+    );
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /^snipe-it$/i }));
+
+    expect(screen.getByLabelText(/^name$/i)).toHaveValue('Snipe-IT');
+    expect(screen.getByLabelText(/personal api key/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/directory \(tenant\) id/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/with your snipe-it host/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /edit the connector document/i }));
+    const editor = screen.getByLabelText(/connector document/i) as HTMLTextAreaElement;
+    expect(JSON.parse(editor.value)).toEqual(document);
+  });
+
   it('names the target after the system that was picked', async () => {
     const document = { name: 'Microsoft Entra ID', version: 1 };
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) =>

@@ -3,6 +3,7 @@ import {
   BUILTIN_CONNECTOR_DOCUMENTS,
   entraIdDocument,
   googleWorkspaceDocument,
+  snipeItDocument,
 } from './documents/index.js';
 import { httpConnectorDocument, type HttpConnectorDocument } from './document.js';
 import { httpTargetConnector } from './connector.js';
@@ -252,6 +253,7 @@ describe('the documents that ship with the product', () => {
     // a disable under another name would not be.
     expect(entraIdDocument.account.archive).toBeUndefined();
     expect(googleWorkspaceDocument.account.archive).toBeUndefined();
+    expect(snipeItDocument.account.archive).toBeUndefined();
   });
 });
 
@@ -714,5 +716,151 @@ describe('auth', () => {
     }
     expect(message).toBe('the token endpoint answered HTTP 401 (AADSTS7000215)');
     expect(message).not.toContain('a-secret');
+  });
+});
+
+describe('failures declared in a 2xx body', () => {
+  const withBodyRule = (over: Record<string, unknown> = {}) =>
+    simple({
+      failures: {
+        body: {
+          at: 'result.state',
+          equals: 'failed',
+          messageAt: 'errors',
+          conflictWhen: ['is taken'],
+          notFoundWhen: ['no such'],
+          ...over,
+        },
+      },
+    } as never);
+
+  const update = {
+    op: 'update_account' as const,
+    actionId: 'act-1',
+    anchor: 'u1',
+    attributes: { displayName: ['x'] },
+  };
+
+  it('validates the rule', () => {
+    expect(httpConnectorDocument.safeParse(withBodyRule()).success).toBe(true);
+    for (const broken of [
+      { equals: undefined },
+      { at: 'not a path' },
+      { at: '__proto__' },
+      { conflictWhen: [''] },
+      { conflictWhen: 'is taken' },
+      { script: 'x' },
+    ]) {
+      expect(httpConnectorDocument.safeParse(withBodyRule(broken)).success).toBe(false);
+    }
+  });
+
+  it('leaves a 2xx without the marker a success', async () => {
+    answers = [{ status: 200, body: { result: { state: 'ok' } } }];
+    const result = await httpTargetConnector.write(config(withBodyRule()), update);
+    expect(result.ok).toBe(true);
+  });
+
+  it('turns a matching 2xx into a classified failure', async () => {
+    answers = [
+      { status: 200, body: { result: { state: 'failed' }, errors: ['login is taken'] } },
+      { status: 200, body: { result: { state: 'failed' }, errors: { id: ['no such user'] } } },
+      { status: 200, body: { result: { state: 'failed' }, errors: 'quota exceeded' } },
+      { status: 200, body: { result: { state: 'failed' } } },
+    ];
+    const document = withBodyRule();
+    expect(await httpTargetConnector.write(config(document), update)).toMatchObject({
+      ok: false,
+      failure: 'conflict',
+      message: 'the target refused the request: login is taken',
+    });
+    expect(await httpTargetConnector.write(config(document), update)).toMatchObject({
+      ok: false,
+      failure: 'not_found',
+    });
+    expect(await httpTargetConnector.write(config(document), update)).toMatchObject({
+      ok: false,
+      failure: 'rejected',
+      message: 'the target refused the request: quota exceeded',
+    });
+    expect(await httpTargetConnector.write(config(document), update)).toMatchObject({
+      ok: false,
+      failure: 'rejected',
+      message: 'the target refused the request',
+    });
+  });
+
+  it('never surfaces the credential or the initial password', async () => {
+    answers = [
+      { status: 200, body: { items: [] } },
+      {
+        status: 200,
+        body: {
+          result: { state: 'failed' },
+          errors: ['hunter2 rejected for key a-secret by ada@example.com'],
+        },
+      },
+    ];
+    const result = await httpTargetConnector.write(config(withBodyRule()), {
+      op: 'create_account',
+      actionId: 'act-1',
+      correlationKey: 'ada',
+      attributes: {},
+      enabled: true,
+      initialPassword: 'hunter2',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).not.toContain('hunter2');
+    expect(result.message).not.toContain('a-secret');
+    expect(result.message).not.toContain('ada@example.com');
+    expect(result.message).toContain('rejected for key');
+  });
+});
+
+describe('offset paging with a stated total', () => {
+  const offsetDocument = (totalAt?: string) =>
+    simple({
+      account: {
+        ...simple().account,
+        list: {
+          path: '/users',
+          itemsAt: 'items',
+          paging: { style: 'offset', pageSize: 5, ...(totalAt ? { totalAt } : {}) },
+        },
+      },
+    } as never);
+
+  it('keeps walking past short pages until the total is reached', async () => {
+    answers = [
+      { status: 200, body: { total: 4, items: [{ id: 'u1' }, { id: 'u2' }] } },
+      { status: 200, body: { total: 4, items: [{ id: 'u3' }, { id: 'u4' }] } },
+    ];
+    const records = await collect(httpTargetConnector.read(config(offsetDocument('total'))));
+    expect(records.map((r) => r.anchor)).toEqual(['u1', 'u2', 'u3', 'u4']);
+    expect(calls.map((c) => new URL(c.url).searchParams.get('offset'))).toEqual(['0', '2']);
+  });
+
+  it('refuses a walk that runs dry before the total', async () => {
+    answers = [
+      { status: 200, body: { total: 4, items: [{ id: 'u1' }, { id: 'u2' }] } },
+      { status: 200, body: { total: 4, items: [] } },
+    ];
+    await expect(
+      collect(httpTargetConnector.read(config(offsetDocument('total')))),
+    ).rejects.toThrow(/partial list/);
+  });
+
+  it('refuses a response with no count where one was declared', async () => {
+    answers = [{ status: 200, body: { items: [{ id: 'u1' }] } }];
+    await expect(
+      collect(httpTargetConnector.read(config(offsetDocument('total')))),
+    ).rejects.toThrow(/no item count/);
+  });
+
+  it('without a total, still ends on a short page', async () => {
+    answers = [{ status: 200, body: { items: [{ id: 'u1' }] } }];
+    const records = await collect(httpTargetConnector.read(config(offsetDocument())));
+    expect(records.map((r) => r.anchor)).toEqual(['u1']);
+    expect(calls).toHaveLength(1);
   });
 });
