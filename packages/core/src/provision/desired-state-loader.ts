@@ -1,5 +1,6 @@
 import { orgUnitPlacementDn } from './org-unit-mirror.js';
 import { withTenant, type TenantClient } from '@syntra/db';
+import { correlationKeyPolicyFor } from '@syntra/connectors';
 import { conditionSchema } from './condition.js';
 import { desiredState } from './desired.js';
 import type { ContractFacts, GrantFacts, PersonFacts, RuleFacts } from './types.js';
@@ -325,6 +326,7 @@ async function projectOne(
     // one a run would have avoided. The preview names the key as provisional
     // by not writing it anywhere.
     takenCorrelationKeys: new Set<string>(),
+    correlationKeyPolicy: correlationKeyPolicyFor(target.type, target.config),
     containerOverride: placement?.container ?? null,
     orgUnitContainer: container,
     renameEnabled: target.renameEnabled,

@@ -89,6 +89,33 @@ If your Snipe-IT already uses employee numbers, change `provenance.path` and
 the `employee_num` key in the create body to a field you do not use before
 the first create. Without a provenance field the connector refuses to create.
 
+## Usernames: the `naming` block
+
+The shipped document declares
+
+```json
+"naming": { "allow": "email", "maxLength": 191 }
+```
+
+which lets the correlation key, and so the `username`, be an email address.
+Syntra lowercases the key, folds accents to ASCII, and keeps letters, digits,
+`.`, `-`, `_`, `+` and a single `@`. The `@` can't be the first or last
+character, and a key with two `@` is refused with an exception on the run,
+never repaired. A name collision is suffixed before the `@`
+(`jane.doe2@example.com`). Truncation shortens only the part before the `@`
+(at most 64 characters) and never cuts the domain. 191 is the width of
+Snipe-IT's `username` column.
+
+A connector document without a `naming` block keeps Active Directory's rule:
+letters, digits, `.` and `-`, 20 characters, with the `@` folded out
+(`%person.businessEmail%` would give `jane.doeexample.com`). **A Snipe-IT
+target created before this block was shipped has the old document embedded
+in its configuration.** Add the block through **Edit the connector
+document** before you switch the template to `%person.businessEmail%`. Keys
+already assigned are not regenerated unless the target has renaming turned
+on. With renaming on, adding the block can propose renames for people whose
+current key was cut at 20 characters, and each rename waits for confirmation.
+
 ## Account-profile values
 
 The document maps these Snipe-IT fields to Syntra attribute names:
@@ -105,9 +132,14 @@ The document maps these Snipe-IT fields to Syntra attribute names:
 
 A starting account profile:
 
-- **Correlation key template:** `%person.givenName.initial%%person.familyName%`
-  (`jdoe`), or `%person.givenName%.%person.familyName%` (`jane.doe`).
-  Syntra lowercases it and keeps letters, digits, `.` and `-`.
+- **Correlation key template:** `%person.businessEmail%`
+  (`jane.doe@example.com`). **Use this when Snipe-IT signs people in through
+  SAML SSO.** Snipe-IT matches the assertion's NameID against `username`, and
+  the NameID Syntra's IdP sends is the person's email address, so the
+  username has to be that address. Any other template gives an account nobody
+  can sign in to through SSO.
+  Without SSO, `%person.givenName.initial%%person.familyName%` (`jdoe`) or
+  `%person.givenName%.%person.familyName%` (`jane.doe`) work too.
 - **Attribute templates:**
   - `givenName`: `%person.givenName%` (required: Snipe-IT refuses a user
     without a first name)

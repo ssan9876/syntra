@@ -1,5 +1,6 @@
 import { withTenant } from '@syntra/db';
 import {
+  correlationKeyPolicyFor,
   observedEnabled,
   targetConnectorForRelease,
   first,
@@ -1071,6 +1072,11 @@ export async function previewProvisionRun(
       grantsByPerson.set(grant.subjectPersonId, list);
     }
 
+    // What this target accepts as a key -- Active Directory's `[a-z0-9.-]`
+    // and 20 characters, or an email-shaped username. Resolved once per run
+    // from the same config the connector itself was built from.
+    const correlationKeyPolicy = correlationKeyPolicyFor(prepared.target.type, config);
+
     for (const person of snapshot.persons) {
       const contracts: ContractFacts[] = person.contracts.map((c) => ({
         id: c.id,
@@ -1121,6 +1127,7 @@ export async function previewProvisionRun(
         entitlementStatus,
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,
         takenCorrelationKeys: takenKeys,
+        correlationKeyPolicy,
         containerOverride: placementByPerson.get(person.id) ?? null,
         // Null for a person with no unit, and for a unit not materialised on
         // THIS target: there is no DN to place them at, and inventing one is

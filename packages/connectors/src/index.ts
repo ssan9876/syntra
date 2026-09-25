@@ -4,6 +4,7 @@ export * from './net/guarded-fetch.js';
 export * from './scim/config.js';
 export * from './scim/client.js';
 export * from './scim/connector.js';
+export * from './naming.js';
 export * from './http/document.js';
 export * from './http/template.js';
 export * from './http/client.js';

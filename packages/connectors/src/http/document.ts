@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { httpNamingPolicy } from '../naming.js';
 
 /**
  * A declarative connector: how to talk to one REST API, written as JSON.
@@ -375,6 +376,14 @@ export const httpConnectorDocument = z
     allowPrivateAddresses: z.boolean().default(false),
     failures: failureMap,
     account: accountResource,
+    /**
+     * Which correlation keys this target accepts. See `httpNamingPolicy`:
+     * absent means the Active Directory rule, `[a-z0-9.-]` and 20 characters,
+     * because that is what every document written before this block existed
+     * was generating under. `{ "allow": "email" }` is what a target that
+     * matches an SSO assertion against its username wants.
+     */
+    naming: httpNamingPolicy.optional(),
     entitlement: entitlementResource.optional(),
     container: containerResource.optional(),
   })

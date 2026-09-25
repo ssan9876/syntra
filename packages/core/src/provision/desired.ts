@@ -1,5 +1,6 @@
 import { evaluateCondition, type ConditionFacts } from './condition.js';
-import { generateCorrelationKey, SAM_ACCOUNT_NAME_MAX_LENGTH } from './names.js';
+import type { CorrelationKeyPolicy } from '@syntra/connectors';
+import { generateCorrelationKey } from './names.js';
 import { renderContainer, renderTemplate, type TemplateContext } from './templates.js';
 import type {
   Attribution,
@@ -35,6 +36,16 @@ export interface DesiredStateInput {
    */
   existingCorrelationKey: string | null;
   takenCorrelationKeys: ReadonlySet<string>;
+  /**
+   * What THIS target accepts as a key, from `correlationKeyPolicyFor`.
+   *
+   * Required for the reason `orgUnitContainer` is: an optional field is one a
+   * run can forget to load, and forgetting this one silently generates Active
+   * Directory keys -- `@` folded out, 20 characters -- for a target whose SSO
+   * matches on an email-address username. That was the bug, on every target,
+   * before this field existed.
+   */
+  correlationKeyPolicy: CorrelationKeyPolicy;
   /**
    * A container somebody pinned this person's account to by hand, or null.
    *
@@ -689,7 +700,8 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       template: profile.correlationKeyTemplate,
       context,
       taken,
-      maxLength: SAM_ACCOUNT_NAME_MAX_LENGTH,
+      maxLength: input.correlationKeyPolicy.maxLength,
+      charset: input.correlationKeyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
     });
 
@@ -709,10 +721,19 @@ export function desiredState(input: DesiredStateInput): DesiredState {
                   kind: 'name_generation_exhausted',
                   message: `no unique account name could be generated for ${fullName(person)} within ${generated.attempts} attempts`,
                 }
-              : {
-                  kind: 'template_unresolvable',
-                  message: `the account name template references ${generated.missing.join(', ')}, which resolves to nothing for this person`,
-                },
+              : generated.reason === 'malformed'
+                ? {
+                    // The template resolved; what it resolved to is not a key
+                    // this target can hold. The same kind as a missing field
+                    // because the fix is the same -- the template or the
+                    // person's data -- and the message says which.
+                    kind: 'template_unresolvable',
+                    message: `the account name template ${generated.message}`,
+                  }
+                : {
+                    kind: 'template_unresolvable',
+                    message: `the account name template references ${generated.missing.join(', ')}, which resolves to nothing for this person`,
+                  },
         };
       }
     } else {

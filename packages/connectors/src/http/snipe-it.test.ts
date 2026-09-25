@@ -7,6 +7,7 @@ import { certifyTargetConnector } from '../testing/target-connector-certificatio
 import { readBackTarget } from '../types.js';
 import { capabilitiesForTarget } from '../capabilities.js';
 import { connectorLifecycleMetadata } from '../metadata.js';
+import { correlationKeyPolicyFor } from '../naming.js';
 
 let snipe: FakeSnipeIt;
 
@@ -77,6 +78,17 @@ describe('the Snipe-IT document', () => {
       notFoundWhen: ['not found', 'does not exist'],
     });
     expect(parsed.account.list.paging).toMatchObject({ style: 'offset', pageSize: 500, totalAt: 'total' });
+  });
+
+  it('declares email-shaped usernames, so a SAML NameID can match one', () => {
+    expect(httpConnectorDocument.parse(snipeItDocument).naming).toEqual({
+      allow: 'email',
+      maxLength: 191,
+    });
+    expect(correlationKeyPolicyFor('httpJson', { document: snipeItDocument })).toEqual({
+      charset: 'email',
+      maxLength: 191,
+    });
   });
 
   it('describes users only, with no delete, no archive and no entitlements', () => {
@@ -166,6 +178,16 @@ describe('Snipe-IT through the document-driven connector', () => {
       employee_num: 'act-create-1',
     });
     expect(snipe.users.get(1)).toMatchObject({ employee_num: 'act-create-1', activated: true });
+  });
+
+  it('creates a user whose username is an email address, intact', async () => {
+    const result = await httpTargetConnector.write(
+      config(),
+      create({ correlationKey: 'jane.doe@example.test' }),
+    );
+    expect(result).toMatchObject({ ok: true });
+    const post = snipe.requests.find((r) => r.method === 'POST');
+    expect((post?.body as { username?: string }).username).toBe('jane.doe@example.test');
   });
 
   it('adopts the account a lost-response create already made', async () => {
