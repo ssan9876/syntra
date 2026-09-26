@@ -20,6 +20,7 @@ import {
   explainPersonAccess,
   importPersons,
   linkUserToPerson,
+  unlinkUser,
   listContracts,
   listPersons,
   parsePersonCsv,
@@ -378,6 +379,58 @@ export async function registerAdminPersonRoutes(
           outcome: 'success',
           sourceIp: request.ip,
           payload: { login: user.login },
+        });
+      });
+
+      return reply.status(204).send();
+    },
+  );
+
+  /**
+   * The reverse of link-user: the account stops belonging to this person.
+   *
+   * For an account that was linked to a person it is not really somebody's —
+   * an integration's login that ended up with a person record of its own. It
+   * has to be unlinked before it can become a service account, since a
+   * service account belongs to no person. The account itself is untouched:
+   * it keeps its password, tokens and status. What changes is that the
+   * person's leaver no longer disables it, and it no longer inherits the
+   * person's org unit for application access, so both are said in the audit
+   * payload by naming the person it left.
+   */
+  app.post(
+    '/persons/:id/unlink-user',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_WRITE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const { userId } = linkUserRequest.parse(request.body);
+
+      await request.db(async (tx) => {
+        const person = await tx.person.findUnique({ where: { id } });
+        const user = await tx.user.findUnique({ where: { id: userId } });
+        if (!person || !user) {
+          throw new ProblemError(404, 'not-found', 'Person or user not found');
+        }
+        // Named rather than silently succeeding: unlinking from the wrong
+        // person is a stale page, and a 204 would hide it.
+        if (user.personId !== id) {
+          throw new ProblemError(
+            409,
+            'not-linked',
+            'That account is not linked to this person',
+            `${user.login} is not linked to ${person.givenName} ${person.familyName}.`,
+          );
+        }
+
+        await unlinkUser(tx, userId);
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'person.unlinkUser',
+          targetType: 'Person',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { login: user.login, userId },
         });
       });
 

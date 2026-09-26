@@ -342,7 +342,6 @@
                     "maxLength": 2048
                   },
                   "type": {
-                    "default": "bookmark",
                     "type": "string",
                     "enum": [
                       "bookmark",
@@ -366,7 +365,6 @@
                     ]
                   },
                   "visibility": {
-                    "default": "assigned",
                     "type": "string",
                     "enum": [
                       "assigned",
@@ -19496,6 +19494,83 @@
                 "schema": {}
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/persons/{id}/unlink-user": {
+      "post": {
+        "operationId": "postPersonsByIdUnlinkUser",
+        "tags": [
+          "Persons"
+        ],
+        "summary": "Unlink a user account from a person",
+        "description": "The account keeps its password, tokens and status; it stops belonging to the person, so the leaver of that person no longer disables it. Refused with `not-linked` when the account is not linked to this person.\n\nRequires `identity.write`.",
+        "x-syntra-permission": [
+          "identity.write"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  }
+                },
+                "required": [
+                  "userId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success; no content."
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -146,6 +146,30 @@ describe('AccountDetailPage', () => {
     expect(link).toHaveAttribute('href', '/admin/people/p1');
   });
 
+  it('unlinks the account from its person after asking once', async () => {
+    granted.add('identity.write');
+    const unlinked = vi.fn((_url: string, _init?: RequestInit) => new Response(null, { status: 204 }) as never);
+    mockApi(ACCOUNT, { '/unlink-user': unlinked });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Unlink' }));
+    expect(unlinked).not.toHaveBeenCalled();
+    expect(screen.getByText(/their leaver no longer disables it/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Unlink jdoe' }));
+    await waitFor(() => expect(unlinked).toHaveBeenCalled());
+    expect(unlinked.mock.calls[0]![0]).toContain('/api/admin/persons/p1/unlink-user');
+    expect(JSON.parse(String(unlinked.mock.calls[0]![1]!.body))).toEqual({ userId: 'u1' });
+  });
+
+  it('offers no unlink without identity.write', async () => {
+    mockApi();
+    renderPage();
+
+    await screen.findByRole('link', { name: 'Jo Doe' });
+    expect(screen.queryByRole('button', { name: 'Unlink' })).not.toBeInTheDocument();
+  });
+
   it('says so when no person owns the account', async () => {
     mockApi({ ...ACCOUNT, personId: null, person: null });
     renderPage();

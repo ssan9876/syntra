@@ -139,6 +139,9 @@ export function AccountDetailPage() {
   );
 
   const [editing, setEditing] = useState(false);
+  // Unlinking asks once, in place: it changes what the person's leaver does to
+  // this account, which is worth a second click and not worth a modal.
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
   const [problem, setProblem] = useState<string | null>(null);
@@ -249,6 +252,22 @@ export function AccountDetailPage() {
         reload();
       } catch (cause) {
         failed(cause, 'That account could not be linked.');
+      }
+    });
+
+  const unlink = () =>
+    run(async () => {
+      const person = data!.person!;
+      try {
+        await api(`/api/admin/persons/${person.id}/unlink-user`, {
+          method: 'POST',
+          body: JSON.stringify({ userId: data!.id }),
+        });
+        toast({ title: `Unlinked from ${person.givenName} ${person.familyName}` });
+        setConfirmUnlink(false);
+        reload();
+      } catch (cause) {
+        failed(cause, 'That account could not be unlinked.');
       }
     });
 
@@ -384,12 +403,38 @@ export function AccountDetailPage() {
           {
             label: 'Person',
             value: data.person ? (
-              <Link
-                to={`/admin/people/${data.person.id}`}
-                className="text-ink underline-offset-2 hover:text-primary hover:underline"
-              >
-                {data.person.givenName} {data.person.familyName}
-              </Link>
+              <span className="flex flex-col gap-2">
+                <span className="flex flex-wrap items-center gap-2">
+                  <Link
+                    to={`/admin/people/${data.person.id}`}
+                    className="text-ink underline-offset-2 hover:text-primary hover:underline"
+                  >
+                    {data.person.givenName} {data.person.familyName}
+                  </Link>
+                  {can('identity.write') && !confirmUnlink && (
+                    <Button size="sm" variant="secondary" onClick={() => setConfirmUnlink(true)}>
+                      Unlink
+                    </Button>
+                  )}
+                </span>
+                {confirmUnlink && (
+                  <span className="flex flex-col gap-2 text-sm font-normal text-muted">
+                    <span>
+                      {data.login} keeps its password, tokens and status. It stops belonging to{' '}
+                      {data.person.givenName} {data.person.familyName}, so their leaver no longer
+                      disables it and it no longer gets applications through their org unit.
+                    </span>
+                    <span className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="danger" loading={busy} onClick={() => void unlink()}>
+                        Unlink {data.login}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setConfirmUnlink(false)}>
+                        Cancel
+                      </Button>
+                    </span>
+                  </span>
+                )}
+              </span>
             ) : (candidatesData?.candidates ?? []).length === 0 ? (
               // A service account is the ordinary case here, not a fault. It
               // is stated flatly and given no call to action for that reason,

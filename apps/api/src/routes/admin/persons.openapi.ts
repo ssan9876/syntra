@@ -39,6 +39,14 @@ export const personsOpenApi = describeAdminRoutes('Persons', {
     params: idParam,
     status: 204,
   },
+  'POST /persons/:id/unlink-user': {
+    summary: 'Unlink a user account from a person',
+    description:
+      'The account keeps its password, tokens and status; it stops belonging to the person, so the leaver of that person no longer disables it. Refused with `not-linked` when the account is not linked to this person.',
+    body: linkUserRequest,
+    params: idParam,
+    status: 204,
+  },
   'POST /persons/import': {
     summary: 'Import persons from CSV',
     description:
