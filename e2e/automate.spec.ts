@@ -360,7 +360,7 @@ test('a product with no audience is visible to nobody, and saying so is on the s
   await page.getByLabel('Name').fill('Nobody sees this');
   await page.getByLabel('Slug').fill('nobody-sees-this');
   await page.getByRole('button', { name: /show me who/i }).click();
-  await expect(page.getByText(/nobody will see this product/i)).toBeVisible();
+  await expect(page.getByText(/Visible to 0 of/)).toBeVisible();
 });
 
 test('a user requests something, the manager approves, and the user sees it granted', async ({

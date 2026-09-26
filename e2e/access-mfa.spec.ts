@@ -281,7 +281,7 @@ test.describe.serial('access, second factors and the console', () => {
     // previous one already proved about TOTP.
     await page.getByRole('button', { name: 'Generate codes' }).click();
     // allInnerTexts() does not retry, so wait for the sheet to arrive first.
-    await expect(page.getByText(/save these now/i)).toBeVisible();
+    await expect(page.getByText(/save them now/i)).toBeVisible();
     const codes = await page.getByText(RECOVERY_CODE).allInnerTexts();
     expect(codes).toHaveLength(10);
 

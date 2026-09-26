@@ -233,7 +233,7 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // one item resolved to nobody. Jo cannot review Jo's own membership of
   // Nurses, so that item has no reviewer and the screen says so instead of
   // quietly counting it as done.
-  await expect(page.getByText(/item\(s\) have no reviewer and no fallback/)).toBeVisible();
+  await expect(page.getByText(/item\(s\) have no reviewer or fallback/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Compute the revocation batch' }).click();
   await page.getByRole('link', { name: 'Open the batch' }).click();

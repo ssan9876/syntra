@@ -104,7 +104,7 @@ test.describe.serial('an HR source, end to end', () => {
     // field to type one into.
     await expect(page.getByLabel(/fingerprint/i)).toHaveCount(0);
     await page.getByRole('button', { name: 'Test connection' }).click();
-    await expect(page.getByText(/host key Syntra has not seen before/i)).toBeVisible();
+    await expect(page.getByText('Unknown host key')).toBeVisible();
     await page.getByRole('button', { name: 'Accept this key' }).click();
     await expect(page.getByText(/host key accepted/i)).toBeVisible();
 
