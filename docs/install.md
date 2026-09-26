@@ -43,7 +43,10 @@ SEED_USER_PASSWORD='choose-another-one' \
 pnpm dev                                    # api on :3000, web on :5173
 ```
 
-Then open **http://acme.localhost:5173** and sign in as `admin`.
+Then open **http://acme.localhost:5173** and sign in as `admin`. The seed
+also creates `jdoe` (an ordinary portal user), `sroe` (a deactivated leaver)
+and `svc-backup` (an account with no person behind it and no password); `SEED_DEMO=1` adds lifecycle
+scenarios — see [Configuration](configure.md#seed-variables).
 
 `pnpm db:reset` empties whichever database `DATABASE_URL` names. It refuses
 anything that is not a scratch `syntra_test_*` database unless you name the
@@ -188,8 +191,8 @@ believes the proxy's `X-Forwarded-*`. `PUBLIC_URL` must be the origin users
 type, because the session cookie and the WebAuthn relying party are derived
 from it.
 
-`web` publishes its port as `127.0.0.1:8080:80` — **loopback only, on
-purpose.** Your proxy has to run on this host to reach it. That is the
+`web` publishes its port as `127.0.0.1:8080:8080` (nginx listens on 8080
+inside the unprivileged image) — **loopback only, on purpose.** Your proxy has to run on this host to reach it. That is the
 constraint that makes "TLS in front" mean something: bound to every interface,
 the plaintext origin would answer on the network *beside* the proxy, and
 anyone who connected to :8080 directly would get session cookies, SAML POSTs
@@ -235,6 +238,13 @@ API alone as the entire deployment. That is what `docs/lab/systemd/` runs in
 production — `syntra.service` runs `tsx src/server.ts` directly rather than
 either Docker image. Choose it over the container path when you would rather
 manage one process under systemd than a Compose stack.
+
+To update such an install from the console, convert it once to the release
+layout with `ops/syntra-install` (`--dry-run` first says what it will do):
+releases under `/opt/syntra/releases`, `current` pointing at the running one,
+and `.env` moved to `/opt/syntra/shared/`. The updater, its variables and the
+backup timers that come with the layout are in
+[Operating Syntra](operate.md#upgrades).
 
 ## Further reading
 

@@ -44,6 +44,7 @@ const TYPE_LABELS: Record<string, string> = {
   activeDirectory: 'Active Directory',
   scim2: 'SCIM 2.0',
   httpJson: 'REST API',
+  entraId: 'Entra ID',
 };
 
 const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;

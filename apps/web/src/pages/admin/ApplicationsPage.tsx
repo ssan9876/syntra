@@ -248,6 +248,12 @@ function CatalogPicker({
   );
 }
 
+const APP_TYPE_LABEL: Record<string, string> = {
+  saml: 'SAML',
+  oidc: 'OpenID Connect',
+  bookmark: 'Link',
+};
+
 export function ApplicationsPage() {
   const { data, error, loading, reload } = useApiResource<{ applications: Row[] }>(
     '/api/admin/applications',
@@ -527,7 +533,7 @@ export function ApplicationsPage() {
                         <span className="text-sm text-muted">{row.slug}</span>
                       </span>
                     </td>
-                    <td className="max-sm:hidden">{row.type}</td>
+                    <td className="max-sm:hidden">{APP_TYPE_LABEL[row.type] ?? row.type}</td>
                     <td>
                       {row.visibility === 'hidden' ? (
                         <Status tone="neutral">Hidden</Status>
