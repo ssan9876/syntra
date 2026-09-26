@@ -8,7 +8,7 @@ groups:
           severity: critical
         annotations:
           summary: Syntra is not ready to serve identity traffic
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#not-ready
       - alert: SyntraSchedulerDown
         expr: syntra_scheduler_running == 0
         for: 10m
@@ -16,7 +16,7 @@ groups:
           severity: critical
         annotations:
           summary: The background scheduler has not started; no lifecycle, sync or notification work is running
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#scheduler-unavailable
       - alert: SyntraLifecycleWorkOverdue
         expr: syntra_lifecycle_operations_overdue > 0
         for: 15m
@@ -24,7 +24,7 @@ groups:
           severity: warning
         annotations:
           summary: Syntra has unacknowledged lifecycle work past its due time
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#lifecycle-work-alerts
       - alert: SyntraLifecycleServiceLevelBreached
         expr: syntra_lifecycle_operations_slo_breached > 0
         for: 1m
@@ -32,7 +32,7 @@ groups:
           severity: critical
         annotations:
           summary: A lifecycle operation (an urgent departure, typically) is past its service-level deadline and unresolved
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/tabletop-exercises.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-tabletop-exercises
       - alert: SyntraLifecycleWorkFailed
         expr: syntra_lifecycle_operations_failed > 0
         for: 5m
@@ -40,7 +40,7 @@ groups:
           severity: warning
         annotations:
           summary: Syntra has failed lifecycle operations requiring recovery
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/target-rollback.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-target-rollback
       - alert: SyntraLifecycleApprovalsWaiting
         expr: syntra_lifecycle_operations_awaiting_approval > 0
         for: 4h
@@ -48,7 +48,7 @@ groups:
           severity: warning
         annotations:
           summary: Lifecycle work has waited more than four hours for a second person to approve it
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#lifecycle-work-alerts
       - alert: SyntraLifecycleBacklogAging
         expr: syntra_lifecycle_oldest_unresolved_age_seconds > 172800
         for: 30m
@@ -56,7 +56,7 @@ groups:
           severity: warning
         annotations:
           summary: The oldest unresolved lifecycle operation is more than two days old
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#lifecycle-work-alerts
       - alert: SyntraTenantSaturated
         expr: syntra_lifecycle_receipts_deferred > 0
         for: 15m
@@ -64,7 +64,7 @@ groups:
           severity: warning
         annotations:
           summary: Target operations have been deferred by the tenant concurrency cap for fifteen minutes
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-incident-response
       - alert: SyntraProvisioningRunsFailing
         expr: syntra_provision_runs_failed_24h > 0
         for: 5m
@@ -72,7 +72,7 @@ groups:
           severity: warning
         annotations:
           summary: A provisioning run failed in the last day (expired credential, unreachable target, unreadable rule)
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/target-rollback.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-target-rollback
       - alert: SyntraProvisioningRetriesExhausted
         expr: syntra_provision_actions_pending_retry > 0
         for: 30m
@@ -80,7 +80,7 @@ groups:
           severity: warning
         annotations:
           summary: Provisioning actions exhausted their retries and are waiting for the next run
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/target-rollback.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-target-rollback
       - alert: SyntraTargetStale
         expr: syntra_targets_stale > 0
         for: 1h
@@ -88,7 +88,7 @@ groups:
           severity: warning
         annotations:
           summary: An enabled, scheduled target has not run in a day
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/target-rollback.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-target-rollback
       - alert: SyntraReadinessEvidenceStale
         expr: syntra_target_readiness_age_seconds > 604800
         for: 1h
@@ -96,7 +96,7 @@ groups:
           severity: warning
         annotations:
           summary: A target's connection has not been tested in a week; its readiness evidence is stale
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/secret-rotation.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-secret-rotation
       - alert: SyntraUndeliveredLogout
         expr: syntra_logout_deliveries_abandoned > 0
         for: 5m
@@ -104,7 +104,7 @@ groups:
           severity: critical
         annotations:
           summary: Syntra could not deliver one or more back-channel logouts
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#an-abandoned-delivery
       - alert: SyntraUndeliveredWebhook
         expr: syntra_webhook_deliveries_abandoned > 0
         for: 15m
@@ -112,7 +112,7 @@ groups:
           severity: warning
         annotations:
           summary: Webhook deliveries have exhausted their retries
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#an-abandoned-delivery
       - alert: SyntraSigningKeyExpiring
         expr: syntra_signing_key_expires_in_seconds < 604800
         for: 1h
@@ -120,7 +120,7 @@ groups:
           severity: warning
         annotations:
           summary: The nearest signing key expires within a week
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/secret-rotation.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#signing-keys
       - alert: SyntraJobQueueDeep
         expr: syntra_jobs_pending > 500
         for: 15m
@@ -128,7 +128,7 @@ groups:
           severity: warning
         annotations:
           summary: More than five hundred background jobs are waiting; the scheduler is not keeping up
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/incident-response.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#the-queue-is-behind
       - alert: SyntraJobsOrphaned
         expr: sum(syntra_job_health_findings{finding="orphaned"}) > 0
         for: 15m
@@ -136,7 +136,7 @@ groups:
           severity: warning
         annotations:
           summary: Background work is waiting on a job that does not exist, or a provisioning apply lost its heartbeat; nothing will move it without a repair
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
       - alert: SyntraJobsStuck
         expr: sum(syntra_job_health_findings{finding="stuck"}) > 0
         for: 30m
@@ -144,7 +144,7 @@ groups:
           severity: warning
         annotations:
           summary: Background work has shown no progress for more than six hours
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
       - alert: SyntraJobsPoisoned
         expr: sum(syntra_job_health_findings{finding="poisoned"}) > 0
         for: 5m
@@ -152,7 +152,7 @@ groups:
           severity: warning
         annotations:
           summary: A background job failed repeatedly on the same payload and exhausted its retries
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
       - alert: SyntraJobsDelayed
         expr: sum(syntra_job_health_findings{finding="delayed"}) > 0
         for: 15m
@@ -160,7 +160,7 @@ groups:
           severity: warning
         annotations:
           summary: Queued work has waited more than fifteen minutes for a worker; the queue is not keeping up
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
       - alert: SyntraJobsDuplicated
         expr: sum(syntra_job_health_findings{finding="duplicated"}) > 0
         for: 30m
@@ -168,7 +168,7 @@ groups:
           severity: warning
         annotations:
           summary: More than one live job exists for the same work; harmless by design, but evidence of a double enqueue
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
       - alert: SyntraJobHealthBlind
         expr: syntra_job_queue_readable == 0 and on() syntra_scheduler_running == 1
         for: 15m
@@ -176,4 +176,4 @@ groups:
           severity: warning
         annotations:
           summary: The scheduler is running but its queue cannot be read, so orphaned work cannot be detected
-          runbook: https://github.com/ssan9876/syntra/blob/main/docs/runbooks/queue-recovery.md
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery

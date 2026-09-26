@@ -2168,8 +2168,8 @@ subtree it already holds (`OU=Deactivated,OU=Syntra,…`), which is outside the
 sync base all the same. The refusal otherwise is `INSUFF_ACCESS_RIGHTS` on the
 move, and is correct.
 
-The repository ships a retention sweep for the domain controller:
-`install-reap.ps1` (run once as a domain administrator: `-Domain`,
+The repository ships a retention sweep for the domain controller, in
+[`ops/windows/`](../ops/windows/): `install-reap.ps1` (run once as a domain administrator: `-Domain`,
 `-ArchiveOu`, `-RetentionDays` default 30, `-MaxDeletesPerRun` default 25,
 `-Apply`) creates and protects the archive OU, **enables the AD Recycle Bin —
 which cannot be undone, and needs a 2008 R2 forest functional level** —
