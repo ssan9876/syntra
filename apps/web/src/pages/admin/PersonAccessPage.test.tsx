@@ -165,7 +165,7 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('This account holds nothing Syntra can see.'),
+      await screen.findByText('No entitlements'),
     ).toBeVisible();
   });
 

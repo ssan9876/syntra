@@ -69,9 +69,7 @@ export function RequestQueueTab() {
                     Review what can be requested
                   </Link>
                 }
-              >
-                Requests appear here as soon as somebody asks for something.
-              </Empty>
+              />
             </div>
           )}
           {rows.length > 0 && (

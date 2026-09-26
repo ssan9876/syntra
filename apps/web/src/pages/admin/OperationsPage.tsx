@@ -134,7 +134,7 @@ function StatusPanel() {
           <h3 className="mb-2 text-sm font-semibold text-ink">This tenant</h3>
           <ul className="space-y-1 text-sm">
             {d.writeStop.active && (
-              <li><Status tone="danger">write stop</Status> External writes are stopped for every target since {when(d.writeStop.since)}.</li>
+              <li><Status tone="danger">write stop</Status> All targets since {when(d.writeStop.since)}.</li>
             )}
             {d.targetWriteStops.map((stop) => (
               <li key={stop.targetId}><Status tone="warning">write stop</Status> <Link className="text-primary underline" to={`/admin/targets/${stop.targetId}`}>{stop.name}</Link> since {when(stop.since)}.</li>
@@ -146,11 +146,11 @@ function StatusPanel() {
               <li key={stale.targetId}><Status tone="warning">stale readiness</Status> <Link className="text-primary underline" to={`/admin/targets/${stale.targetId}`}>{stale.name}</Link>: {READINESS_REASON[stale.reason] ?? stale.reason}.</li>
             ))}
             {!d.writeStop.active && d.targetWriteStops.length === 0 && d.connectorOutages.length === 0 && d.staleReadiness.length === 0 && (
-              <li className="text-muted">No write stops, connector outages or stale readiness evidence.</li>
+              <li className="text-muted">No write stops or outages</li>
             )}
           </ul>
         </div>
-        <p className="text-xs text-muted">Checked {when(data.generatedAt)}. Shared components serve every tenant; everything under “This tenant” is yours alone.</p>
+        <p className="text-xs text-muted">Checked {when(data.generatedAt)}</p>
       </div>
     </Panel>
   );
@@ -195,10 +195,10 @@ function JobHealthPanel() {
         {problem && <Alert tone="danger">{problem}</Alert>}
         {error && <Alert tone="danger">{error}</Alert>}
         {data && !data.queueReadable && (
-          <Alert tone="warning">The job queue could not be read, so work whose job has disappeared cannot be detected right now.</Alert>
+          <Alert tone="warning">Job queue unreadable — lost jobs go undetected.</Alert>
         )}
         {loading && !data && <SkeletonRows rows={3} cols={4} />}
-        {data && findings.length === 0 && <Empty title="Nothing stuck">No orphaned, stuck, delayed, duplicated or repeatedly failing work.</Empty>}
+        {data && findings.length === 0 && <Empty title="Nothing stuck" />}
         {findings.length > 0 && (
           <Table>
             <thead>
@@ -245,7 +245,7 @@ function JobHealthPanel() {
               {REPAIR_LABEL[pending.action]} this {(KIND_LABEL[pending.finding.kind] ?? pending.finding.kind).toLowerCase()}?
             </p>
             <p className="text-sm text-muted">{pending.finding.detail}</p>
-            <Field label="Reason (recorded in the audit log)" value={reason} onChange={setReason} autoFocus />
+            <Field label="Reason" value={reason} onChange={setReason} autoFocus />
             <div className="flex gap-2">
               <Button
                 variant={pending.action === 'requeue' ? 'primary' : 'danger'}
@@ -281,7 +281,7 @@ function SupportBundlePanel() {
     try {
       const from = new Date(Date.now() - Number(days) * 86_400_000).toISOString();
       await api('/api/admin/exports', { method: 'POST', body: JSON.stringify({ kind: 'support_bundle', params: { from } }) });
-      setMessage({ tone: 'success', text: 'Support bundle requested. It is generated in the background; download it from Activity → Exports.' });
+      setMessage({ tone: 'success', text: 'Support bundle requested.' });
     } catch (cause) {
       setMessage({ tone: 'danger', text: problemOf(cause, 'The support bundle could not be requested.') });
     } finally {
@@ -292,11 +292,6 @@ function SupportBundlePanel() {
   return (
     <Panel title="Support bundle">
       <div className="space-y-4 p-4">
-        <p className="text-sm text-muted">
-          A redacted file for a support engineer: versions, migration state, configuration fingerprints, job health,
-          connector readiness, recent failures by error class and audit event counts. It contains no credentials,
-          configuration values, names or personal data.
-        </p>
         <div role="status" aria-live="polite">
           {message && <Alert tone={message.tone}>{message.text}{message.tone === 'success' && <> <Link className="underline" to="/admin/activity?tab=exports">Open exports</Link></>}</Alert>}
         </div>

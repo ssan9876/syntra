@@ -105,7 +105,7 @@ describe('the workflow list', () => {
     renderPage();
     const list = await listPanel();
     expect(
-      within(list).getByText(/grants immediately, with no approval/),
+      within(list).getByText(/grants with no approval/),
     ).toBeInTheDocument();
   });
 

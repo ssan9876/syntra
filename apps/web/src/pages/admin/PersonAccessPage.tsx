@@ -37,10 +37,7 @@ export function PersonAccessPage() {
             <div className="p-6">
               {/* Not the same statement as "no such person", which the API
                   answers with a 404 for exactly this reason. */}
-              <Empty title="This person holds no target-system accounts">
-                Either no rule matches them, or no target has been run since one
-                started to.
-              </Empty>
+              <Empty title="This person holds no target-system accounts" />
             </div>
           </Panel>
         )}
@@ -105,9 +102,7 @@ export function PersonAccessPage() {
               */}
               <LoginInfo personId={id!} targetSystemId={account.targetSystemId} />
               {account.entitlements.length === 0 ? (
-                <div className="p-4 text-muted">
-                  This account holds nothing Syntra can see.
-                </div>
+                <div className="p-4 text-muted">No entitlements</div>
               ) : (
                 <HoldingsTable holdings={account.entitlements} />
               )}

@@ -223,7 +223,7 @@ describe('OrgUnitDetailPage', () => {
       await userEvent.click(
         await screen.findByRole('button', { name: /deactivate/i }),
       );
-      expect(screen.getByText(/users stay where they are/i)).toBeInTheDocument();
+      expect(screen.getByText(/users stay/i)).toBeInTheDocument();
     });
 
     it('offers no status control for a unit a directory owns', async () => {

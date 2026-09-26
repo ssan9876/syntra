@@ -81,7 +81,7 @@ describe('OperationsPage', () => {
     renderPage();
     expect(await screen.findByText('Shared components')).toBeInTheDocument();
     expect(screen.getByText('Key provider')).toBeInTheDocument();
-    expect(screen.getByText(/External writes are stopped for every target/)).toBeInTheDocument();
+    expect(screen.getByText(/All targets since/)).toBeInTheDocument();
     expect(screen.getByText(/Fabrikam SCIM: unauthorized/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Contoso AD' })).toHaveAttribute('href', '/admin/targets/t-1');
     expect(await screen.findByText('Nothing stuck')).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe('OperationsPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Requeue' }));
     const confirm = screen.getAllByRole('button', { name: 'Requeue' }).at(-1)!;
     expect(confirm).toBeDisabled();
-    await userEvent.type(screen.getByLabelText('Reason (recorded in the audit log)'), 'worker lost in node drain');
+    await userEvent.type(screen.getByLabelText('Reason'), 'worker lost in node drain');
     await userEvent.click(confirm);
     await waitFor(() => expect(calls.some((c) => c.url.endsWith('/job-health/repair'))).toBe(true));
     const repair = calls.find((c) => c.url.endsWith('/job-health/repair'))!;
@@ -127,6 +127,6 @@ describe('OperationsPage', () => {
     const days = (Date.now() - Date.parse(body.params.from)) / 86_400_000;
     expect(days).toBeGreaterThan(6.9);
     expect(days).toBeLessThanOrEqual(7.01);
-    expect(await within(panel).findByText(/download it from Activity → Exports/)).toBeInTheDocument();
+    expect(await within(panel).findByText(/Support bundle requested/)).toBeInTheDocument();
   });
 });

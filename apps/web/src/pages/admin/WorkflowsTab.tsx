@@ -115,9 +115,7 @@ export function WorkflowsTab() {
       <Panel title="Workflows">
         {!data && loading && <SkeletonRows rows={3} cols={3} />}
         {data && workflows.length === 0 && (
-          <p className="p-4 text-muted">
-            No workflows yet. A product cannot be created without one, so start below.
-          </p>
+          <p className="p-4 text-muted">No workflows yet</p>
         )}
         {workflows.length > 0 && (
           <ul className="divide-y divide-border-subtle">
@@ -140,10 +138,7 @@ export function WorkflowsTab() {
                   // Not an empty list on the screen: an empty stage list is
                   // what makes a product grant on submission, and a reader
                   // seeing nothing would think the workflow was unfinished.
-                  <p className="mt-1 text-muted">
-                    No stages, so anything using it grants immediately, with no approval at
-                    all.
-                  </p>
+                  <p className="mt-1 text-warning">No stages — grants with no approval</p>
                 ) : (
                   <ol className="mt-1 list-decimal pl-5 text-muted">
                     {workflow.stages.map((stage) => (
@@ -201,10 +196,7 @@ export function WorkflowsTab() {
             </Button>
 
             {stages !== null && stages.length === 0 && (
-              <Alert tone="warning">
-                This workflow has no stages, so anything using it is granted immediately, with
-                no approval at all.
-              </Alert>
+              <Alert tone="warning">No stages — grants with no approval</Alert>
             )}
 
             {(stages ?? []).map((stage) => (
@@ -232,8 +224,7 @@ export function WorkflowsTab() {
                   // The screen that catches this before it is saved, rather than
                   // at 3am on somebody's request.
                   <Alert tone="danger">
-                    Nobody can decide this stage for this person. Any request reaching it will
-                    stop and wait for an administrator.
+                    Nobody can decide this stage; requests wait for an administrator.
                   </Alert>
                 )}
               </div>

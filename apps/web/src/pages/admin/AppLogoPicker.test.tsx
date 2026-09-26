@@ -72,7 +72,7 @@ describe('AppLogoPicker', () => {
     renderPicker();
     const input = screen.getByLabelText('Upload a logo image');
     await userEvent.upload(input, new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }), { applyAccept: false });
-    expect(screen.getByRole('alert')).toHaveTextContent('SVG is not accepted');
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose a PNG, JPEG or WebP image');
     await userEvent.upload(input, new File([new Uint8Array(70 * 1024)], 'big.png', { type: 'image/png' }));
     expect(screen.getByRole('alert')).toHaveTextContent('The limit is 64 KB');
     expect(fetch).not.toHaveBeenCalled();
