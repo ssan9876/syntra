@@ -208,11 +208,7 @@ export function ContainersPanel({
 
       {!loading && placements.length === 0 && unplaced.length === 0 && (
         <div className="px-4 pb-4">
-          <Empty title="Not in any directory yet">
-            None of the targets places accounts in OUs. On one that does, turn on
-            &ldquo;Mirror org units as OUs&rdquo; to place every unit by its place in the
-            tree.
-          </Empty>
+          <Empty title="Not in any directory yet" />
         </div>
       )}
 
@@ -263,8 +259,7 @@ export function ContainersPanel({
                   {/* On a mirroring target a mirrored row comes back on the
                       next run, re-derived and in state 'desired' -- which is
                       the way out when its OU was removed behind Syntra's back
-                      and the row is stuck reporting it vanished. Offered, and
-                      said. */}
+                      and the row is stuck reporting it vanished. */}
                   {!derived && (
                     <Button
                       size="sm"
@@ -275,38 +270,24 @@ export function ContainersPanel({
                     </Button>
                   )}
                 </span>
-                {derived && c.mirrored !== false && (
-                  <p className="w-full text-sm text-muted">
-                    No action needed: the next run records this placement and creates the OU
-                    if it is missing. A DN set by hand would override it.
-                  </p>
-                )}
-                {mirroredRow && c.mirroring && !derived && (
-                  <p className="w-full text-sm text-muted">
-                    Stop tracking forgets this row, never the OU; the next run derives it
-                    again and creates the OU only if it is missing.
-                  </p>
-                )}
                 {c.previousDn && (
-                  <p className="w-full text-sm text-muted">
-                    Currently at <code className="font-mono">{c.previousDn}</code>. The next
-                    run proposes moving that OU, with every account in it, here; a person
-                    confirms it before anything moves.
-                  </p>
+                  <dl className="flex w-full gap-2 text-sm">
+                    <dt className="text-muted">Currently at</dt>
+                    <dd>
+                      <code className="font-mono">{c.previousDn}</code>
+                    </dd>
+                  </dl>
                 )}
                 {!mirroredRow && c.mirroring && c.derivedDn && (
-                  <p className="w-full text-sm text-muted">
-                    Typed by hand, and a typed DN always takes precedence over the mirror.
-                    Mirrored, it would be <code className="font-mono">{c.derivedDn}</code>.
-                    Switching writes nothing to the directory: the next run proposes the
-                    move and holds for a person to confirm it.
-                  </p>
+                  <dl className="flex w-full gap-2 text-sm">
+                    <dt className="text-muted">Mirrored DN</dt>
+                    <dd>
+                      <code className="font-mono">{c.derivedDn}</code>
+                    </dd>
+                  </dl>
                 )}
                 {c.problem && (
-                  <p className="w-full text-sm text-muted">
-                    Not mirrored: {c.problem}.
-                    {!derived && ' The OU stays where it is; nothing is deleted.'}
-                  </p>
+                  <p className="w-full text-sm text-warning">Not mirrored: {c.problem}.</p>
                 )}
               </li>
             );
@@ -326,13 +307,10 @@ export function ContainersPanel({
               <Status tone="neutral">Not placed</Status>
               {/* The recommendation first, in reading order as well as on
                   screen; the typed DN after it. */}
-              <p className="w-full text-sm text-muted">
+              <p className="w-full text-sm">
                 <Link className="link" to={`/admin/targets/${t.id}#${ORG_UNITS_ANCHOR}`}>
                   Turn on mirroring for this target (recommended)
-                </Link>{' '}
-                to place this unit, and every other, at an OU derived from the org-unit
-                tree, with no DN to type. The target page previews what it would build
-                before anything is saved. Or set a DN by hand for this target only.
+                </Link>
               </p>
               <span className="flex w-full gap-2">{handButton(t.id, false)}</span>
             </li>
@@ -360,12 +338,11 @@ export function ContainersPanel({
             build={(v) => ({ targetSystemId: handFor, dn: v.dn ?? '' })}
             fields={(v, set, errs) => (
               <>
-                <p className="text-sm text-muted sm:col-span-2" data-testid="hand-typed-precedence">
-                  {handOverridesMirror
-                    ? 'A typed DN takes precedence over the mirror: this unit stops following the org-unit tree on this target until it is switched back to mirrored.'
-                    : 'A typed DN places this unit on this target only, and takes precedence over the mirror if mirroring is turned on later.'}{' '}
-                  Nothing is written to the directory here; the next run creates the OU.
-                </p>
+                {handOverridesMirror && (
+                  <div className="sm:col-span-2" data-testid="hand-typed-precedence">
+                    <Alert tone="warning">Stops following the org-unit tree here.</Alert>
+                  </div>
+                )}
                 <Field
                   label="Container"
                   value={v.dn ?? ''}

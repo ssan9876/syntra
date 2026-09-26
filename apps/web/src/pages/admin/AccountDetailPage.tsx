@@ -297,9 +297,9 @@ export function AccountDetailPage() {
         // owner that the page in their drawer has stopped working.
         setFactorNotice(
           result.recoveryCodesRevoked > 0
-            ? `Removed, and ${result.recoveryCodesRevoked} unused recovery code${
+            ? `Removed. ${result.recoveryCodesRevoked} unused recovery code${
                 result.recoveryCodesRevoked === 1 ? '' : 's'
-              } stopped working with it.`
+              } revoked.`
             : 'Removed.',
         );
       } catch (cause) {
@@ -380,13 +380,6 @@ export function AccountDetailPage() {
                     </Button>
                   )}
                 </span>
-                {service && (
-                  <span className="text-sm font-normal text-muted">
-                    Used by integrations through API tokens. A password set
-                    here is not forced to change at next sign-in, and a pending
-                    password change does not stop its tokens.
-                  </span>
-                )}
               </span>
             ),
           },
@@ -413,17 +406,18 @@ export function AccountDetailPage() {
                   </Link>
                   {can('identity.write') && !confirmUnlink && (
                     <Button size="sm" variant="secondary" onClick={() => setConfirmUnlink(true)}>
-                      Unlink
+                      Unlink from {data.person.givenName} {data.person.familyName}
                     </Button>
                   )}
                 </span>
                 {confirmUnlink && (
-                  <span className="flex flex-col gap-2 text-sm font-normal text-muted">
-                    <span>
-                      {data.login} keeps its password, tokens and status. It stops belonging to{' '}
-                      {data.person.givenName} {data.person.familyName}, so their leaver no longer
-                      disables it and it no longer gets applications through their org unit.
-                    </span>
+                  <span className="flex flex-col gap-2 text-sm font-normal">
+                    <Alert tone="warning">
+                      <ul className="list-disc pl-5">
+                        <li>Their leaver no longer disables it</li>
+                        <li>No applications through their org unit</li>
+                      </ul>
+                    </Alert>
                     <span className="flex flex-wrap gap-2">
                       <Button size="sm" variant="danger" loading={busy} onClick={() => void unlink()}>
                         Unlink {data.login}
@@ -558,7 +552,7 @@ export function AccountDetailPage() {
                   loading={busy}
                   onClick={() => void issueSetupLink()}
                 >
-                  Password link
+                  {setupLink ? 'Replace password link' : 'Password link'}
                 </Button>
               )}
               {/*
@@ -601,11 +595,18 @@ export function AccountDetailPage() {
             {setupLink && (
               <div className="rounded border border-border-subtle p-4">
                 <h3 className="font-medium text-ink">Password setup link</h3>
-                <p className="mt-1 text-sm text-muted">
-                  Send this to them. It can be used once, expires{' '}
-                  {new Date(setupLink.expiresAt).toLocaleString()}, and
-                  generating another one stops the previous link working.
-                </p>
+                <dl className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                  <div className="flex gap-2">
+                    <dt className="text-muted">Expires</dt>
+                    <dd className="text-ink">
+                      {new Date(setupLink.expiresAt).toLocaleString()}
+                    </dd>
+                  </div>
+                  <div className="flex gap-2">
+                    <dt className="text-muted">Uses</dt>
+                    <dd className="text-ink">Once</dd>
+                  </div>
+                </dl>
                 {/*
                   A read-only input, not an anchor. An administrator who clicks
                   a link to check it has spent the token, and the joiner they
@@ -639,7 +640,7 @@ export function AccountDetailPage() {
             {settingPassword && (
               <div className="rounded border border-border-subtle p-4">
                 <h3 className="font-medium text-ink">Set a password</h3>
-                <p className="mt-1 text-sm text-muted">
+                <div className="mt-3">
                   {/*
                     The CONSEQUENCE up front, and not the length rule. The
                     consequence is irreversible and this page knows it for
@@ -649,10 +650,12 @@ export function AccountDetailPage() {
                     server owns the rule and says so on refusal — the same
                     decision the portal's own change form made.
                   */}
-                  {service
-                    ? 'Every session is revoked immediately. This is a service account, so the password is not forced to change at next sign-in and its API tokens keep working.'
-                    : 'Every session is revoked immediately, and they must choose their own password the next time they sign in.'}
-                </p>
+                  <Alert tone="warning">
+                    {service
+                      ? 'Revokes every session. API tokens keep working.'
+                      : 'Revokes every session. Must change at next sign-in.'}
+                  </Alert>
+                </div>
                 <div className="mt-3">
                   <Field
                     label="New password"
@@ -681,13 +684,13 @@ export function AccountDetailPage() {
                           );
                           setPasswordDone(
                             `Password set. ${result.sessionsRevoked} session${
-                              result.sessionsRevoked === 1 ? ' was' : 's were'
-                            } revoked${
+                              result.sessionsRevoked === 1 ? '' : 's'
+                            } revoked.${
                               // What the server recorded, not what this
                               // screen assumed: absent reads as must-change.
                               result.mustChange === false
-                                ? '. It is a service account, so it does not have to be changed at next sign-in.'
-                                : ', and they must choose their own the next time they sign in.'
+                                ? ''
+                                : ' Must change at next sign-in.'
                             }`,
                           );
                           setSettingPassword(false);
@@ -732,13 +735,13 @@ export function AccountDetailPage() {
                   label="user"
                   consequences={
                     local
-                      ? 'Every session and refresh token is revoked immediately.'
+                      ? 'Revokes every session and refresh token.'
                       : // Says what actually happens, in order. A confirmation
                         // that asks "are you sure?" without saying what follows
                         // is one people click through without reading.
-                        `The account is disabled in ${
+                        `Disabled in ${
                           source?.name ?? 'the directory'
-                        } immediately, every session is revoked, and the leaver steps configured on the target follow from today.`
+                        } now. Sessions revoked; target leaver steps run.`
                   }
                   onChanged={reload}
                 />
@@ -748,8 +751,7 @@ export function AccountDetailPage() {
                 // setting is the difference between a dead end and something an
                 // administrator can act on.
                 <span className="text-sm text-muted">
-                  {source?.name ?? 'A directory source'} owns this account, and
-                  write-back is off
+                  Write-back off in {source?.name ?? 'the directory source'}
                 </span>
               )}
             </div>
@@ -760,7 +762,7 @@ export function AccountDetailPage() {
                   path={`/api/admin/users/${data.id}`}
                   label="user"
                   confirmWord={data.login}
-                  warning="The account is removed from the directory and from Syntra, and every session with it. The person and the audit trail are kept. This cannot be undone."
+                  warning="Removes the account and its sessions. Person and audit trail kept. Cannot be undone."
                   // Back to the list, not back to this screen. Staying here
                   // would leave the reader looking at a record that no longer
                   // exists and a page whose every control now answers 404.

@@ -235,16 +235,12 @@ function ThresholdHint({ targetId, blockedReason }: { targetId: string; blockedR
   return (
     <div className="mt-3 space-y-2" data-testid="threshold-hint">
       {firstRun && (
-        <p>
-          This is the target&rsquo;s first run, which a person always confirms
-          whatever the thresholds say. No setting changes that: confirm the run
-          below once the plan looks right.
-        </p>
+        <p>First run — always needs confirmation.</p>
       )}
       {hints.length > 0 && (
         <>
           <p>
-            {hints.length === 1 ? 'The setting that held it is' : 'The settings that held it are'}{' '}
+            Held by{' '}
             {hints.map((hint, index) => (
               <span key={hint.key}>
                 {index > 0 ? (index === hints.length - 1 ? ' and ' : ', ') : ''}
@@ -253,21 +249,14 @@ function ThresholdHint({ targetId, blockedReason }: { targetId: string; blockedR
                 {hint.threshold !== null && hint.share !== null ? `; this run measured ${hint.share}%)` : hint.threshold !== null ? ')' : ''}
               </span>
             ))}
-            , under Safety thresholds on the target. A threshold is the largest
-            share of the target a single run may change without a person
-            confirming it.
           </p>
           {hints.some((hint) => hint.note) && (
             <p className="text-sm">{hints.find((hint) => hint.note)!.note}</p>
           )}
           <p>
-            If this change is expected, confirm the run below. If the
-            percentage is simply too low for a target this size (on a small
-            directory one new account can be a large share), raise it on the{' '}
             <Link className="link" to={`/admin/targets/${targetId}#${SAFETY_THRESHOLDS_ANCHOR}`}>
-              target&rsquo;s Safety thresholds
+              Adjust Safety thresholds
             </Link>
-            ; later runs are measured against the new value.
           </p>
         </>
       )}
@@ -346,10 +335,7 @@ export function ProvisionRunDetailPage() {
       .catch(() => {
         if (seq !== requestSeq.current) return;
         setDrift(null);
-        setDriftProblem(
-          'The drift for this target could not be read, so this screen cannot ' +
-            'say whether there is any. It is not saying there is none.',
-        );
+        setDriftProblem('The request failed. Drift is unknown, not zero.');
       });
   };
   useEffect(reload, [id, runId]);
@@ -522,27 +508,11 @@ export function ProvisionRunDetailPage() {
             <ul className="mt-2 list-disc pl-5">
               <li>{count(outcome.applied, 'action', 'actions')} applied</li>
               <li>{count(outcome.failed, 'action', 'actions')} failed</li>
-              <li>
-                {count(outcome.pendingRetry, 'action', 'actions')} awaiting
-                retry — a retryable failure, which the next run for this target
-                picks up
-              </li>
-              <li>
-                {count(outcome.inFlight, 'action', 'actions')} in flight — the
-                write was attempted and whether it landed is at the target, not
-                here. The next run asks the directory and resolves it.
-              </li>
-              <li>
-                {count(outcome.deferred, 'action', 'actions')} deferred — they
-                require an explicit confirmation and this apply was not
-                confirmed
-              </li>
+              <li>{count(outcome.pendingRetry, 'action', 'actions')} awaiting retry</li>
+              <li>{count(outcome.inFlight, 'action', 'actions')} in flight — unconfirmed at the target</li>
+              <li>{count(outcome.deferred, 'action', 'actions')} deferred — not confirmed</li>
               {outcome.refused !== undefined && (
-                <li>
-                  {count(outcome.refused, 'action', 'actions')} refused — the
-                  adapter release is not certified for it, or the target no
-                  longer advertises it; never attempted
-                </li>
+                <li>{count(outcome.refused, 'action', 'actions')} refused — never attempted</li>
               )}
             </ul>
             {outcome.skipped > 0 && (
@@ -550,10 +520,7 @@ export function ProvisionRunDetailPage() {
               // `proposed`, and a deferred action is left `proposed`, so the
               // deferred are inside this number rather than beside it.
               <p className="mt-2">
-                {count(outcome.skipped, 'action', 'actions')} were left
-                unapplied altogether, the deferred among them. Applying part of
-                a run ends it: the next run works out afresh what is still
-                needed.
+                {count(outcome.skipped, 'action', 'actions')} left unapplied, deferred included.
               </p>
             )}
           </Alert>
@@ -586,13 +553,7 @@ export function ProvisionRunDetailPage() {
                * stable; the list is not, and the reasons above are the run's
                * own.
                */
-              <p className="mt-3">
-                This one cannot be confirmed away. A tick means &ldquo;I have
-                read the numbers and want this anyway&rdquo;, and the guard
-                refused this run because it could not compute a number for
-                anybody to have read. The reasons above say which check
-                refused it.
-              </p>
+              <p className="mt-3">Cannot be confirmed away.</p>
             )}
           </Alert>
         )}
@@ -611,11 +572,9 @@ export function ProvisionRunDetailPage() {
                 <li key={reason}>{reason}</li>
               ))}
             </ul>
-            <p className="mt-3">
-              Refused actions are never attempted. The rest of the plan is
-              unaffected.
-              {run.adapterVersion ? ` Planned for adapter ${run.adapterVersion}.` : ''}
-            </p>
+            {run.adapterVersion && (
+              <p className="mt-3">Planned for adapter {run.adapterVersion}.</p>
+            )}
           </Alert>
         )}
 
@@ -629,8 +588,7 @@ export function ProvisionRunDetailPage() {
             {/* An exception is not a warning to be scrolled past: every person
                 on that list is a person whose access is frozen until somebody
                 fixes something. */}
-            They were excluded from this plan entirely and their existing access
-            was not touched. Read them on the Exceptions tab.
+            Excluded from this plan; existing access untouched.
           </Alert>
         )}
 
@@ -671,10 +629,7 @@ export function ProvisionRunDetailPage() {
               <div className="p-6">
                 {/* Convergence, and it has to say so. An empty plan and a plan
                     that failed to compute look identical otherwise. */}
-                <Empty title="This run proposes nothing">
-                  Every person already matches what the rules and the account
-                  profile say they should have.
-                </Empty>
+                <Empty title="This run proposes nothing" />
               </div>
             </Panel>
           ) : (
@@ -715,9 +670,7 @@ export function ProvisionRunDetailPage() {
           <Panel>
             {run.actions.length === 0 ? (
               <div className="p-6">
-                <Empty title="This run proposes nothing">
-                  Nothing to group.
-                </Empty>
+                <Empty title="This run proposes nothing" />
               </div>
             ) : (
               <ul>
@@ -740,9 +693,7 @@ export function ProvisionRunDetailPage() {
           <Panel>
             {run.exceptions.length === 0 ? (
               <div className="p-6">
-                <Empty title="Everybody was processed">
-                  No person was excluded from this plan.
-                </Empty>
+                <Empty title="Everybody was processed" />
               </div>
             ) : (
               <ul>
@@ -777,18 +728,14 @@ export function ProvisionRunDetailPage() {
               </div>
             ) : drift.length === 0 ? (
               <div className="p-6">
-                <Empty title="No drift outstanding">
-                  Everything at the target matches what Syntra believes about it.
-                </Empty>
+                <Empty title="No drift outstanding" />
               </div>
             ) : (
               <ul>
                 {drift.length >= DRIFT_PAGE && (
                   <li className="border-b border-border-subtle p-4">
                     <Alert tone="warning" title="This list is not all of it">
-                      The server returns at most {DRIFT_PAGE} findings in one
-                      read, and it returned {DRIFT_PAGE}. There are more open
-                      findings than are shown here.
+                      Showing the first {DRIFT_PAGE}.
                     </Alert>
                   </li>
                 )}
@@ -828,34 +775,18 @@ export function ProvisionRunDetailPage() {
               unconfirmable ? 'This run cannot be applied' : 'Nothing further to apply'
             }
           >
-            <p className="p-4 text-muted">
-              {unconfirmable ? (
-                <>
-                  The guard refused it for a reason no confirmation answers, so
-                  there is no Apply here: the server refuses the request
-                  outright, whatever is ticked. Put right what the reasons above
-                  name; the next run supersedes this one and works the plan out
-                  afresh, and it does not wait for a staleness window to do it.
-                </>
-              ) : superseded ? (
-                <>
-                  A later run superseded this one, and its still-proposed
-                  actions were marked superseded rather than applied. Two
-                  overlapping plans against one target can interleave a
-                  revocation from the older behind a grant from the newer,
-                  producing a state neither plan described. Whatever is still
-                  needed is in the newer run.
-                </>
-              ) : (
-                <>
-                  This run is{' '}
-                  <strong className="font-semibold">{run.status}</strong>.
-                  Applying part of a run ends it: anything left unticked was not
-                  written, and the next run works out afresh what is still
-                  needed rather than replaying a plan that has gone stale.
-                </>
-              )}
-            </p>
+            {!unconfirmable && (
+              <p className="p-4 text-muted">
+                {superseded ? (
+                  'Superseded by a later run.'
+                ) : (
+                  <>
+                    This run is{' '}
+                    <strong className="font-semibold">{run.status}</strong>.
+                  </>
+                )}
+              </p>
+            )}
           </Panel>
         )}
 
@@ -865,8 +796,8 @@ export function ProvisionRunDetailPage() {
               {maintenanceClosed && (
                 <Alert tone={maintenanceOverrideAllowed ? 'warning' : 'danger'} title="Outside the target maintenance window">
                   {maintenanceOverrideAllowed
-                    ? 'Only the selected leaver-removal actions are eligible for an urgent exception. Confirm the apply and record the operational reason.'
-                    : 'This selection includes actions that cannot bypass the maintenance window. Wait for the window or select only revocations, disables, archives, and Syntra-login deactivations.'}
+                    ? 'Leaver removals only. Record a reason.'
+                    : 'Selection includes actions that must wait for the window.'}
                 </Alert>
               )}
               {maintenanceClosed && maintenanceOverrideAllowed && (
@@ -903,11 +834,10 @@ export function ProvisionRunDetailPage() {
               >
                 Apply {selected.size} action{selected.size === 1 ? '' : 's'}
               </Button>
-              <p className="text-muted">
-                Applying part of a run ends it. Anything left unticked is not
-                written, and the next run decides again whether it is still
-                needed — this is a plan, not a queue to work through.
-              </p>
+              {selected.size > 0 &&
+                selected.size < run.actions.filter((a) => a.status === 'proposed').length && (
+                  <Alert tone="warning">Unticked actions are dropped; this run ends.</Alert>
+                )}
             </div>
           </Panel>
         )}

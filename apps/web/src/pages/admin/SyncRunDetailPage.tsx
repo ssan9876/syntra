@@ -172,7 +172,7 @@ export function SyncRunDetailPage() {
     } catch (cause) {
       setApplyError(
         cause instanceof ApiError && cause.problem.status === 409
-          ? 'That change is no longer proposed, so it cannot be skipped. Reload to see where it got to.'
+          ? 'That change is no longer proposed.'
           : 'That change could not be skipped.',
       );
     } finally {
@@ -209,7 +209,6 @@ export function SyncRunDetailPage() {
    * partial apply a discard.
    */
   const proposed = data.changes.filter((change) => change.status === 'proposed');
-  const settled = proposed.length === 0;
   const included = proposed
     .filter((change) => !excluded.has(change.id))
     .map((change) => change.id);
@@ -274,9 +273,7 @@ export function SyncRunDetailPage() {
       <div className="space-y-6">
         <CancellationStatus run={data} noun="sync run" />
         {data.status === 'applying' && !cancelPending(data) && (
-          <Alert tone="info" title="Applying changes">
-            Changes are being written one at a time. This page follows it.
-          </Alert>
+          <Alert tone="info">Applying changes</Alert>
         )}
         {inFlight && (
           // Named as a state of the DIRECTORY READ, not of the page. "Queued"
@@ -284,17 +281,10 @@ export function SyncRunDetailPage() {
           // started, which is what an administrator needs to know before they
           // conclude their source is unreachable — and neither of them is an
           // error, which is what an empty run screen looks like.
-          <Alert
-            tone="info"
-            title={
-              data.status === 'queued'
-                ? 'Queued — this run has not started yet'
-                : 'Reading the directory'
-            }
-          >
+          <Alert tone="info">
             {data.status === 'queued'
-              ? 'A run is a background job. It starts as soon as a worker is free, and this page follows it.'
-              : 'Nothing is proposed until the whole directory has been read. This page follows it.'}
+              ? 'Queued — this run has not started yet'
+              : 'Reading the directory'}
           </Alert>
         )}
         {blocked && (
@@ -340,10 +330,7 @@ export function SyncRunDetailPage() {
             tone="warning"
             title={`${data.mappingFailures} of ${data.recordsRead} records could not be mapped`}
           >
-            <p>
-              They were left exactly as they are: nothing was proposed for
-              them, and none of them counts as absent from the source.
-            </p>
+            <p>Left untouched; not treated as absent.</p>
             {data.mappingFailureReasons.length > 0 && (
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {data.mappingFailureReasons.map((reason) => (
@@ -356,24 +343,12 @@ export function SyncRunDetailPage() {
 
         {data.unresolvedMembers > 0 && (
           <Alert tone="warning" title="Some memberships could not be resolved">
-            {data.unresolvedMembers} group members are outside the configured
-            search base and were not synced. Widen the base to include them.
+            {data.unresolvedMembers} group members outside the search base were not synced.
           </Alert>
         )}
 
-        {!settled && (
-          <p className="text-muted">
-            Untick a change to leave it out of this apply — it stays proposed
-            and can be applied later. Skip it to record that it will not be
-            applied at all.
-          </p>
-        )}
-
         {data.changes.length === 0 ? (
-          <Empty title="Nothing to change">
-            Syntra already matches the source. A run with no proposed changes is
-            the normal result once the directory is in step.
-          </Empty>
+          <Empty title="Already matches the source" />
         ) : (
           [...grouped.entries()].map(([type, changes]) => (
             <Panel

@@ -253,10 +253,8 @@ export function AuditTab() {
         // than having no log, so the warning leads the page.
         <div className="mb-6">
           <Alert tone="danger" title="This audit log has been altered">
-            Verification failed at entry {data.brokenAtSequence}. An entry at or
-            before that point was changed or removed outside Syntra. Treat
-            everything below as unverified and investigate the database
-            directly.
+            Verification failed at entry {data.brokenAtSequence}. Treat the
+            entries below as unverified.
           </Alert>
         </div>
       )}
@@ -264,7 +262,6 @@ export function AuditTab() {
       {!error && data?.chainValid && events.length > 0 && (
         <p className="mb-4 flex items-center gap-2 text-muted">
           <StateBadge state="healthy">Chain verified</StateBadge>
-          <span>No entry has been altered or removed.</span>
         </p>
       )}
 
@@ -294,9 +291,7 @@ export function AuditTab() {
 
           {data && events.length === 0 && Object.keys(filters).length === 0 && (
             <div className="p-6">
-              <Empty title="Nothing recorded yet">
-                Sign-ins, account changes and permission grants appear here as they happen.
-              </Empty>
+              <Empty title="Nothing recorded yet" />
             </div>
           )}
 

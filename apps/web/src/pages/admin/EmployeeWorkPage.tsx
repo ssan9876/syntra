@@ -252,7 +252,7 @@ export function EmployeeWorkPage() {
         });
         const verb = action === 'acknowledge' ? 'acknowledged' : 'queued for retry';
         if (result?.approvalRequired) {
-          setBulkOutcome('Nothing was retried yet: policy requires a second person to approve this bulk retry.');
+          setBulkOutcome('Not retried yet — awaiting a second approver.');
           toast({ tone: 'info', title: 'Bulk retry sent for approval' });
         } else {
           const succeeded = result?.succeeded ?? selected.size;

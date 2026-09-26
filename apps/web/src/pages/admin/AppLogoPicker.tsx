@@ -81,11 +81,11 @@ export function AppLogoPicker({
     // Checked here for a quick answer, and again by the server, which also
     // reads the file's first bytes: a renamed SVG is still refused there.
     if (!(APP_ICON_IMAGE_TYPES as readonly string[]).includes(file.type)) {
-      setUploadError('Choose a PNG, JPEG or WebP image. SVG is not accepted: it can carry script.');
+      setUploadError('Choose a PNG, JPEG or WebP image.');
       return;
     }
     if (file.size > MAX_APP_ICON_BYTES) {
-      setUploadError(`That image is ${kb(file.size)}. The limit is ${kb(MAX_APP_ICON_BYTES)} — a tile draws it at 40 pixels.`);
+      setUploadError(`That image is ${kb(file.size)}. The limit is ${kb(MAX_APP_ICON_BYTES)}.`);
       return;
     }
     const reader = new FileReader();

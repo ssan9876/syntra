@@ -134,8 +134,8 @@ describe('ProvisionRunDetailPage threshold hint', () => {
     }));
     renderPage();
     const hint = await screen.findByTestId('threshold-hint');
-    expect(hint).toHaveTextContent(/first run/);
-    expect(hint).toHaveTextContent(/No setting changes that/);
+    expect(hint).toHaveTextContent(/first run/i);
+    expect(hint).toHaveTextContent(/always needs confirmation/);
     expect(screen.queryByRole('link', { name: /Safety thresholds/ })).toBeNull();
   });
 
@@ -250,7 +250,7 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
 
     expect(await screen.findByText('This run is blocked')).toBeVisible();
-    expect(screen.getByText(/cannot be confirmed away/)).toBeVisible();
+    expect(screen.getByText(/cannot be confirmed away/i)).toBeVisible();
     expect(
       screen.queryByLabelText(
         'I have read the numbers above and want to apply this run anyway',
@@ -317,9 +317,9 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/A later run superseded this one/),
+      await screen.findByText('Superseded by a later run.'),
     ).toBeVisible();
-    expect(screen.queryByText(/Applying part of a run ends it/)).toBeNull();
+    expect(screen.queryByText(/this run ends/)).toBeNull();
     expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
   });
 
@@ -458,8 +458,8 @@ describe('ProvisionRunDetailPage', () => {
     expect(screen.getByText('Drift could not be read')).toBeVisible();
     expect(screen.queryByText('No drift outstanding')).toBeNull();
     expect(
-      screen.queryByText(/Everything at the target matches/),
-    ).toBeNull();
+      screen.queryByText(/drift is unknown, not zero/i),
+    ).toBeVisible();
   });
 
   it('does not count a drift read that failed as zero findings', async () => {
@@ -562,7 +562,7 @@ describe('ProvisionRunDetailPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Apply 1 action' }));
 
     const notice = await noticeHeaded('1 action is in flight');
-    expect(notice).toHaveTextContent(/whether it landed is at the target, not here/);
+    expect(notice).toHaveTextContent(/1 action in flight — unconfirmed at the target/);
     // And not wearing the tone a clean apply wears.
     expect(notice.className).toMatch(/danger/);
   });
@@ -587,7 +587,7 @@ describe('ProvisionRunDetailPage', () => {
 
     const notice = await noticeHeaded('3 actions were deferred');
     expect(notice).toHaveTextContent(
-      /3 actions deferred — they require an explicit confirmation/,
+      /3 actions deferred — not confirmed/,
     );
   });
 
@@ -612,7 +612,7 @@ describe('ProvisionRunDetailPage', () => {
 
     const notice = await noticeHeaded('3 actions were deferred');
     expect(notice).toHaveTextContent(
-      /5 actions were left unapplied altogether, the deferred among them/,
+      /5 actions left unapplied, deferred included/,
     );
   });
 
@@ -640,7 +640,7 @@ describe('ProvisionRunDetailPage', () => {
     // is non-zero cannot be told from a count nobody computed.
     expect(notice).toHaveTextContent(/0 actions in flight/);
     expect(notice).toHaveTextContent(/0 actions deferred/);
-    expect(notice).not.toHaveTextContent(/left unapplied altogether/);
+    expect(notice).not.toHaveTextContent(/left unapplied/);
     expect(notice.className).not.toMatch(/danger|warning/);
   });
 

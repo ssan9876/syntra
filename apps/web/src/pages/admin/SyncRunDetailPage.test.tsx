@@ -219,7 +219,7 @@ describe('SyncRunDetailPage', () => {
     mockFetch({ run: run({ changes: [] }) });
     renderPage();
 
-    expect(await screen.findByText(/already matches/i)).toBeInTheDocument();
+    expect(await screen.findByText(/already matches the source/i)).toBeInTheDocument();
   });
 
   it('names the source the run belongs to', async () => {

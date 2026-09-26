@@ -94,8 +94,7 @@ export function SecurityAlertsTab() {
                     checked={chosen.has(category.key)}
                     onChange={(on) => toggle(category.key, on)}
                   />
-                  <p className="mt-1 max-w-[72ch] pl-6.5 text-sm text-muted">{category.description}</p>
-                  <p className="mt-0.5 pl-6.5 font-mono text-xs text-muted">{category.actions.join(' · ')}</p>
+                  <p className="mt-1 pl-6.5 font-mono text-xs text-muted">{category.actions.join(' · ')}</p>
                 </li>
               ))}
             </ul>
@@ -109,7 +108,8 @@ export function SecurityAlertsTab() {
               label="Warn this many days before expiry"
               value={days}
               onChange={setDays}
-              error={parsedDays ? undefined : 'Up to eight whole numbers between 1 and 365, separated by commas.'}
+              placeholder="30, 14, 7"
+              error={parsedDays ? undefined : 'Up to 8 numbers between 1 and 365'}
             />
             <Button variant="primary" loading={busy} disabled={!parsedDays} onClick={() => void save()}>
               Save policy

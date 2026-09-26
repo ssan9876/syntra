@@ -41,7 +41,7 @@ describe('ChangeControlTab', () => {
   it('offers the requester only withdrawal, and another administrator approval', async () => {
     serve({ '/api/admin/change-control': () => json(state({ requests: [request({ requestedByUserId: 'user-1' })] })) });
     const { unmount } = render(<ChangeControlTab />);
-    expect(await screen.findByText(/different administrator must approve this/)).toBeVisible();
+    expect(await screen.findByText('Needs another administrator')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Approve and apply' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Withdraw' })).toBeEnabled();
     unmount();

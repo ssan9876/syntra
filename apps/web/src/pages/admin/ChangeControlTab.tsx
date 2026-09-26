@@ -112,7 +112,7 @@ export function ChangeControlTab() {
 
     {secret ? <Alert tone="warning" title="Copy this secret now">
       <p className="font-mono break-all">{secret}</p>
-      <p className="mt-2 text-sm">It is shown once and stored nowhere. Hand it to whoever asked for the change through your usual secure channel.</p>
+      <p className="mt-2 text-sm">Shown once — copy it now.</p>
       <Button variant="secondary" onClick={() => setSecret(null)}>I have copied it</Button>
     </Alert> : null}
 
@@ -127,7 +127,7 @@ export function ChangeControlTab() {
           />
         ))}
         {dirty && data.classes.some((key) => !classes.includes(key))
-          ? <p className="text-sm text-warning">Switching a class off is itself held for a second administrator.</p>
+          ? <p className="text-sm text-warning">Switching off is itself held for a second administrator.</p>
           : null}
         <Button loading={busy === 'policy'} disabled={!dirty} onClick={() => void savePolicy()}>Save</Button>
       </div>
@@ -147,7 +147,7 @@ export function ChangeControlTab() {
             </dl>
             {own
               ? <div className="flex flex-wrap items-center gap-3">
-                  <p className="text-sm text-muted">A different administrator must approve this.</p>
+                  <Status tone="warning">Needs another administrator</Status>
                   <Button variant="secondary" loading={busy === `withdraw:${request.id}`} onClick={() => void decide(request, 'withdraw')}>Withdraw</Button>
                 </div>
               : <div className="space-y-3">

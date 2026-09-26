@@ -152,9 +152,9 @@ describe('AccountDetailPage', () => {
     mockApi(ACCOUNT, { '/unlink-user': unlinked });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Unlink' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Unlink from Jo Doe' }));
     expect(unlinked).not.toHaveBeenCalled();
-    expect(screen.getByText(/their leaver no longer disables it/)).toBeInTheDocument();
+    expect(screen.getByText(/their leaver no longer disables it/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Unlink jdoe' }));
     await waitFor(() => expect(unlinked).toHaveBeenCalled());
@@ -167,7 +167,7 @@ describe('AccountDetailPage', () => {
     renderPage();
 
     await screen.findByRole('link', { name: 'Jo Doe' });
-    expect(screen.queryByRole('button', { name: 'Unlink' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^unlink/i })).not.toBeInTheDocument();
   });
 
   it('says so when no person owns the account', async () => {
@@ -319,7 +319,7 @@ describe('AccountDetailPage', () => {
       renderPage();
 
       await userEvent.click(await screen.findByRole('button', { name: /deactivate/i }));
-      expect(screen.getByText(/every session and refresh token is revoked/i)).toBeInTheDocument();
+      expect(screen.getByText(/revokes every session and refresh token/i)).toBeInTheDocument();
     });
 
     /**
@@ -335,7 +335,7 @@ describe('AccountDetailPage', () => {
       expect(
         screen.queryByRole('button', { name: /deactivate/i }),
       ).not.toBeInTheDocument();
-      expect(screen.getByText(/write-back is off/i)).toBeInTheDocument();
+      expect(screen.getByText(/write-back off/i)).toBeInTheDocument();
     });
   });
 
@@ -420,8 +420,8 @@ describe('AccountDetailPage set password', () => {
     // The consequence is stated UP FRONT, because it is irreversible and the
     // page knows it for certain. The length rule is not, because the page does
     // not know the tenant's minimum and a wrong number is worse than none.
-    expect(await screen.findByText(/every session is revoked/i)).toBeInTheDocument();
-    expect(screen.getByText(/choose their own/i)).toBeInTheDocument();
+    expect(await screen.findByText(/revokes every session/i)).toBeInTheDocument();
+    expect(screen.getByText(/must change at next sign-in/i)).toBeInTheDocument();
   });
 
   it('sets a password and says what happened, in order', async () => {
@@ -446,7 +446,7 @@ describe('AccountDetailPage set password', () => {
     await waitFor(() => expect(sent).toBeDefined());
     expect(sent).toEqual({ password: 'a-long-enough-password' });
     expect(
-      await screen.findByText(/2 sessions were revoked/i),
+      await screen.findByText(/2 sessions revoked/i),
     ).toBeInTheDocument();
   });
 
@@ -465,7 +465,7 @@ describe('AccountDetailPage set password', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
 
-    expect(await screen.findByText(/1 session was revoked/i)).toBeInTheDocument();
+    expect(await screen.findByText(/1 session revoked/i)).toBeInTheDocument();
   });
 
   it('shows the server’s reason when the password is refused', async () => {
@@ -508,7 +508,7 @@ describe('AccountDetailPage set password', () => {
     expect(
       await screen.findByText(/API tokens keep working/i),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/must choose their own password/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/must change at next sign-in/i)).not.toBeInTheDocument();
 
     await userEvent.type(
       await screen.findByLabelText('New password'),
@@ -516,9 +516,7 @@ describe('AccountDetailPage set password', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Set it' }));
 
-    expect(
-      await screen.findByText(/does not have to be changed at next sign-in/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Password set. 0 sessions revoked.')).toBeInTheDocument();
   });
 
   it('is not offered for an account whose password lives upstream', async () => {
@@ -704,12 +702,11 @@ describe('AccountDetailPage person suggestions', () => {
 describe('AccountDetailPage account type', () => {
   const UNLINKED = { ...ACCOUNT, kind: 'person', personId: null, person: null };
 
-  it('shows a service account and explains what differs', async () => {
+  it('shows a service account', async () => {
     mockApi({ ...UNLINKED, kind: 'service' });
     renderPage();
 
     expect(await screen.findByText('Service account')).toBeInTheDocument();
-    expect(screen.getByText(/used by integrations through API tokens/i)).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Mark as person account' }),
     ).toBeInTheDocument();
