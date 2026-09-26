@@ -1379,7 +1379,15 @@ verification Govern already runs nightly is the follow-up.
 `.github/workflows/ci.yml` runs on every push and pull request. Its two main
 jobs are the unit and integration suite, against a real PostgreSQL, OpenLDAP
 and Samba domain controller, and the browser suite, against a running, seeded
-stack. Two smaller jobs also run:
+stack. The unit and integration suite is split by file into four shards
+(`tests (shard N/4)`), each on its own runner with its own containers and
+scratch databases, running `pnpm test -- --shard=N/4`. A `typecheck, lint and
+console` job runs the operational shell-tool tests, the typecheck, the lint,
+the console's component tests and its production build once, beside the
+shards, since none of them needs a database. A job named `tests` needs all of
+them and is green only when every shard and that job are, so there is still
+one `tests` status to require. Locally, `pnpm test` with no argument is still
+the whole suite. Other jobs:
 
 - `docker build` builds both images.
 - `helm chart` runs `helm lint --strict` and `helm template` over
@@ -1406,6 +1414,17 @@ and four workers there trips a separate, hardcoded 60-second vitest RPC
 heartbeat timeout, unrelated to `hookTimeout`. The arithmetic, the RPC timeout,
 and why the number differs between a workstation and this runner are written
 up in `docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md`.
+Two workers is per runner, so it holds unchanged in each shard.
+
+**Releases reuse a green run.** `.github/workflows/release.yml` refuses a tag
+whose commit is not reachable from `main`, then looks for a `ci.yml` run in
+this repository for exactly that commit, on `main`, from a `push` or
+`workflow_dispatch`, that completed with `success`. If it finds one it skips
+the suite and names that run in the log and the job summary; otherwise, or if
+the API call fails, it runs `ci.yml` in full as before. The release jobs run
+only when one of the two is green. A tag pushed while `main`'s own run is
+still going finds nothing and runs the suite. `security.yml` is not part of
+the release gate.
 
 ## Tests
 
