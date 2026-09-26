@@ -61,6 +61,8 @@ const PAGES = [
   ['/admin/updates', '18-updates'],
 ];
 
+// Runs in the page, through page.evaluate, not in Node.
+/* global document, NodeFilter */
 function redact(pairs) {
   const exact = new Map(pairs.filter(([from]) => from.startsWith('=')).map(([from, to]) => [from.slice(1), to]));
   const partial = pairs.filter(([from]) => !from.startsWith('='));
