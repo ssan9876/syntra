@@ -135,10 +135,12 @@ for (const [path, selector, name] of records) {
   await page.goto(`${base}${path}`);
   await settle(page);
   const link = page.locator(selector).first();
-  if (await link.isVisible().catch(() => false)) {
-    const before = page.url();
-    await link.click();
-    await page.waitForURL((url) => url.toString() !== before, { timeout: 20_000 });
+  const href = (await link.isVisible().catch(() => false)) ? await link.getAttribute('href') : null;
+  if (href) {
+    // Followed by URL rather than clicked: a click on a list the console is
+    // still re-rendering was captured as the list, three times out of three.
+    await page.goto(new URL(href, base).toString());
+    await page.waitForURL((url) => url.pathname === new URL(href, base).pathname, { timeout: 20_000 });
     await page.locator('main h1').first().waitFor({ timeout: 20_000 });
     await shot(page, name);
   }

@@ -2,6 +2,8 @@
 
 - [Install](install.md) — development install, the container path, TLS, and
   the single-process alternative.
+- [Console guide](console-guide.md) — every screen of the administration
+  console, with screenshots, in the order you would set one up.
 - [Configure](configure.md) — every environment variable, tenants and
   hostnames, directory sources, SSO and federation configuration.
 - [Operate](operate.md) — upgrades, backups, deactivate-never-delete, CI,
