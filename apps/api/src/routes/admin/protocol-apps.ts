@@ -259,7 +259,10 @@ export async function registerAdminProtocolRoutes(
       encryptionCertificate:
         parsed.encryptionCertificates[0] ?? existing?.encryptionCertificate ?? null,
       sloUrl: parsed.sloUrl,
-      sloBinding: existing?.sloBinding ?? 'HTTP-POST',
+      // The binding comes with the URL it was published for. Keeping the old
+      // binding against a newly imported URL is how an SP that only serves
+      // HTTP-Redirect ended up being POSTed its LogoutResponse.
+      sloBinding: parsed.sloBinding ?? existing?.sloBinding ?? 'HTTP-POST',
       allowIdpInitiated: existing?.allowIdpInitiated ?? false,
       wsFedEnabled: existing?.wsFedEnabled ?? false,
       assertionLifetimeMs: existing?.assertionLifetimeMs ?? 300_000,

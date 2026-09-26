@@ -243,6 +243,34 @@ describe('person administration', () => {
     expect(detail.json().users[0].login).toBe('admin');
   });
 
+  it('unlinks a user from a person, and refuses one linked elsewhere', async () => {
+    // The way out for an integration's login that got a person record: it
+    // must belong to no person before it can be marked a service account.
+    const admin = await seedAdmin([...BOTH, PERMISSIONS.DIRECTORY_READ, PERMISSIONS.DIRECTORY_WRITE]);
+    const cookie = await adminCookie();
+
+    const jo = (await post('/api/admin/persons', cookie, { givenName: 'Jo', familyName: 'Doe' })).json().id;
+    const sam = (await post('/api/admin/persons', cookie, { givenName: 'Sam', familyName: 'Roe' })).json().id;
+    expect((await post(`/api/admin/persons/${jo}/link-user`, cookie, { userId: admin.id })).statusCode).toBe(204);
+
+    const wrong = await post(`/api/admin/persons/${sam}/unlink-user`, cookie, { userId: admin.id });
+    expect(wrong.statusCode).toBe(409);
+    expect(wrong.json().type).toContain('not-linked');
+
+    const unlink = await post(`/api/admin/persons/${jo}/unlink-user`, cookie, { userId: admin.id });
+    expect(unlink.statusCode).toBe(204);
+    expect((await get(`/api/admin/persons/${jo}`, cookie)).json().users).toHaveLength(0);
+
+    const marked = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/api/admin/users/${admin.id}`,
+      headers: { host: ctx.host, cookie },
+      payload: { kind: 'service' },
+    });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.json().kind).toBe('service');
+  });
+
   it('returns 404 for a person that does not exist', async () => {
     await seedAdmin(BOTH);
     const cookie = await adminCookie();

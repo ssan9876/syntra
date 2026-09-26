@@ -198,6 +198,8 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
       acsUrls: ['https://{{host}}/saml/acs'],
       nameIdFormat: EMAIL_NAMEID,
       sloUrl: 'https://{{host}}/saml/sls',
+      // Snipe-IT's metadata publishes /saml/sls as HTTP-Redirect only.
+      sloBinding: 'HTTP-Redirect',
       claims: [
         { claimName: 'username', nameFormat: BASIC, sourceKind: 'user', sourceField: 'login' },
         { claimName: 'email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },

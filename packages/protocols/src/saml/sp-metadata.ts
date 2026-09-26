@@ -7,6 +7,13 @@ export interface ParsedSpMetadata {
   /** The SP's own `isDefault` entry, or its first, and always on `acsUrls`. */
   defaultAcsUrl: string;
   sloUrl: string | null;
+  /**
+   * The binding `sloUrl` was published with, or null when there is no
+   * `sloUrl`. Read with the URL rather than defaulted, because the two are one
+   * endpoint: a LogoutResponse POSTed to a location the SP only serves as
+   * HTTP-Redirect is a logout the SP never sees.
+   */
+  sloBinding: 'HTTP-POST' | 'HTTP-Redirect' | null;
   wantAssertionsSigned: boolean;
   /**
    * The certificates this service provider signs with. PEM, armour restored.
@@ -25,6 +32,11 @@ export interface ParsedSpMetadata {
   encryptionCertificates: string[];
   nameIdFormats: string[];
 }
+
+const SLO_BINDINGS: Record<string, 'HTTP-POST' | 'HTTP-Redirect'> = {
+  'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST': 'HTTP-POST',
+  'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect': 'HTTP-Redirect',
+};
 
 const pem = (body: string) =>
   `-----BEGIN CERTIFICATE-----\n${
@@ -83,10 +95,17 @@ export function parseSpMetadata(xml: string): ParsedSpMetadata {
     acsNodes.find((e) => e.getAttribute('isDefault') === 'true')?.getAttribute('Location') ??
     acsUrls[0]!;
 
-  const sloUrl =
-    selectElements(sp, ".//*[local-name(.)='SingleLogoutService']")
-      .map((e) => e.getAttribute('Location') ?? '')
-      .find((url) => isProtocolEndpoint(url)) ?? null;
+  // The first endpoint in a binding Syntra can answer with. An SP that lists
+  // only SOAP (or a binding nobody has heard of) gets no SLO URL rather than
+  // one Syntra would send to in the wrong binding.
+  const slo = selectElements(sp, ".//*[local-name(.)='SingleLogoutService']")
+    .map((e) => ({
+      url: e.getAttribute('Location') ?? '',
+      binding: SLO_BINDINGS[(e.getAttribute('Binding') ?? '').trim()],
+    }))
+    .find((e) => e.binding !== undefined && isProtocolEndpoint(e.url));
+  const sloUrl = slo?.url ?? null;
+  const sloBinding = slo?.binding ?? null;
 
   // Per role, never flattened. A `KeyDescriptor` with no `use` serves both,
   // which is what the metadata schema says an omitted `use` means; one that
@@ -118,6 +137,7 @@ export function parseSpMetadata(xml: string): ParsedSpMetadata {
     acsUrls,
     defaultAcsUrl,
     sloUrl,
+    sloBinding,
     // Absent means false per the schema default, but a service provider that
     // said nothing is one whose assertions Syntra signs anyway — Syntra always
     // signs. This flag only records what the SP asked for.
