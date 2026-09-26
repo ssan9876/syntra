@@ -149,7 +149,7 @@ export function LanguagePicker({ className = '' }: { className?: string }) {
     // header that asked for `hidden sm:inline-flex` was still rendered at 320
     // pixels and pushed the whole header row off the right edge.
     <label className={`${/(^|\s)(hidden|flex|inline-flex|block)(\s|$)/.test(className) ? '' : 'inline-flex'} items-center gap-2 text-sm text-muted ${className}`}>
-      <span>{t('common.language')}</span>
+      <span className="sr-only">{t('common.language')}</span>
       <select
         value={locale}
         onChange={(e) => setLocale(e.target.value as Locale)}

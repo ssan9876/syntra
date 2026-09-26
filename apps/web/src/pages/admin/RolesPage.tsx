@@ -695,28 +695,18 @@ function PermissionGrid({
     <div className="divide-y divide-border-subtle rounded-panel border border-border-subtle">
       {groups.map(([module, permissions]) => {
         const has = permissions.filter((p) => held.has(p)).length;
-        const Row = onToggle ? 'fieldset' : 'div';
         return (
-          <Row
+          <div
             key={module}
-            {...(onToggle ? { 'aria-label': module } : {})}
+            {...(onToggle ? { role: 'group', 'aria-label': module } : {})}
             className="grid gap-2 px-3.5 py-2.5 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-center"
           >
-            {onToggle ? (
-              <legend className="float-left text-sm font-semibold text-ink sm:float-none">
-                {title(module)}
-                <span className="ml-1.5 font-normal tabular-nums text-muted">
-                  {has}/{permissions.length}
-                </span>
-              </legend>
-            ) : (
-              <span className="text-sm font-semibold text-ink">
-                {title(module)}
-                <span className="ml-1.5 font-normal tabular-nums text-muted">
-                  {has}/{permissions.length}
-                </span>
+            <span className="text-sm font-semibold text-ink">
+              {title(module)}
+              <span className="ml-1.5 font-normal tabular-nums text-muted">
+                {has}/{permissions.length}
               </span>
-            )}
+            </span>
             <span className="flex flex-wrap gap-1.5">
               {permissions.map((permission) => {
                 const on = held.has(permission);
@@ -757,7 +747,7 @@ function PermissionGrid({
                 );
               })}
             </span>
-          </Row>
+          </div>
         );
       })}
     </div>

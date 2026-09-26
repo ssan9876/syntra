@@ -24,6 +24,7 @@ describe('TargetWriteStopPanel', () => {
     const changed = vi.fn();
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
     render(<TargetWriteStopPanel target={target()} onChanged={changed} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Stop writes' }));
     const button = screen.getByRole('button', { name: 'Stop external writes' });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Reason for stopping writes'), 'Unexpected writes');
@@ -38,7 +39,7 @@ describe('TargetWriteStopPanel', () => {
       externalWritesPauseReason: 'Incident containment', externalWritesPauseExpiresAt: null,
     })} onChanged={() => undefined} />);
     expect(screen.getByText('Provisioning writes are stopped')).toBeVisible();
-    expect(screen.getByText(/different administrator must approve/i)).toBeVisible();
+    expect(screen.getByText('Needs another administrator')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Request reviewed resume' })).toBeDisabled();
   });
 });

@@ -20,7 +20,8 @@ describe('TenantWriteStopPanel', () => {
       .mockResolvedValueOnce(json({ ...allowed, active: true }))
       .mockResolvedValueOnce(json({ ...allowed, active: true, pausedAt: '2026-09-23T12:00:00Z', pauseReason: 'Bad HR feed' }));
     render(<TenantWriteStopPanel />);
-    const button = await screen.findByRole('button', { name: 'Stop external writes' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop writes' }));
+    const button = screen.getByRole('button', { name: 'Stop external writes' });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Reason for stopping writes'), 'Bad HR feed');
     await userEvent.click(button);
@@ -40,7 +41,7 @@ describe('TenantWriteStopPanel', () => {
     expect(screen.getByText(/Suspected compromised administrator/)).toBeVisible();
     expect(screen.getByText(/no automatic expiry/)).toBeVisible();
     expect(screen.getByText('Paused')).toBeVisible();
-    expect(screen.getByText(/different administrator must approve/i)).toBeVisible();
+    expect(screen.getByText('Needs another administrator')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Request reviewed resume' })).toBeDisabled();
   });
 
@@ -50,7 +51,7 @@ describe('TenantWriteStopPanel', () => {
       pauseReason: 'Old hold', pauseExpiresAt: '2020-01-02T00:00:00Z',
     }));
     render(<TenantWriteStopPanel />);
-    expect(await screen.findByRole('button', { name: 'Stop external writes' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Stop writes' })).toBeVisible();
     expect(screen.getByText('Allowed')).toBeVisible();
   });
 

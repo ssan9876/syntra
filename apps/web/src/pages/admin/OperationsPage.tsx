@@ -46,6 +46,13 @@ export interface JobHealthBody {
   findings: JobFinding[];
 }
 
+const STATE_LABEL: Record<ComponentState, string> = {
+  operational: 'Operational',
+  degraded: 'Degraded',
+  unavailable: 'Unavailable',
+  unknown: 'Unknown',
+};
+
 const COMPONENT_LABEL: Record<string, string> = {
   api: 'API',
   database: 'Database',
@@ -116,7 +123,7 @@ function StatusPanel() {
   const d = data.degradation;
   const overallTone = data.overall === 'operational' ? 'active' : data.overall === 'degraded' ? 'warning' : 'danger';
   return (
-    <Panel title="Service status" actions={<Status tone={overallTone}>{data.overall}</Status>}>
+    <Panel title="Service status" actions={<Status tone={overallTone}>{STATE_LABEL[data.overall]}</Status>}>
       <div className="space-y-5 p-4">
         <div>
           <h3 className="mb-2 text-sm font-semibold text-ink">Shared components</h3>
@@ -124,8 +131,12 @@ function StatusPanel() {
             {data.components.map((component) => (
               <li key={component.name} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span className="w-36 shrink-0 font-medium text-ink">{COMPONENT_LABEL[component.name] ?? component.name}</span>
-                <Status tone={STATE_TONE[component.state]}>{component.state}</Status>
-                <span className="text-sm text-muted">{component.detail}</span>
+                <Status tone={STATE_TONE[component.state]}>{STATE_LABEL[component.state]}</Status>
+                {/* Said only when something is wrong: "The API is answering"
+                    beside a green Operational is the badge read aloud. */}
+                {component.state !== 'operational' && (
+                  <span className="text-sm text-muted">{component.detail}</span>
+                )}
               </li>
             ))}
           </ul>

@@ -58,3 +58,6 @@ values.local.yaml
 # A Windows shell that does not expand %USERPROFILE% writes the literal name
 # into the working directory -- which is how a password file once landed here.
 *%USERPROFILE%*
+
+# Local map of real names to stand-ins for scripts/docs-screenshots.mjs
+.docs-redactions.json

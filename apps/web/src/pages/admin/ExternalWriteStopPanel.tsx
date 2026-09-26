@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Field, Panel, StateBadge } from '@syntra/ui';
+import { Alert, Button, Field, Panel, StateBadge, Status } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 
 function problem(error: unknown) {
@@ -49,12 +49,15 @@ export function ExternalWriteStopPanel({
   const [expiresAt, setExpiresAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  // The stop form is an emergency control: one button until somebody reaches
+  // for it, not two empty fields on every visit to the page.
+  const [stopping, setStopping] = useState(false);
   const active = writeStopActive(state);
   const submit = async (path: string, body: unknown) => {
     setBusy(true); setNotice('');
     try {
       await api(`${basePath}/${path}`, { method: 'POST', body: JSON.stringify(body) });
-      setReason(''); setExpiresAt(''); onChanged();
+      setReason(''); setExpiresAt(''); setStopping(false); onChanged();
     } catch (error) { setNotice(problem(error)); }
     finally { setBusy(false); }
   };
@@ -70,7 +73,7 @@ export function ExternalWriteStopPanel({
           <Field name="reason" label="Reason for resuming" value={reason} onChange={setReason} />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>Request reviewed resume</Button>
-            <p className="text-sm text-muted">A different administrator must approve.</p>
+            <Status tone="neutral">Needs another administrator</Status>
           </div>
         </div>
         // One press, deliberately, where every other destructive control in
@@ -78,11 +81,16 @@ export function ExternalWriteStopPanel({
         // mandatory reason is the second decision. What it gets instead is a
         // boundary of its own in the danger colour, so it never reads as one
         // more field in a settings panel.
+        : !stopping
+        ? <Button variant="danger-quiet" onClick={() => setStopping(true)}>Stop writes</Button>
         : <div role="group" aria-label="Stop external writes" className="max-w-xl space-y-3 rounded-panel border border-danger/40 p-3">
           <Field name="reason" label="Reason for stopping writes" value={reason} onChange={setReason} />
           <Field name="expiresAt" label="Automatic expiry (optional, maximum 30 days)" type="datetime-local" value={expiresAt} onChange={setExpiresAt} />
           <div className="border-t border-border-subtle pt-3">
-            <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>Stop external writes</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>Stop external writes</Button>
+              <Button variant="secondary" disabled={busy} onClick={() => { setStopping(false); setReason(''); setExpiresAt(''); }}>Cancel</Button>
+            </div>
           </div>
         </div>}
     </div>
