@@ -326,7 +326,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await expect(compoundValues).toHaveCount(2);
   await compoundValues.nth(1).fill(DEPARTMENT);
   await page.getByRole('button', { name: 'Preview impact' }).click();
-  await expect(impact).toContainText(/matches\s*1\s*of/);
+  await expect(page.getByText(/^1 of \d+$/)).toBeVisible();
   await page.getByRole('button', { name: 'Save rule' }).click();
   await expect(page.getByText('Rule saved')).toBeVisible();
   await expect(

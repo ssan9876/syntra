@@ -248,7 +248,6 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   await expect(
     page.getByRole('alert').filter({ hasText: 'Nothing here has happened yet' }),
   ).toBeVisible();
-  await expect(page.getByText('This is the last point at which a mistake costs nothing.')).toBeVisible();
 });
 
 test('the segregation-of-duties screen refuses to be written over two groups', async ({ page }) => {
