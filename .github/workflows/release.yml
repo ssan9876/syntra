@@ -35,6 +35,8 @@ jobs:
   # A dispatch from a branch would build something that is not a release.
   guard:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Refuse anything that is not a tag
         # github.ref/ref_type/ref_name go through env rather than being
@@ -60,6 +62,92 @@ jobs:
             *) echo "Tag $REF_NAME does not look like a release tag (v*)." >&2; exit 1 ;;
           esac
 
+      # A release is cut from main. A tag on a side branch -- or on a commit
+      # that never merged -- is a release of code that no review and no main
+      # CI run ever saw, and the reuse check below would find nothing for it
+      # anyway. Refused here, before anything is built, rather than left to
+      # the gate to discover.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Refuse a commit that is not on main
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "$SHA is not reachable from main; a release is cut from main." >&2
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Has this exact commit ALREADY passed CI on main?
+  #
+  # A release tag is, nearly always, pushed at a commit that went through
+  # ci.yml minutes or hours earlier as a push to main -- and re-running the
+  # whole suite on it proves nothing that run did not. Same SHA means same
+  # ci.yml, same tests, same code: the earlier green run IS this gate, run
+  # once. So if one exists, `verify` below is skipped and the run it relied
+  # on is named in the log and the job summary.
+  #
+  # What counts, and every condition is required:
+  #   - ci.yml, in THIS repository (not a fork's copy of it);
+  #   - head_sha equal to the tagged commit, exactly;
+  #   - head_branch main, from a `push` or a `workflow_dispatch` -- never a
+  #     pull_request run, whose code is the merge ref and not this commit;
+  #   - status completed, conclusion success.
+  #
+  # FAIL SAFE: anything else -- no such run, a failed or cancelled one, one
+  # still in progress, or the API call itself failing -- answers "no", and
+  # `verify` runs the full suite exactly as it always has. This job never
+  # fails the release, and it can only ever skip a gate for a green one.
+  # ---------------------------------------------------------------------------
+  prior-ci:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.look.outputs.passed }}
+    steps:
+      - name: Look for a green ci.yml run on main for this commit
+        id: look
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+          # The query narrows; the jq filter DECIDES. Every condition above is
+          # re-checked on each run returned, so a query parameter the API
+          # quietly ignored cannot widen what counts.
+          if ! RUN=$(gh api -X GET "repos/$REPO/actions/workflows/ci.yml/runs" \
+                -f head_sha="$SHA" -f branch=main -f status=success -F per_page=100 \
+                | jq -r --arg sha "$SHA" --arg repo "$REPO" '
+                    [.workflow_runs[]
+                      | select(.head_sha == $sha
+                               and .head_branch == "main"
+                               and (.event == "push" or .event == "workflow_dispatch")
+                               and .status == "completed"
+                               and .conclusion == "success"
+                               and .repository.full_name == $repo
+                               and .head_repository.full_name == $repo)]
+                    | sort_by(.run_started_at) | last | .html_url // empty'); then
+            echo "::warning::Could not ask the API for earlier CI runs; running the full suite."
+            exit 0
+          fi
+          if [ -z "$RUN" ]; then
+            echo "No green ci.yml run on main for $SHA; running the full suite."
+            exit 0
+          fi
+          echo "::notice::$SHA already passed CI on main: $RUN -- not running it again."
+          echo "Gate satisfied by an earlier CI run on main: $RUN" >> "$GITHUB_STEP_SUMMARY"
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # The gate. An update button whose whole promise is "this was tested" must
   # not be able to install something that was not, so the release job depends
@@ -67,13 +155,29 @@ jobs:
   #
   # `workflow_call` rather than a copy: a second, drifting definition of the
   # suite is how a release comes to be gated on checks nobody maintains.
+  #
+  # Skipped ONLY when `prior-ci` found a green run on main for this exact
+  # commit. `!= 'true'` rather than `== 'false'`, so an empty or missing
+  # answer runs the suite.
   # ---------------------------------------------------------------------------
   verify:
-    needs: guard
+    needs: [guard, prior-ci]
+    if: needs.prior-ci.outputs.passed != 'true'
     uses: ./.github/workflows/ci.yml
 
+  # `always()` because a skipped `verify` would otherwise skip this job too,
+  # and then the condition spells out the gate in full: the guard passed, and
+  # EITHER the suite just ran green OR it was skipped because `prior-ci`
+  # found it green on main. A cancelled or failed `verify`, or a `prior-ci`
+  # that did not complete, releases nothing.
   build:
-    needs: [guard, verify]
+    needs: [guard, prior-ci, verify]
+    if: >-
+      always()
+      && needs.guard.result == 'success'
+      && needs.prior-ci.result == 'success'
+      && (needs.verify.result == 'success'
+          || (needs.verify.result == 'skipped' && needs.prior-ci.outputs.passed == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -228,9 +332,20 @@ jobs:
   # cannot pass that has no business becoming `:latest` either. Nothing here
   # reuses `build`'s checkout; each build-push-action call does its own,
   # pinned to the same tag by the same `ref: ${{ github.ref }}` guard.
+  #
+  # `always()` for the same reason as on `build`: a `verify` skipped because
+  # `prior-ci` found the commit green would otherwise skip this job with it.
+  # `build` succeeding already implies the gate held; it is spelled out anyway.
   # ---------------------------------------------------------------------------
   image:
-    needs: [guard, verify, build]
+    needs: [guard, prior-ci, verify, build]
+    if: >-
+      always()
+      && needs.guard.result == 'success'
+      && needs.prior-ci.result == 'success'
+      && (needs.verify.result == 'success'
+          || (needs.verify.result == 'skipped' && needs.prior-ci.outputs.passed == 'true'))
+      && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

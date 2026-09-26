@@ -90,19 +90,22 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # The unit and integration suite: 167 files, ~3,350 tests, against a real
-  # PostgreSQL, a real OpenLDAP and a real Samba domain controller.
+  # Everything the suite below used to do BEFORE and AFTER `pnpm test`, in a
+  # job of its own: the shell tools, the typecheck, the lint, the console's
+  # tests and its production bundle.
   #
-  # `docker compose` rather than GitHub's `services:`, deliberately. The
-  # OpenLDAP container needs its bootstrap LDIF and its TLS settings, and the
-  # Samba container needs a domain provisioned; both are already expressed in
-  # `infra/docker-compose.yml`, and a second, drifting copy of that in YAML is
-  # how CI starts testing something the developers do not run.
+  # Split out when the suite was sharded, rather than left on shard 1. None of
+  # it touches a database -- the typecheck and the lint need the generated
+  # Prisma client, not a server to point it at -- so it does not need the
+  # containers, and on its own runner it finishes well inside a shard's time
+  # instead of making shard 1 the long pole. Run once, not four times: four
+  # copies of a typecheck is four chances for the same red line and no extra
+  # coverage.
   # ---------------------------------------------------------------------------
-  test:
-    name: tests
+  checks:
+    name: typecheck, lint and console
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -151,6 +154,118 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
+      - name: Write the environment
+        # Placeholders only, as in the openapi job below: nothing here
+        # connects to anything, and these exist so nothing imported on the
+        # way trips over an unset variable.
+        run: |
+          cp .env.example .env
+          cp packages/db/.env.example packages/db/.env
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+
+      - name: Typecheck
+        run: pnpm exec tsc -b --force
+
+      # AFTER the typecheck, which is where its value is. It runs in about a
+      # minute and catches the things `tsc` cannot see -- a promise nobody
+      # awaited, a hook behind a condition.
+      #
+      # It needs the generated Prisma client, which is why it cannot move
+      # above `pnpm db:generate`: the type-aware rules ask the compiler about
+      # every `tx.` call, and without the client those are `any`.
+      - name: Lint
+        run: pnpm lint
+
+      # THE CONSOLE'S TESTS, which ran in no job at all until this step.
+      #
+      # The root vitest config matches `*.test.ts` only, so every
+      # `apps/web/**/*.test.tsx` file -- 37 of them, 303 tests -- was
+      # invisible to `pnpm test`. Because release.yml reuses this workflow
+      # through `workflow_call`, tagged releases shipped with them unexecuted
+      # too. A stale assertion in StatusToggle.test.tsx sat red on main until
+      # a full local run turned it up.
+      #
+      # A separate step rather than folded into `pnpm test`: these need jsdom
+      # and the React plugin, which is what apps/web/vitest.config.ts is.
+      - name: Test the console
+        run: pnpm --filter @syntra/web test
+
+      # THE PRODUCTION BUNDLE, which nothing built until this step.
+      #
+      # The browser job exercises the Vite DEV server, so a break that only
+      # appears in a production build -- a rollup resolution failure, a
+      # tailwind config error, a dynamic import path -- merged green and first
+      # surfaced in release.yml, or on the lab host halfway through a deploy.
+      # It takes a couple of seconds.
+      - name: Build the console
+        run: pnpm --filter @syntra/web build
+
+  # ---------------------------------------------------------------------------
+  # The unit and integration suite: 338 files, ~5,800 tests, against a real
+  # PostgreSQL, a real OpenLDAP and a real Samba domain controller.
+  #
+  # `docker compose` rather than GitHub's `services:`, deliberately. The
+  # OpenLDAP container needs its bootstrap LDIF and its TLS settings, and the
+  # Samba container needs a domain provisioned; both are already expressed in
+  # `infra/docker-compose.yml`, and a second, drifting copy of that in YAML is
+  # how CI starts testing something the developers do not run.
+  #
+  # FOUR SHARDS, because one job spent 29 of its ~34 minutes in `pnpm test`.
+  # Vitest's `--shard` splits by FILE, so every shard is a whole `vitest run`
+  # of its own on its own runner: its own containers, its own global setup
+  # provisioning and migrating its own scratch databases, and its own
+  # `SYNTRA_TEST_WORKERS: 2` -- the measurements above are per runner, and a
+  # shard is one runner, so they hold unchanged. Nothing is shared between
+  # shards that could make one wait on, or truncate under, another.
+  #
+  # Checked before splitting: no file in the suite reads state another file
+  # left behind. The ones that look across the codebase -- the migration
+  # order, the Prisma boundary, the OpenAPI coverage, the tenant-isolation
+  # probe over every route -- read the source tree or build the route table
+  # themselves, so they hold in whichever shard they land in, and no custom
+  # sequencer is needed to keep any of them together.
+  #
+  # `pnpm test` with no argument is still the whole suite, unsharded; the
+  # shard is passed here and only here.
+  # ---------------------------------------------------------------------------
+  test-shard:
+    name: tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    # About a quarter of the 29 minutes, plus the containers and the install
+    # every shard now pays for itself. Twice that, not the old 60: a shard
+    # that runs for an hour is hung, not slow.
+    timeout-minutes: 30
+    strategy:
+      # One red shard must not cancel the other three: a failure that only
+      # shows up as "cancelled" in three places hides whatever else was red.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Same reason as in `checks`: the pinned pnpm, or Prisma's build scripts
+      # do not run and nothing can reach the database.
+      - run: corepack enable
+
+      - name: Get the pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
       - name: Start PostgreSQL, OpenLDAP, Samba and MailDev
         run: docker compose -f infra/docker-compose.yml up -d
 
@@ -159,7 +274,9 @@ jobs:
       # Transit master-key provider's integration test runs anywhere but a
       # developer's machine. VAULT_TRANSIT_INTEGRATION on the Test step turns
       # that test's skip-when-unreachable into a failure, so a container that
-      # did not come up cannot pass as a suite that skipped.
+      # did not come up cannot pass as a suite that skipped. Started in every
+      # shard, not just the one that happens to hold that file today: which
+      # shard a file lands in is Vitest's decision and moves as files are added.
       - name: Start the Vault dev server
         run: docker compose -f infra/docker-compose.yml --profile kms up -d vault
 
@@ -187,20 +304,6 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm db:migrate
 
-      - name: Typecheck
-        run: pnpm exec tsc -b --force
-
-      # AFTER the typecheck and before the suite, which is where its value is.
-      # It runs in about a minute and catches the things `tsc` cannot see --
-      # a promise nobody awaited, a hook behind a condition -- so a run that
-      # fails here fails before spending twenty minutes on the database.
-      #
-      # It needs the generated Prisma client, which is why it cannot move
-      # above `pnpm db:generate`: the type-aware rules ask the compiler about
-      # every `tx.` call, and without the client those are `any`.
-      - name: Lint
-        run: pnpm lint
-
       # TWO FAILURE MODES WORTH TELLING APART before you suspect your change.
       #
       # `Hook timed out in 30000ms` on a `resetDatabase()` hook: seven workers
@@ -212,6 +315,7 @@ jobs:
       # Eighty-odd files failing at once, with `the database system is in
       # recovery mode` in the output: PostgreSQL crashed. Nothing failed on its
       # merits and there is no point reading the list. Same cause, same fix.
+      # (Per shard now: a crash reads as a quarter of eighty, in one shard.)
       #
       # Neither is retried. A retry would hide the second one, and the second
       # one is the important one.
@@ -219,38 +323,45 @@ jobs:
       - name: Wait for Vault
         run: pnpm vault:wait
 
+      # `pnpm test -- --shard=…` reaches Vitest as `vitest run --shard=…`:
+      # pnpm 9 drops the `--` and passes the rest through.
       - name: Test
-        run: pnpm test
+        run: pnpm test -- --shard=${{ matrix.shard }}/4
         env:
           VAULT_TRANSIT_INTEGRATION: '1'
-
-      # THE CONSOLE'S TESTS, which ran in no job at all until this step.
-      #
-      # The root vitest config matches `*.test.ts` only, so every
-      # `apps/web/**/*.test.tsx` file -- 37 of them, 303 tests -- was
-      # invisible to `pnpm test`. Because release.yml reuses this workflow
-      # through `workflow_call`, tagged releases shipped with them unexecuted
-      # too. A stale assertion in StatusToggle.test.tsx sat red on main until
-      # a full local run turned it up.
-      #
-      # A separate step rather than folded into `pnpm test`: these need jsdom
-      # and the React plugin, which is what apps/web/vitest.config.ts is.
-      - name: Test the console
-        run: pnpm --filter @syntra/web test
-
-      # THE PRODUCTION BUNDLE, which nothing built until this step.
-      #
-      # The browser job exercises the Vite DEV server, so a break that only
-      # appears in a production build -- a rollup resolution failure, a
-      # tailwind config error, a dynamic import path -- merged green and first
-      # surfaced in release.yml, or on the lab host halfway through a deploy.
-      # It takes a couple of seconds.
-      - name: Build the console
-        run: pnpm --filter @syntra/web build
 
       - name: Container logs, if the suite failed
         if: failure()
         run: docker compose -f infra/docker-compose.yml logs --tail 100
+
+  # ---------------------------------------------------------------------------
+  # ONE "tests" status, as there was before the split, for branch protection
+  # and for anybody reading the checks list: green only when every shard AND
+  # the checks job above are green.
+  #
+  # `always()`, because without it a failed shard SKIPS this job, and a
+  # skipped required check is one GitHub may treat as satisfied. So it always
+  # runs and decides for itself, and anything other than `success` -- failure,
+  # cancelled, skipped -- is red.
+  # ---------------------------------------------------------------------------
+  test:
+    name: tests
+    needs: [checks, test-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard and the checks passed
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          SHARDS: ${{ needs.test-shard.result }}
+        run: |
+          echo "checks: $CHECKS"
+          echo "shards: $SHARDS"
+          if [ "$CHECKS" != "success" ] || [ "$SHARDS" != "success" ]; then
+            echo "::error::A shard or the checks job did not succeed; see the jobs above."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # The browser suite, against a running stack. Separate job because it needs
@@ -514,7 +625,7 @@ jobs:
         with:
           node-version: 22
 
-      # Same reason as in `test`: the pinned pnpm, or Prisma's build scripts
+      # Same reason as in `checks`: the pinned pnpm, or Prisma's build scripts
       # do not run and the client the API imports does not exist.
       - run: corepack enable
 
