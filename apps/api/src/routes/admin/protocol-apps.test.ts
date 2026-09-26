@@ -253,6 +253,22 @@ describe('admin protocol configuration', () => {
     expect(other.statusCode).toBe(200);
   });
 
+  it('keeps a SAML application SAML when an edit does not mention its type', async () => {
+    // Zod 4 applies create-time defaults inside `.partial()`, so an edit that
+    // only set the launch URL used to write `type: 'bookmark'` and
+    // `visibility: 'assigned'` over the application (found live on Snipe-IT).
+    const applicationId = await samlApplication('keep');
+    const hidden = await put(`/api/admin/applications/${applicationId}`, { visibility: 'hidden' });
+    expect(hidden.statusCode).toBe(200);
+    const res = await put(`/api/admin/applications/${applicationId}`, {
+      launchUrl: 'https://sp.example.test/login/saml',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().type).toBe('saml');
+    expect(res.json().visibility).toBe('hidden');
+    expect(res.json().launchUrl).toBe('https://sp.example.test/login/saml');
+  });
+
   it('refuses protocol configuration on an application of the other type', async () => {
     const bookmark = await newApplication({
       name: 'Handbook',

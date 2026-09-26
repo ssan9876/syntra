@@ -81,10 +81,19 @@ export const createApplicationRequest = applicationFields.refine(
 );
 export type CreateApplicationRequest = z.input<typeof createApplicationRequest>;
 
+// `type` and `visibility` are redeclared WITHOUT their create-time defaults.
+// Zod 4 applies a `.default()` even inside `.partial()`, so an update that did
+// not mention them wrote `type: 'bookmark'` and `visibility: 'assigned'` over
+// whatever the application had: setting a SAML application's launch URL
+// quietly turned it into a bookmark (found live on Snipe-IT).
 export const updateApplicationRequest = applicationFields
   .partial()
   .omit({ slug: true })
-  .extend({ status: z.enum(['active', 'inactive']).optional() });
+  .extend({
+    type: z.enum(['bookmark', 'saml', 'oidc']).optional(),
+    visibility: z.enum(['assigned', 'hidden']).optional(),
+    status: z.enum(['active', 'inactive']).optional(),
+  });
 export type UpdateApplicationRequest = z.input<typeof updateApplicationRequest>;
 
 /**
