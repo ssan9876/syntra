@@ -33,14 +33,12 @@ export const en = {
   'login.password': 'Password',
   'login.submit': 'Sign in',
   'login.forgot': 'Forgotten your password?',
-  'login.lead': 'Use the account your organization issued you.',
   'login.help': 'Trouble signing in? Contact your IT administrator.',
   'login.trouble': 'Trouble signing in?',
   'common.get_help': 'Get help',
   'login.failed': 'That login and password do not match an account.',
 
   'forgot.title': 'Reset your password',
-  'forgot.lead': 'Enter your login or work email address.',
   'forgot.field': 'Login or email',
   'forgot.submit': 'Send the link',
   'forgot.sent_title': 'Check your inbox',
@@ -49,8 +47,6 @@ export const en = {
   // what the endpoint carefully does not.
   'forgot.sent':
     'If that account exists, we have sent it a link. It works once and expires in thirty minutes.',
-  'forgot.sent_help':
-    'Nothing arrived? Check spam, or ask your IT administrator — some accounts have their password managed elsewhere.',
 
   'reset.title': 'Choose a new password',
   'reset.password': 'New password',
@@ -64,7 +60,6 @@ export const en = {
   'reset.factor_totp': 'Code from your app',
   'reset.factor_hint':
     'Your account has a second factor, so resetting the password needs it too.',
-  'renew.lead_full': 'Choose a new one to finish signing in. You are not signed in yet.',
   'renew.too_short':
     'At least twelve characters, and not one you have used before. A short sentence works well.',
   'renew.submit': 'Save and sign in',
@@ -79,7 +74,6 @@ export const en = {
   'mfa.email_send': 'Send me a code',
   'mfa.email_sent': 'If a code can be sent to your address, it is on its way.',
   'mfa.expired': 'That step expired. Sign in again.',
-  'mfa.lead': 'Your organization requires a second factor for this sign-in.',
   'mfa.totp_code': 'Six-digit code',
   'mfa.email_code': 'Code from your email',
   'mfa.email_resend': 'Send it again',
@@ -92,17 +86,11 @@ export const en = {
   'enrol.totp': 'Authenticator app',
   'enrol.webauthn': 'Security key or passkey',
   'enrol.email_otp': 'Emailed code',
-  'enrol.lead':
-    'Your organization now requires one. It takes a minute, and you will be signed in straight afterwards.',
-  'enrol.totp_lead':
-    'Use an authenticator app — the one your organization recommends, or any that shows six-digit codes.',
   'enrol.start': 'Start',
   'enrol.scan': 'Scan this with your app, then type the code it shows.',
   'enrol.qr_alt': 'QR code for your authenticator app',
   'enrol.cannot_scan': 'Cannot scan? Enter this key instead:',
   'enrol.confirm': 'Confirm',
-  'enrol.webauthn_lead':
-    'Use a security key, or the fingerprint or face unlock built into this device.',
   'enrol.name_key': 'Name this key',
   'enrol.switch_to_key': 'Use a security key instead',
   'enrol.switch_to_app': 'Use an app instead',
@@ -113,8 +101,6 @@ export const en = {
   'portal.sign_out': 'Sign out',
   'portal.greeting': 'Good day, {name}',
   'portal.empty_title': 'No applications assigned yet',
-  'portal.empty_body':
-    'When your administrator assigns applications to you, they appear here and open with a single click.',
   'portal.other_group': 'Everything else',
   'portal.pinned': 'Pinned',
   'portal.recent': 'Recently used',
@@ -171,21 +157,17 @@ export const nl: Catalog = {
   'login.password': 'Wachtwoord',
   'login.submit': 'Aanmelden',
   'login.forgot': 'Wachtwoord vergeten?',
-  'login.lead': 'Gebruik het account dat je organisatie je heeft gegeven.',
   'login.help': 'Lukt aanmelden niet? Neem contact op met je IT-beheerder.',
   'login.trouble': 'Lukt aanmelden niet?',
   'common.get_help': 'Hulp krijgen',
   'login.failed': 'Deze gebruikersnaam en dit wachtwoord horen niet bij een account.',
 
   'forgot.title': 'Wachtwoord opnieuw instellen',
-  'forgot.lead': 'Vul je gebruikersnaam of zakelijke e-mailadres in.',
   'forgot.field': 'Gebruikersnaam of e-mail',
   'forgot.submit': 'Stuur de link',
   'forgot.sent_title': 'Kijk in je inbox',
   'forgot.sent':
     'Als dit account bestaat, is er een link verstuurd. Die werkt één keer en verloopt na dertig minuten.',
-  'forgot.sent_help':
-    'Niets ontvangen? Kijk in je spam, of vraag het je IT-beheerder — sommige accounts hebben hun wachtwoord elders staan.',
 
   'reset.title': 'Kies een nieuw wachtwoord',
   'reset.password': 'Nieuw wachtwoord',
@@ -199,7 +181,6 @@ export const nl: Catalog = {
   'reset.factor_totp': 'Code uit je app',
   'reset.factor_hint':
     'Je account heeft een tweede factor, dus die is ook nodig om je wachtwoord opnieuw in te stellen.',
-  'renew.lead_full': 'Kies een nieuw wachtwoord om het aanmelden af te ronden. Je bent nog niet aangemeld.',
   'renew.too_short':
     'Minstens twaalf tekens, en niet één die je eerder gebruikt hebt. Een korte zin werkt goed.',
   'renew.submit': 'Opslaan en aanmelden',
@@ -214,7 +195,6 @@ export const nl: Catalog = {
   'mfa.email_send': 'Stuur mij een code',
   'mfa.email_sent': 'Als er een code naar je adres verstuurd kan worden, is die onderweg.',
   'mfa.expired': 'Deze stap is verlopen. Meld je opnieuw aan.',
-  'mfa.lead': 'Je organisatie vraagt een tweede factor voor deze aanmelding.',
   'mfa.totp_code': 'Zescijferige code',
   'mfa.email_code': 'Code uit je e-mail',
   'mfa.email_resend': 'Stuur opnieuw',
@@ -227,17 +207,11 @@ export const nl: Catalog = {
   'enrol.totp': 'Authenticator-app',
   'enrol.webauthn': 'Beveiligingssleutel of passkey',
   'enrol.email_otp': 'Code per e-mail',
-  'enrol.lead':
-    'Je organisatie vraagt er nu om. Het kost een minuut, en daarna ben je meteen aangemeld.',
-  'enrol.totp_lead':
-    'Gebruik een authenticator-app — die je organisatie aanraadt, of een andere die zescijferige codes toont.',
   'enrol.start': 'Beginnen',
   'enrol.scan': 'Scan dit met je app en typ daarna de code die hij toont.',
   'enrol.qr_alt': 'QR-code voor je authenticator-app',
   'enrol.cannot_scan': 'Lukt scannen niet? Voer dan deze sleutel in:',
   'enrol.confirm': 'Bevestigen',
-  'enrol.webauthn_lead':
-    'Gebruik een beveiligingssleutel, of de vingerafdruk of gezichtsherkenning van dit apparaat.',
   'enrol.name_key': 'Geef deze sleutel een naam',
   'enrol.switch_to_key': 'Gebruik in plaats daarvan een beveiligingssleutel',
   'enrol.switch_to_app': 'Gebruik in plaats daarvan een app',
@@ -248,8 +222,6 @@ export const nl: Catalog = {
   'portal.sign_out': 'Afmelden',
   'portal.greeting': 'Goedendag, {name}',
   'portal.empty_title': 'Nog geen applicaties toegewezen',
-  'portal.empty_body':
-    'Zodra je beheerder applicaties aan je toewijst, verschijnen ze hier en open je ze met één klik.',
   'portal.other_group': 'Al het overige',
   'portal.pinned': 'Vastgezet',
   'portal.recent': 'Recent gebruikt',
@@ -294,21 +266,17 @@ export const de: Catalog = {
   'login.password': 'Passwort',
   'login.submit': 'Anmelden',
   'login.forgot': 'Passwort vergessen?',
-  'login.lead': 'Verwenden Sie das Konto, das Ihre Organisation Ihnen ausgestellt hat.',
   'login.help': 'Probleme bei der Anmeldung? Wenden Sie sich an Ihre IT-Administration.',
   'login.trouble': 'Probleme bei der Anmeldung?',
   'common.get_help': 'Hilfe erhalten',
   'login.failed': 'Benutzername und Passwort gehören zu keinem Konto.',
 
   'forgot.title': 'Passwort zurücksetzen',
-  'forgot.lead': 'Geben Sie Ihren Benutzernamen oder Ihre dienstliche E-Mail-Adresse ein.',
   'forgot.field': 'Benutzername oder E-Mail',
   'forgot.submit': 'Link senden',
   'forgot.sent_title': 'Sehen Sie in Ihrem Posteingang nach',
   'forgot.sent':
     'Falls dieses Konto existiert, wurde ein Link gesendet. Er gilt einmal und läuft nach dreißig Minuten ab.',
-  'forgot.sent_help':
-    'Nichts angekommen? Sehen Sie im Spam nach, oder fragen Sie Ihre IT-Administration — bei manchen Konten wird das Passwort woanders verwaltet.',
 
   'reset.title': 'Neues Passwort wählen',
   'reset.password': 'Neues Passwort',
@@ -322,8 +290,6 @@ export const de: Catalog = {
   'reset.factor_totp': 'Code aus Ihrer App',
   'reset.factor_hint':
     'Ihr Konto hat einen zweiten Faktor, der auch zum Zurücksetzen des Passworts nötig ist.',
-  'renew.lead_full':
-    'Wählen Sie ein neues, um die Anmeldung abzuschließen. Sie sind noch nicht angemeldet.',
   'renew.too_short':
     'Mindestens zwölf Zeichen, und keines, das Sie schon verwendet haben. Ein kurzer Satz eignet sich gut.',
   'renew.submit': 'Speichern und anmelden',
@@ -338,7 +304,6 @@ export const de: Catalog = {
   'mfa.email_send': 'Code per E-Mail senden',
   'mfa.email_sent': 'Falls ein Code an Ihre Adresse gesendet werden kann, ist er unterwegs.',
   'mfa.expired': 'Dieser Schritt ist abgelaufen. Melden Sie sich erneut an.',
-  'mfa.lead': 'Ihre Organisation verlangt für diese Anmeldung einen zweiten Faktor.',
   'mfa.totp_code': 'Sechsstelliger Code',
   'mfa.email_code': 'Code aus Ihrer E-Mail',
   'mfa.email_resend': 'Erneut senden',
@@ -351,17 +316,11 @@ export const de: Catalog = {
   'enrol.totp': 'Authenticator-App',
   'enrol.webauthn': 'Sicherheitsschlüssel oder Passkey',
   'enrol.email_otp': 'Code per E-Mail',
-  'enrol.lead':
-    'Ihre Organisation verlangt jetzt einen. Es dauert eine Minute, danach sind Sie direkt angemeldet.',
-  'enrol.totp_lead':
-    'Verwenden Sie eine Authenticator-App — die von Ihrer Organisation empfohlene, oder eine beliebige mit sechsstelligen Codes.',
   'enrol.start': 'Starten',
   'enrol.scan': 'Scannen Sie dies mit Ihrer App und geben Sie dann den angezeigten Code ein.',
   'enrol.qr_alt': 'QR-Code für Ihre Authenticator-App',
   'enrol.cannot_scan': 'Scannen nicht möglich? Geben Sie stattdessen diesen Schlüssel ein:',
   'enrol.confirm': 'Bestätigen',
-  'enrol.webauthn_lead':
-    'Verwenden Sie einen Sicherheitsschlüssel oder den Fingerabdruck- bzw. Gesichtsentsperrer dieses Geräts.',
   'enrol.name_key': 'Diesen Schlüssel benennen',
   'enrol.switch_to_key': 'Stattdessen einen Sicherheitsschlüssel verwenden',
   'enrol.switch_to_app': 'Stattdessen eine App verwenden',
@@ -372,8 +331,6 @@ export const de: Catalog = {
   'portal.sign_out': 'Abmelden',
   'portal.greeting': 'Guten Tag, {name}',
   'portal.empty_title': 'Noch keine Anwendungen zugewiesen',
-  'portal.empty_body':
-    'Sobald Ihre Administration Ihnen Anwendungen zuweist, erscheinen sie hier und öffnen sich mit einem Klick.',
   'portal.other_group': 'Alles Übrige',
   'portal.pinned': 'Angeheftet',
   'portal.recent': 'Zuletzt verwendet',

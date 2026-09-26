@@ -69,9 +69,6 @@ export function EntraConnectorFields({
         placeholder="contoso.com"
         {...mark('userPrincipalDomain')}
       />
-      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
-        The domain new users sign in with.
-      </p>
       <Field
         label="Application client secret"
         name="bindPassword"
@@ -107,7 +104,7 @@ export function EntraConnectorFields({
         <div>
           <dt className="text-muted">Group memberships managed</dt>
           <dd className="mt-0.5 text-ink">
-            Direct memberships of assigned security groups. Nested and dynamic groups are not.
+            Direct, in assigned security groups
           </dd>
         </div>
       </dl>

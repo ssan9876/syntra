@@ -219,7 +219,7 @@ describe('TargetDetailPage', () => {
     ).toBeVisible();
     expect(screen.queryByText(/Review the outstanding run/)).toBeNull();
     expect(
-      screen.queryByRole('link', { name: 'Go to the runs for this target' }),
+      screen.queryByRole('link', { name: 'Review runs' }),
     ).toBeNull();
   });
 
@@ -240,7 +240,7 @@ describe('TargetDetailPage', () => {
       await screen.findByText(/Review the outstanding run/),
     ).toBeVisible();
     expect(
-      screen.getByRole('link', { name: 'Go to the runs for this target' }),
+      screen.getByRole('link', { name: 'Review runs' }),
     ).toBeVisible();
   });
 
@@ -644,14 +644,13 @@ describe('TargetDetailPage', () => {
     await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'entraId');
     expect(screen.queryByLabelText(/bind dn/i)).not.toBeInTheDocument();
     expect(screen.getByText(/User\.ReadWrite\.All/)).toBeVisible();
-    expect(screen.getByText(/Nested and dynamic groups are not/)).toBeVisible();
+    expect(screen.getByText(/Direct, in assigned security groups/)).toBeVisible();
 
     await userEvent.type(screen.getByLabelText(/^name$/i), 'Entra');
     await userEvent.type(screen.getByLabelText(/directory \(tenant\) id/i), 'contoso.onmicrosoft.com');
     await userEvent.type(screen.getByLabelText(/application \(client\) id/i), 'client-1');
     await userEvent.type(screen.getByLabelText(/application client secret/i), 'a-secret');
     await userEvent.selectOptions(screen.getByLabelText(/correlation field/i), 'extensionAttribute1');
-    expect(screen.getByText(/the domain new users sign in with/i)).toBeVisible();
     await userEvent.type(screen.getByLabelText(/user principal name domain/i), 'contoso.com');
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 

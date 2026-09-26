@@ -644,7 +644,7 @@ export function TargetDetailPage() {
             {(data.lastSkipReason ?? '').includes('is awaiting review') && (
               <p className="mt-2">
                 <Link to={`/admin/targets/${targetId}/runs`} className="link font-medium">
-                  Go to the runs for this target
+                  Review runs
                 </Link>
               </p>
             )}

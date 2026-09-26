@@ -104,9 +104,6 @@ export function MappingEditor({
         return (
           <section key={objectType} aria-label={TYPE_LABEL[objectType]}>
             <h4 className="font-medium text-ink">{TYPE_LABEL[objectType]}</h4>
-            {objectType === 'user' && (
-              <p className="mt-1 text-sm text-muted">Exactly one user mapping is the correlation key.</p>
-            )}
             {indexed.length === 0 ? (
               <p className="mt-2 text-sm text-muted">Not synced — nothing mapped</p>
             ) : (

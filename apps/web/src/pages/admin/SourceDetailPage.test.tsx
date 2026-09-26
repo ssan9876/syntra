@@ -790,13 +790,13 @@ describe('running a source by hand', () => {
 });
 
 describe('the correlation key', () => {
-  it('states the rule the server enforces', async () => {
+  it('makes the correlation key a single choice among the user mappings', async () => {
     mockFetch();
     renderNew();
 
-    expect(
-      await screen.findByText(/exactly one user mapping is the correlation key/i),
-    ).toBeInTheDocument();
+    // Radios, not checkboxes: "exactly one" is the control, not a caption.
+    const radios = await screen.findAllByRole('radio', { name: /correlate user records/i });
+    expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
   });
 
   it('releases the previous one when another is chosen, so there is always exactly one', async () => {

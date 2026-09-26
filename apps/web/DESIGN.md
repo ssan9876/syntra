@@ -432,7 +432,7 @@ structure:
 actions. `Panel` takes a title and actions. `Field` and `Check` take a
 `warning` and no `hint`. An optional slot next to a title gets filled, and
 eventually filled with something that is not prose — which is how a client ID
-ended up as a sentence. `no-prose.test.ts` asserts all of it, including that no
+ended up as a sentence. `no-prose.test.ts` asserts all of it — and, since sentences crept back as bare `<p>` captions once the props were gone, it also refuses any run of literal JSX text over eighteen words — including that no
 page declares the props locally: the last one in was a `Toggle` that was
 `Check` plus a REQUIRED hint, so every use of it had to invent a sentence.
 
