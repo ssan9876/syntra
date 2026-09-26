@@ -100,7 +100,6 @@ export function Login() {
 
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
           <h1 className="text-lg font-semibold text-ink">{t('login.title')}</h1>
-          <p className="mt-1 text-muted">{t('login.lead')}</p>
 
           <form onSubmit={onSubmit} noValidate className="mt-6 space-y-4">
             <Field

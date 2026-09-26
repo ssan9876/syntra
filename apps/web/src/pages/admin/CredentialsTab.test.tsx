@@ -114,7 +114,7 @@ describe('CredentialsTab', () => {
     const stage = screen.getByRole('button', { name: 'Stage new secret' });
     expect(stage).toBeDisabled();
     await userEvent.type(screen.getByLabelText('New secret'), 'n3w-s3cret');
-    expect(screen.getByText(/Keep the current secret valid at the issuer/)).toBeVisible();
+    expect(screen.getByText(/Keep the current secret valid until completion/)).toBeVisible();
     await userEvent.click(stage);
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(String(fetch.mock.calls[1]![0])).toBe('/api/admin/credentials/rotations');
@@ -124,7 +124,7 @@ describe('CredentialsTab', () => {
       secret: 'n3w-s3cret',
       newExpiresAt: null,
     });
-    expect(await screen.findByText('New secret staged. Test it before cutting over.')).toBeVisible();
+    expect(await screen.findByText('New secret staged.')).toBeVisible();
     expect(await screen.findByRole('button', { name: 'Test staged secret' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Cancel rotation' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Cut over' })).toBeNull();

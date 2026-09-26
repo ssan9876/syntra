@@ -77,7 +77,13 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
   const results = outcome?.results ?? null;
   return <Panel title={`End employment for ${personName}`}>
     <div className="space-y-4 p-4">
-      <Alert tone="warning">This ends employment now, disables linked Syntra sign-ins, revokes sessions, and starts configured target-system leaver work. Failed or delayed target actions remain visible.</Alert>
+      <Alert tone="warning" title="Ends employment now">
+        <ul className="list-disc pl-5">
+          <li>disables linked Syntra sign-ins</li>
+          <li>revokes sessions</li>
+          <li>starts target-system leaver work</li>
+        </ul>
+      </Alert>
       {problem && <Alert tone="danger">{problem}</Alert>}
       {preview && !results && <>
         {/* Two tables rather than two sentences per row: a departure is read
@@ -109,11 +115,11 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
           </tbody>
         </Table>
         <Field label="Reason" value={reason} onChange={setReason} />
-        <Check label="Urgent departure: apply the urgent service level and escalate if target access is not removed in time" checked={urgent} onChange={setUrgent} />
+        <Check label="Urgent departure" checked={urgent} onChange={setUrgent} warning={urgent ? 'Urgent service level; escalates if target access is not removed in time.' : undefined} />
         <div className="flex gap-2"><Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void finish()}>End employment now</Button><Button variant="secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button></div>
       </>}
       {results && outcome && <>
-        <Alert tone={results.some((item) => item.status === 'failed') ? 'warning' : 'success'} title="Employment ended">Review every result below. Target-system work may still be pending.</Alert>
+        <Alert tone={results.some((item) => item.status === 'failed') ? 'warning' : 'success'} >Employment ended.</Alert>
         <Table tight label="Sign-in results">
           <thead><tr><th scope="col">Sign-in</th><th scope="col">Result</th><th scope="col">Detail</th></tr></thead>
           <tbody aria-live="polite">
@@ -126,7 +132,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
         </Table>
         {outcome.provisionMessage ? <Alert tone="warning">{outcome.provisionMessage}</Alert> : null}
         {outcome.sloDeadlineAt ? <dl className="text-sm"><dt className="font-medium text-muted">{outcome.priority === 'critical' ? 'Urgent' : 'Standard'} service level · target access removed by</dt><dd className="mt-0.5 font-medium text-ink">{new Date(outcome.sloDeadlineAt).toLocaleString()}</dd></dl> : null}
-        {outcome.approvalRequired ? <Alert tone="info" title="Approval required">{outcome.approvalReason ?? 'A second person must approve the target work.'}</Alert> : null}
+        {outcome.approvalRequired ? <Alert tone="info" title="Approval required">{outcome.approvalReason ?? 'Target work needs a second approver.'}</Alert> : null}
         <Link className="link" to={`/admin/lifecycle-operations/${outcome.operationId}`}>Open offboarding operation</Link>
       </>}
       {busy && !preview && <SkeletonRows rows={3} cols={3} />}

@@ -108,13 +108,10 @@ export function UnlinkedAccountsPage() {
               }, `Linked ${confidentRows.length} account${confidentRows.length === 1 ? '' : 's'}`)
             }
           >
-            Link all {confidentRows.length} confident
+            {/* The label says what "confident" means: one exact work-email
+                match, to a person with no account yet. */}
+            Link all {confidentRows.length} confident work-email matches
           </Button>
-          <span className="text-sm text-muted">
-            {/* What "confident" means, beside the button that acts on it. */}
-            Accounts whose address matches exactly one person's work email,
-            where that person has no account yet.
-          </span>
         </div>
       )}
 
@@ -124,10 +121,7 @@ export function UnlinkedAccountsPage() {
 
           {data && rows.length === 0 && (
             <div className="p-6">
-              <Empty title="Every account has a person">
-                Accounts appear here when they are created without one. A
-                service account belongs in this state and can be left alone.
-              </Empty>
+              <Empty title="Every account has a person" />
             </div>
           )}
 

@@ -110,9 +110,9 @@ describe('the danger zone', () => {
     await screen.findByText('Assigned to');
     const dialog = await openDialog();
 
-    expect(within(dialog).getByText(/stops immediately for the 2 users, groups and units/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/stop immediately for 2 assignments/)).toBeInTheDocument();
     expect(within(dialog).getByText(/client secret/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/signing keys are not touched/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Cannot be undone/)).toBeInTheDocument();
 
     const confirm = within(dialog).getByRole('button', { name: 'Delete application' });
     expect(confirm).toBeDisabled();

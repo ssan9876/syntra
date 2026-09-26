@@ -97,22 +97,21 @@ describe('ApplicationSso launch address', () => {
     mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
     renderWith(null);
     await screen.findByLabelText(/launch address/i);
-    expect(screen.getByText(/it is empty, so the tile cannot open this application/i)).toBeInTheDocument();
+    expect(screen.getByText(/the portal tile cannot open this application/i)).toBeInTheDocument();
   });
 
-  it('explains that the tile opens the address when one is set', async () => {
+  it('does not warn when a launch address is set', async () => {
     mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
     renderWith('https://acme.slack.com');
     expect(await screen.findByDisplayValue('https://acme.slack.com')).toBeInTheDocument();
-    expect(screen.getByText(/the portal tile opens this address\. It should be the application's SSO start page/i)).toBeInTheDocument();
-    expect(screen.queryByText(/it is empty/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tile cannot open/i)).not.toBeInTheDocument();
   });
 
   it('says nothing about it when sign-in starts at Syntra', async () => {
     mockApi({ saml: samlConfig({ allowIdpInitiated: true }) });
     renderWith(null);
     await screen.findByLabelText(/launch address/i);
-    expect(screen.queryByText(/the portal tile opens this address/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tile cannot open/i)).not.toBeInTheDocument();
   });
 
   it('saves a changed launch address on the application, after the SAML settings', async () => {
@@ -142,7 +141,7 @@ describe('ApplicationSso launch address', () => {
     await user.clear(await screen.findByDisplayValue('https://acme.slack.com'));
     await user.click(screen.getByRole('button', { name: /save saml settings/i }));
 
-    expect(await screen.findAllByText(/can be changed but not removed/i)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/cannot be removed/i)).not.toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
 });

@@ -170,7 +170,7 @@ function bodyOf(
     sensitiveAttributeMappings(draft.attributeTemplates).length > 0 &&
     draft.sensitiveApprovalReason.trim().length < 20
   ) {
-    invalid.sensitiveApprovalReason = 'record at least 20 characters explaining why this target needs personal email';
+    invalid.sensitiveApprovalReason = 'at least 20 characters';
   }
 
   const attemptsRaw = draft.maxUniquenessAttempts.trim();
@@ -475,12 +475,6 @@ function AccountProfileEditor() {
         <div className="space-y-6">
           <Alert tone="danger" title="This profile could not be read">
             <p>{load.message}</p>
-            <p className="mt-2">
-              The form is not shown, because it would be showing defaults rather
-              than what is stored — and saving it would put those defaults over
-              the naming convention and every attribute template this target
-              actually has.
-            </p>
           </Alert>
           {back}
         </div>
@@ -513,10 +507,7 @@ function AccountProfileEditor() {
       <div className="space-y-6">
         {problem && <Alert tone="danger">{problem}</Alert>}
         {!load.stored && (
-          <Alert tone="info">
-            This target has no account profile yet, so these are defaults. They
-            are not stored until you save them.
-          </Alert>
+          <Alert tone="info">Defaults — not saved yet.</Alert>
         )}
 
         {/* Not a Panel: its `overflow-hidden` would stop the completion bar
@@ -558,15 +549,9 @@ function AccountProfileEditor() {
               name="fallbackContainer"
               value={profile.fallbackContainer}
               onChange={(v) => set('fallbackContainer', v)}
+              placeholder="/"
               {...mark('fallbackContainer')}
             />
-            <p className="text-sm text-muted sm:col-span-2">
-              Containers are where Active Directory places an account (and an HTTP
-              target whose document describes containers). Entra ID and SCIM keep
-              accounts in one flat directory, so both container settings are
-              ignored for them; they are still required, and <code>/</code> is the
-              conventional value.
-            </p>
           </FormSection>
 
           <FormSection
@@ -579,9 +564,7 @@ function AccountProfileEditor() {
           >
             <div className="space-y-3 sm:col-span-2">
               {rows.length === 0 && (
-                <p className="text-muted">
-                  No attributes are written beyond the name and the container.
-                </p>
+                <p className="text-muted">No attributes</p>
               )}
               {rows.map(([name, template], index) => (
                 <div key={index} className="grid gap-3 sm:grid-cols-[1fr_2fr_auto]">
@@ -761,22 +744,13 @@ function AccountProfileEditor() {
                 </Button>
               </div>
 
-              {previewStale && !preview && (
-                <p className="text-sm text-warning" role="status">
-                  The draft changed after the last preview. Preview again to see what it produces.
-                </p>
-              )}
-
               {preview && (
                 <dl className="rounded-panel border border-border-subtle p-4">
                   <dt className="font-medium text-ink">Account name</dt>
                   <dd className="font-mono text-ink">
                     {preview.correlationKey ?? '—'}{' '}
                     {preview.taken && (
-                      <span className="font-sans text-warning">
-                        (the base name is already taken; this is the next free
-                        one)
-                      </span>
+                      <span className="font-sans text-warning">(base name taken)</span>
                     )}
                   </dd>
                   {preview.userPrincipalName && (
@@ -787,7 +761,7 @@ function AccountProfileEditor() {
                   )}
                   <dt className="mt-3 font-medium text-ink">Container</dt>
                   {preview.placesAccountsInContainers === false ? (
-                    <dd className="text-muted">Not used: this target has no containers.</dd>
+                    <dd className="text-muted">Not used</dd>
                   ) : (
                     <dd className="font-mono text-ink">{preview.container ?? '—'}</dd>
                   )}

@@ -134,7 +134,7 @@ export function CredentialsTab() {
           {loading && <SkeletonRows rows={4} cols={5} />}
           {!loading && items.length === 0 && (
             <div className="p-6">
-              <Empty title="No credentials yet">Connectors, tokens, webhooks and signing keys appear here.</Empty>
+              <Empty title="No credentials yet" />
             </div>
           )}
           {!loading && items.length > 0 && (
@@ -308,7 +308,7 @@ function MetadataForm({ item, onSaved, onCancel }: { item: CredentialItem; onSav
           type="date"
           value={declared}
           onChange={setDeclared}
-          warning={item.discovery?.status === 'found' ? 'A discovered expiry takes precedence over a declared one.' : undefined}
+          warning={item.discovery?.status === 'found' ? 'Overridden by the discovered expiry.' : undefined}
         />
       )}
       <Field label="Note" value={note} onChange={setNote} maxLength={500} />
@@ -371,7 +371,7 @@ function RotationPanel({ item, onChanged }: { item: CredentialItem; onChanged(te
             autoComplete="off"
             value={secret}
             onChange={setSecret}
-            warning={secret ? 'Keep the current secret valid at the issuer until this rotation completes.' : undefined}
+            warning={secret ? 'Keep the current secret valid until completion.' : undefined}
           />
           <Field label="New secret expires on (optional)" type="date" value={expires} onChange={setExpires} />
           <Field label="Reason (optional)" value={reason} onChange={setReason} maxLength={500} />
@@ -392,7 +392,7 @@ function RotationPanel({ item, onChanged }: { item: CredentialItem; onChanged(te
                     newExpiresAt: expires ? new Date(`${expires}T00:00:00Z`).toISOString() : null,
                     reason: reason.trim() === '' ? null : reason.trim(),
                   },
-                  'New secret staged. Test it before cutting over.',
+                  'New secret staged.',
                 )
               }
             >
@@ -428,7 +428,7 @@ function RotationPanel({ item, onChanged }: { item: CredentialItem; onChanged(te
                 variant="primary"
                 size="sm"
                 loading={busy === 'cutover'}
-                onClick={() => void run('cutover', `${base}/cutover`, undefined, 'Cut over. The previous secret is kept until you complete or roll back.')}
+                onClick={() => void run('cutover', `${base}/cutover`, undefined, 'Cut over; previous secret kept.')}
               >
                 Cut over
               </Button>

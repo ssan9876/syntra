@@ -105,7 +105,7 @@ export function TenantDeletionTab() {
     return <Panel title="Tenant deleted">
       <div className="space-y-4 p-4">
         <Alert tone="success" title="The tenant has been erased">
-          This console no longer serves it. Keep the receipt: it is the proof, and restoring an older backup would bring the tenant back.
+          Keep the receipt — it is the proof of deletion.
         </Alert>
         <Button onClick={() => download(`syntra-deletion-receipt-${String(receipt.tenantId)}.json`, receipt)}>Download receipt</Button>
       </div>
@@ -209,7 +209,7 @@ export function TenantDeletionTab() {
         </div> : null}
 
         {request?.status === 'approved' ? <div className="space-y-3">
-          {coolingOff ? <p className="text-sm text-muted">Cooling off until {when(request.executeNotBefore)}. Anyone with this access can still cancel.</p> : null}
+          {coolingOff ? <p className="text-sm text-muted">Cooling off until {when(request.executeNotBefore)}.</p> : null}
           <div role="group" aria-label="Delete tenant now" className="max-w-2xl space-y-3 rounded-panel border border-danger/40 p-3">
             <Field
               name="confirm"
@@ -219,7 +219,7 @@ export function TenantDeletionTab() {
               disabled={coolingOff}
               autoComplete="off"
               spellCheck={false}
-              warning={!coolingOff ? `Erases every person, account and secret in this tenant. Needs a sign-in from the last ${policy.stepUpMaxAgeMinutes} minutes.` : undefined}
+              warning={!coolingOff ? `Erases every person, account and secret. Needs a sign-in within ${policy.stepUpMaxAgeMinutes} minutes.` : undefined}
             />
             <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-3">
               <Button variant="danger" loading={busy === 'execute'} disabled={coolingOff || confirm !== 'DELETE'} onClick={() => void execute()}>Delete tenant now</Button>

@@ -49,15 +49,20 @@ export function TestReport({ result, stale = false }: { result: TestResult; stal
           </p>
 
           {counts && (
-            <p className="text-ink">
-              Found{' '}
-              <strong className="font-semibold tabular-nums">{counts.user}</strong>{' '}
-              users,{' '}
-              <strong className="font-semibold tabular-nums">{counts.group}</strong>{' '}
-              groups and{' '}
-              <strong className="font-semibold tabular-nums">{counts.orgUnit}</strong>{' '}
-              organizational units in the configured search bases.
-            </p>
+            <dl className="flex flex-wrap gap-x-6 gap-y-1">
+              <div className="flex gap-2">
+                <dt className="text-muted">Users</dt>
+                <dd className="font-semibold tabular-nums text-ink">{counts.user}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-muted">Groups</dt>
+                <dd className="font-semibold tabular-nums text-ink">{counts.group}</dd>
+              </div>
+              <div className="flex gap-2">
+                <dt className="text-muted">Org units</dt>
+                <dd className="font-semibold tabular-nums text-ink">{counts.orgUnit}</dd>
+              </div>
+            </dl>
           )}
 
           {result.schema && (

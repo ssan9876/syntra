@@ -121,11 +121,10 @@ describe('AccountProfilePage', () => {
     });
     renderPage();
     await screen.findByLabelText('Account name template');
-    expect(screen.getByText(/Entra ID and SCIM keep accounts in one flat directory/)).toBeVisible();
     await userEvent.selectOptions(screen.getByLabelText('Person'), 'p1');
     await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(await screen.findByText('anna.novak@contoso.com')).toBeVisible();
-    expect(screen.getByText('Not used: this target has no containers.')).toBeVisible();
+    expect(screen.getByText('Not used')).toBeVisible();
   });
 
   it('keeps the newer person preview when an older response finishes last', async () => {
@@ -239,7 +238,7 @@ describe('AccountProfilePage', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Save profile' }));
 
-    expect(screen.getAllByText(/record at least 20 characters explaining why/i)).toHaveLength(2);
+    expect(screen.getAllByText(/at least 20 characters/i)).toHaveLength(2);
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(false);
   });
 
@@ -256,7 +255,7 @@ describe('AccountProfilePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/This target has no account profile yet/),
+      await screen.findByText('Defaults — not saved yet.'),
     ).toBeVisible();
     expect(
       screen.getByDisplayValue('%person.givenName.first%.%person.familyName%'),

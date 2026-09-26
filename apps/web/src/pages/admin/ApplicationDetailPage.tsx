@@ -184,10 +184,7 @@ export function ApplicationDetailPage() {
         >
           <div className="space-y-4 p-4">
             {assignments.length === 0 && (
-              <Empty title="Not assigned to anyone yet">
-                Assign a group or an organizational unit rather than a list of
-                people — it stays correct as people join and leave.
-              </Empty>
+              <Empty title="Not assigned to anyone yet" />
             )}
 
             {assignments.length > 0 && (

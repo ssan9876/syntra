@@ -77,10 +77,7 @@ export function SweepsTab() {
                   Run a preview now
                 </Button>
               }
-            >
-              The nightly sweep records one row here every time it runs, whether
-              or not it applied anything.
-            </Empty>
+            />
           </div>
         )}
         {data && (data.sweeps ?? []).length > 0 && (

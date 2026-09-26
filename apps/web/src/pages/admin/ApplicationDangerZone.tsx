@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Alert, Button, Dialog, Field, Panel, useToast } from '@syntra/ui';
+import { Alert, Button, Dialog, Field, Panel, StateBadge, useToast } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { ApiError, api } from '../../session/api.js';
 
@@ -118,10 +118,8 @@ export function ApplicationDangerZone({
 
   const holders =
     assignmentCount === null
-      ? 'everyone it is assigned to'
-      : assignmentCount === 1
-        ? 'the 1 user, group or unit it is assigned to'
-        : `the ${assignmentCount} users, groups and units it is assigned to`;
+      ? 'everyone assigned'
+      : `${assignmentCount} assignment${assignmentCount === 1 ? '' : 's'}`;
 
   return (
     <Panel title="Danger zone">
@@ -129,11 +127,11 @@ export function ApplicationDangerZone({
         <div className="flex flex-wrap items-center justify-between gap-3 p-4">
           <div className="max-w-prose">
             <p className="font-medium text-ink">{active ? 'Retire application' : 'Reactivate application'}</p>
-            <p className="text-sm text-muted">
-              {active
-                ? 'Hides the tile and stops sign-in, keeping its configuration and assignments. Reversible.'
-                : 'This application is retired. Reactivating it restores the tile and sign-in for everyone assigned.'}
-            </p>
+            {active ? (
+              <p className="text-sm text-muted">Reversible</p>
+            ) : (
+              <StateBadge state="inactive">Retired</StateBadge>
+            )}
           </div>
           <Button
             variant="secondary"
@@ -147,9 +145,7 @@ export function ApplicationDangerZone({
         <div className="flex flex-wrap items-center justify-between gap-3 p-4">
           <div className="max-w-prose">
             <p className="font-medium text-ink">Delete application</p>
-            <p className="text-sm text-muted">
-              Permanent. Frees its entity ID or client ID so it can be registered again.
-            </p>
+            <p className="text-sm text-muted">Permanent</p>
           </div>
           <Button variant="danger" onClick={() => setOpen(true)}>
             Delete application
@@ -198,23 +194,16 @@ export function ApplicationDangerZone({
         }
       >
         <div className="space-y-3 text-sm text-ink">
-          <p>
-            <strong>
-              Single sign-on to {application.name} stops immediately for {holders}.
-            </strong>{' '}
-            Its tile leaves the portal, and tokens already issued to it stop working.
-          </p>
-          <p>This permanently removes:</p>
+          <Alert tone="warning">
+            Sign-in and issued tokens stop immediately for {holders}. Cannot be undone.
+          </Alert>
+          <p>Removes:</p>
           <ul className="list-disc space-y-1 pl-5">
-            <li>its SAML and OpenID Connect configuration, including the client secret</li>
-            <li>its claim mappings and its logo</li>
-            <li>every assignment of it</li>
-            <li>tokens, sign-in sessions and sign-ins in progress for it</li>
+            <li>SAML and OpenID Connect configuration, including the client secret</li>
+            <li>claim mappings and logo</li>
+            <li>every assignment</li>
+            <li>tokens, sign-in sessions and sign-ins in progress</li>
           </ul>
-          <p className="text-muted">
-            Users, groups and the tenant&apos;s signing keys are not touched. It cannot be undone
-            {active ? ' — retiring it instead keeps everything and can be reversed' : ''}.
-          </p>
           <Field
             name="confirm-delete"
             label={`Type ${application.name} to confirm`}
