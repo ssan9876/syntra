@@ -334,20 +334,17 @@ export function OnboardPersonPage() {
       {progress?.personId && (
         <div className="mb-4">
           <Alert tone="warning" title="Partly done">
-            <p>
-              {progress.personName} was created.
-              {progress.contract
-                ? ' Their contract was saved.'
-                : ' Their contract was not saved. Nothing will be provisioned for them until one exists.'}
-              {progress.user
-                ? ' Their Syntra login was created and linked.'
-                : progress.userId
-                  ? ' Their Syntra login was created but could not be linked.'
-                  : wantsLogin && progress.contract
-                    ? ' Their Syntra login was not created.'
-                    : ''}
-              {' '}Onboarding is incomplete. Review the error before continuing from the saved records.
-            </p>
+            <ul className="mb-2 list-disc pl-5">
+              <li>{`${progress.personName}: created`}</li>
+              <li>{progress.contract ? 'Contract: saved' : 'Contract: not saved — nothing will be provisioned'}</li>
+              {progress.user ? (
+                <li>Syntra login: created and linked</li>
+              ) : progress.userId ? (
+                <li>Syntra login: created, not linked</li>
+              ) : wantsLogin && progress.contract ? (
+                <li>Syntra login: not created</li>
+              ) : null}
+            </ul>
             <Link to={`/admin/people/${progress.personId}`} className="underline">
               Open saved person
             </Link>
@@ -553,8 +550,7 @@ export function OnboardPersonPage() {
                       // go to Unsorted" leaves the reader guessing which field
                       // to fill in, which is the only question they have.
                       <span className="mt-0.5 block text-muted">
-                        the fallback container, because{' '}
-                        {hint.missing.join(', ')} resolves to nothing
+                        Fallback container: {hint.missing.join(', ')} is empty
                       </span>
                     )}
                   </li>
@@ -612,8 +608,7 @@ export function OnboardPersonPage() {
               the reader guessing which box to fill in, which is their only
               question.
             */}
-            {unplaced[0]!.missing.join(', ')} decides which container this
-            account is created in, and there is nothing in it yet.
+            Fill in {unplaced[0]!.missing.join(', ')}.
           </Alert>
         )}
 

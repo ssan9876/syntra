@@ -69,13 +69,13 @@ export function BrandingTab() {
     setSaveError(null);
     if (!LOGO_TYPES.includes(file.type)) {
       setSaveError(
-        'A logo may be a PNG, JPEG, WebP or GIF. SVG is not accepted: it can carry script, and it would render before anybody has signed in.',
+        'Use a PNG, JPEG, WebP or GIF. SVG is not accepted.',
       );
       return;
     }
     if (file.size > MAX_LOGO_BYTES) {
       setSaveError(
-        `That file is ${Math.round(file.size / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB — the sign-in page has to load on a bad connection.`,
+        `That file is ${Math.round(file.size / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB.`,
       );
       return;
     }

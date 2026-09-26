@@ -85,7 +85,7 @@ describe('SettingsSessionsTab', () => {
     await userEvent.type(screen.getByLabelText('Reason'), REASON);
     await userEvent.click(screen.getByRole('button', { name: /revoke sessions/i }));
 
-    expect(await screen.findByText(/that includes yours/i)).toBeInTheDocument();
+    expect(await screen.findByText(/includes yours/i)).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole('button', { name: 'Revoke every console session' }),
     );

@@ -86,9 +86,7 @@ export function ResetPassword() {
       <main className="flex min-h-dvh flex-col items-center justify-center bg-surface px-6 py-12">
         <div className="w-full max-w-sm">
           <Wordmark className="mb-8" />
-          <Alert tone="warning" title="That link is no longer usable">
-            Reset links work once and expire after thirty minutes.
-          </Alert>
+          <Alert tone="warning">That link is no longer usable.</Alert>
           <p className="mt-4 text-center text-sm text-muted">
             <Link to="/forgot-password" className="link">
               Request a new one
@@ -140,10 +138,7 @@ export function ResetPassword() {
               />
             )}
             {preflight?.requiresFactor && factorMode === 'webauthn' && (
-              <p className="text-muted">
-                Use your security key when the browser asks. Your account has a
-                second factor, so resetting the password needs it too.
-              </p>
+              <p className="text-muted">Have your security key ready.</p>
             )}
 
             {error && (

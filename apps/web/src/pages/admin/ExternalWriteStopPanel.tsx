@@ -70,7 +70,7 @@ export function ExternalWriteStopPanel({
           <Field name="reason" label="Reason for resuming" value={reason} onChange={setReason} />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>Request reviewed resume</Button>
-            <p className="text-sm text-muted">A different administrator must approve the resume. Reads, previews, and evidence remain available.</p>
+            <p className="text-sm text-muted">A different administrator must approve.</p>
           </div>
         </div>
         // One press, deliberately, where every other destructive control in

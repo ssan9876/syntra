@@ -180,8 +180,7 @@ export function UpdatesPage() {
       {restarting && (
         <div className="mb-4">
           <Alert tone="warning" title="Syntra is restarting">
-            This page cannot reach the server while the new version starts. It
-            will reconnect on its own — do not reload or navigate away.
+            Reconnects on its own. Do not reload.
           </Alert>
         </div>
       )}
@@ -199,12 +198,6 @@ export function UpdatesPage() {
               <p className="text-ink">
                 Running{' '}
                 <strong className="font-semibold">{data.current}</strong>
-                {data.current === 'dev' && (
-                  <span className="text-muted">
-                    {' '}
-                    — a working tree rather than a release
-                  </span>
-                )}
               </p>
               {!data.updatable && data.reason && (
                 // Not an error tone. A developer checkout being un-updatable
@@ -240,12 +233,8 @@ export function UpdatesPage() {
                 {progress.detail && <p className="text-muted">{progress.detail}</p>}
                 {progress.step === 'rolled_back' && (
                   <Alert tone="warning" title="The update was undone">
-                    The new version did not come up, so the previous one was put
-                    back automatically, along with the database as it was
-                    immediately before the update — schema and data both.
-                    Anything that happened in the minutes between the backup and
-                    the rollback is not in it: a sign-in, a sync run, a
-                    provisioning action.
+                    Previous version and database restored — schema and data
+                    both. Changes made during the update are lost.
                   </Alert>
                 )}
                 {progress.step === 'failed' && (
@@ -269,7 +258,7 @@ export function UpdatesPage() {
                 <div className="p-4">
                   <Alert tone="warning" title="Could not check for updates">
                     {data.reason ??
-                      'No releases were found for this deployment.'}
+                      'No releases found.'}
                   </Alert>
                 </div>
               )}
@@ -322,20 +311,15 @@ export function UpdatesPage() {
                           what follows is one people click through. */}
                       <Alert tone="warning" title="What this will do">
                         <ul className="ml-4 list-disc space-y-1">
-                          <li>Back up the database, and stop if that fails.</li>
-                          <li>Apply any database changes this release brings.</li>
+                          <li>Back up the database; stop if that fails</li>
+                          <li>Apply database changes</li>
                           <li>
-                            Restart Syntra.{' '}
                             <strong className="font-semibold">
-                              Signing in will stop working for about a minute
+                              Sign-in unavailable for about a minute
                             </strong>
-                            , and everyone signed in now stays signed in.
+                            ; existing sessions kept
                           </li>
-                          <li>
-                            Check the new version actually works — and if it does
-                            not, put {data.current} back automatically, database
-                            included, without needing anyone to be here.
-                          </li>
+                          <li>Roll back to {data.current} automatically if it fails</li>
                         </ul>
                       </Alert>
                       <div className="flex justify-end gap-2">

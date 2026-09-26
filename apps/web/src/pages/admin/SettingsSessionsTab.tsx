@@ -130,7 +130,7 @@ export function SettingsSessionsTab() {
           className="max-w-xl"
           warning={
             reason.trim().length > 0 && !reasonOk
-              ? `At least ${REASON_MIN} characters — it is recorded in the audit log.`
+              ? `At least ${REASON_MIN} characters`
               : undefined
           }
         />
@@ -146,11 +146,11 @@ export function SettingsSessionsTab() {
 
         {confirming && (
           <Alert tone="warning" title={`This ends ${what} in the organization`}>
-            <p>
-              Refresh tokens are revoked with them and connected applications
-              are told to sign the same people out.
-              {keepMine ? ' Your current session is kept.' : ' That includes yours.'}
-            </p>
+            <ul className="list-disc pl-5">
+              <li>Refresh tokens revoked</li>
+              <li>Connected applications signed out</li>
+              <li>{keepMine ? 'Your current session is kept' : 'Includes yours'}</li>
+            </ul>
             <Button
               type="button"
               variant="danger"
