@@ -169,11 +169,11 @@ export function PersonImportRunDetailPage() {
         {run.blockedReason && <Alert tone="warning">{run.blockedReason}</Alert>}
 
         {run.mappingFailures > 0 && (
-          <Alert tone="warning">
-            <p>
-              {run.mappingFailures} row{run.mappingFailures === 1 ? ' was' : 's were'} read
-              but could not be mapped. They are not treated as leavers.
-            </p>
+          <Alert
+            tone="warning"
+            title={`${run.mappingFailures} row${run.mappingFailures === 1 ? '' : 's'} could not be mapped`}
+          >
+            <p>Not treated as leavers.</p>
             <ul>
               {run.mappingFailureReasons.map((reason) => (
                 <li key={reason}>{reason}</li>
@@ -270,9 +270,7 @@ export function PersonImportRunDetailPage() {
 
       {changes.length === 0 && (
         <Panel>
-          <Empty title="Nothing to apply">
-            The file matches the person register, so this run proposes no changes.
-          </Empty>
+          <Empty title="Nothing to apply" />
         </Panel>
       )}
     </>

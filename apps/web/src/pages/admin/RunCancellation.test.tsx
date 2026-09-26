@@ -59,7 +59,7 @@ describe('CancelRunButton', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Cancel run' }));
-    expect(screen.getByText(/so it is cancelled now/)).toBeInTheDocument();
+    expect(screen.getByText(/cancelled now/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Keep it' }));
 
     expect(fetch).not.toHaveBeenCalled();

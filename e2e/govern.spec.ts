@@ -267,6 +267,6 @@ test('the segregation-of-duties screen refuses to be written over two groups', a
   await expect(page.getByLabel('Business function A')).toBeVisible();
   await expect(page.getByLabel('Business function B')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Show me who this would flag, before I save it' }),
+    page.getByRole('button', { name: 'Preview who this flags' }),
   ).toBeDisabled();
 });

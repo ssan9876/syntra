@@ -101,9 +101,7 @@ export function ReferenceDataTab() {
               </form>
 
               {values.length === 0 ? (
-                <Empty title={`No governed ${title.toLocaleLowerCase()}`}>
-                  Add the first {singular} to begin rejecting unrecognized {title.toLocaleLowerCase()} in HR imports.
-                </Empty>
+                <Empty title={`No governed ${title.toLocaleLowerCase()}`} />
               ) : (
                 <Table tight>
                   <thead><tr><th scope="col">Value</th><th scope="col">Import state</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>

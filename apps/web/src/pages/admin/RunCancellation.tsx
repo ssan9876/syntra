@@ -126,8 +126,8 @@ export function CancelRunButton({
     <div className="w-full space-y-2 sm:max-w-md">
       <Alert tone="danger" title={`Cancel this ${noun}?`}>
         {isWorking
-          ? `It stops at its next checkpoint — between two items, never in the middle of one. Everything it has already done stays done and recorded; nothing after that point is attempted.`
-          : `Nothing is working on it yet, so it is cancelled now. What it proposed will not be applied; the next run proposes whatever is still needed.`}
+          ? 'It stops at its next checkpoint. Work already done stays.'
+          : 'Cancelled now. Nothing it proposed is applied.'}
       </Alert>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <div className="flex flex-wrap gap-2">
@@ -168,23 +168,19 @@ export function CancellationStatus({
   if (run.cancelState === 'requested') {
     body = (
       <Alert tone="warning" title="Cancellation requested">
-        This {noun} stops at its next checkpoint. The item in progress finishes
-        first, so nothing is left half-written. This page follows it.
+        Stops at its next checkpoint.
       </Alert>
     );
   } else if (run.status === 'cancelled') {
     body = (
       <Alert tone="info" title={`This ${noun} was cancelled`}>
-        Everything below marked applied was done before it stopped and stays
-        done. Anything it did not reach is marked as not attempted and can be
-        picked up by the next run.
+        Applied items stay done.
       </Alert>
     );
   } else if (run.cancelState === 'moot') {
     body = (
       <Alert tone="info" title="Cancellation arrived too late">
-        A cancellation was requested, but the {noun} finished before it
-        reached another checkpoint, so it ended normally.
+        The {noun} finished first.
       </Alert>
     );
   }

@@ -137,7 +137,7 @@ export function EmployeeMover({
       });
       setPreview(result);
       setStale(false);
-      setMessage(result.changes.length ? 'Review the changes below.' : 'No employment changes found.');
+      setMessage(result.changes.length ? '' : 'No employment changes found.');
     } catch (error) {
       setMessage(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'The change could not be previewed.');
     } finally {
@@ -157,7 +157,7 @@ export function EmployeeMover({
       setPreview(null);
       setOperationId(operation.id);
       setMessage(operation.status === 'awaiting_approval'
-        ? 'Employment details saved. Target changes wait for a second person to approve them.'
+        ? 'Saved. Target changes await approval.'
         : 'Employment change completed.');
       toast({ tone: 'success', title: operation.status === 'awaiting_approval' ? 'Employment change awaiting approval' : 'Employment change applied' });
       onApplied?.();
@@ -165,9 +165,9 @@ export function EmployeeMover({
       setPreview(null);
       setMessage(
         error instanceof ApiError
-          ? `${error.problem.detail ?? error.problem.title} Preview the current employee state again.`
+          ? `${error.problem.detail ?? error.problem.title} Preview again.`
           : error instanceof Error
-            ? `${error.message} Preview the current employee state again.`
+            ? `${error.message} Preview again.`
             : 'The change could not be applied. Preview it again.',
       );
     } finally {
@@ -211,8 +211,8 @@ export function EmployeeMover({
         {preview && (
           <section aria-label="Target access preview" className="space-y-2 text-sm">
             <h3 className="font-medium text-ink">Target access</h3>
-            {unverified ? <Alert tone="warning">At least one target's entitlement catalog has not been confirmed against the target. Removals shown there are possibilities, not promises.</Alert> : null}
-            {access.length === 0 ? <p className="text-muted">No enabled target system to plan against.</p> : (
+            {unverified ? <Alert tone="warning">Unverified targets: removals are not guaranteed.</Alert> : null}
+            {access.length === 0 ? <p className="text-muted">No enabled targets.</p> : (
               <Table tight>
                 <thead><tr><th scope="col">Target</th><th scope="col">Account</th><th scope="col">Add</th><th scope="col">Retain</th><th scope="col">Remove</th></tr></thead>
                 <tbody>

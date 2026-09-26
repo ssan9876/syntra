@@ -127,11 +127,7 @@ export function DelegatedTasksTab() {
           {!data && loading && <SkeletonRows rows={3} cols={4} />}
           {data && tasks.length === 0 && !adding && (
             <div className="p-6">
-              <Empty title="Nothing is delegated yet">
-                A task lets somebody on the service desk do one thing —
-                unlock an account, send a reset link — without giving them the
-                permission that normally covers it.
-              </Empty>
+              <Empty title="Nothing is delegated yet" />
             </div>
           )}
 
@@ -221,7 +217,7 @@ export function DelegatedTasksTab() {
                             path={`/api/admin/automate/tasks/${task.id}`}
                             label="task"
                             confirmWord={task.name}
-                            warning="Anybody it was delegated to stops seeing it. What it has already done stays in the audit trail."
+                            warning="Delegates lose it. Past runs stay in the audit trail."
                             onDeleted={reload}
                           />
                         </div>

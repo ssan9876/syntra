@@ -57,8 +57,8 @@ export function Adoption({
       // Kept on the page as well: what happens NEXT outlives the toast.
       setDone(
         ifNoCandidate
-          ? 'The account will be created again on the next run.'
-          : 'Adopted. The next run writes this profile onto it.',
+          ? 'Recreated on the next run.'
+          : 'Adopted. Updated on the next run.',
       );
     } catch (cause) {
       setProblem(
@@ -75,8 +75,8 @@ export function Adoption({
     <div className="border-t border-border-subtle p-4">
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-muted">
-          The target already has an account called{' '}
-          <code className="font-mono text-sm text-ink">{correlationKey}</code>.
+          Already on the target:{' '}
+          <code className="font-mono text-sm text-ink">{correlationKey}</code>
         </span>
         <Button variant="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
           Adopt
@@ -96,9 +96,7 @@ export function Adoption({
             <>
               <div className="font-mono text-sm text-ink">{candidate.data.dn}</div>
               <Alert tone="warning">
-                From now on Syntra manages this account: it writes this profile&rsquo;s
-                attributes onto it, moves it when its org unit changes, and disables and
-                archives it when the person leaves.
+                Syntra manages this account from now on, including disabling it at leave.
               </Alert>
             </>
           )}

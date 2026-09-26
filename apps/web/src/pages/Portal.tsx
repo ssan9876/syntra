@@ -345,7 +345,7 @@ export function Portal() {
           {!data && loading && <SkeletonRows rows={3} cols={2} />}
 
           {data && tiles.length === 0 && (
-            <Empty title={t('portal.empty_title')}>{t('portal.empty_body')}</Empty>
+            <Empty title={t('portal.empty_title')} />
           )}
 
           {data && tiles.length > 0 && needle && filtered.length === 0 && (

@@ -105,20 +105,16 @@ export function SweepDetailPage() {
 
           <div className="mt-6">
             <Panel title="What it found">
-              <div className="space-y-1 p-4 text-muted">
-                <p>{data.expireCount} grants past their end date</p>
-                <p>
-                  {data.lapseCount} grants whose holder has no contract in force
-                </p>
-                <p>
-                  {data.reviewFlagCount} grants flagged for review and left
-                  alone
-                </p>
-                <p>
-                  {data.personsWithActiveContract} people hold an active
-                  contract
-                </p>
-              </div>
+              <dl className="grid gap-x-4 gap-y-1 p-4 sm:grid-cols-[max-content_1fr]">
+                <dt className="text-muted">Grants past end date</dt>
+                <dd className="tabular-nums text-ink">{data.expireCount}</dd>
+                <dt className="text-muted">Grants with no contract in force</dt>
+                <dd className="tabular-nums text-ink">{data.lapseCount}</dd>
+                <dt className="text-muted">Grants flagged for review</dt>
+                <dd className="tabular-nums text-ink">{data.reviewFlagCount}</dd>
+                <dt className="text-muted">People with an active contract</dt>
+                <dd className="tabular-nums text-ink">{data.personsWithActiveContract}</dd>
+              </dl>
             </Panel>
           </div>
 

@@ -183,10 +183,6 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
             </li>
           ))}
         </ul>
-        <p className="text-sm text-muted">
-          A refused write still appears in a run preview, marked refused with its reason, and is
-          never attempted.
-        </p>
 
         <fieldset className="space-y-3 border-t border-border-subtle pt-4" disabled={busy !== null}>
           <legend className="font-medium text-ink">Rollout</legend>
@@ -233,11 +229,9 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
 
         <fieldset className="space-y-3 border-t border-border-subtle pt-4" disabled={busy !== null}>
           <legend className="font-medium text-ink">Rollback</legend>
-          <p className="text-sm text-muted">
-            {data.selection.rollbackVersion
-              ? `Returns this target to certified release ${data.selection.rollbackVersion} immediately. Configuration, profile, rules and accounts are not changed; a run previewed under the current release must be previewed again.`
-              : 'There is no earlier certified release recorded for this target.'}
-          </p>
+          {!data.selection.rollbackVersion && (
+            <p className="text-sm text-muted">No earlier certified release recorded.</p>
+          )}
           <Field label="Reason for the rollback" value={rollbackReason} onChange={setRollbackReason} />
           <Button
             variant="danger"
@@ -284,10 +278,6 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
               </>
             ) : (
               <>
-                <p className="text-sm text-muted">
-                  Past its deprecation date this release writes nothing. An override lets it keep
-                  writing for at most 30 days while the target moves to a supported release.
-                </p>
                 <Field label="Reason for the override" value={overrideReason} onChange={setOverrideReason} />
                 <Field
                   label="Override expires (maximum 30 days)"
