@@ -108,6 +108,10 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
     static: 'helpdesk',
     why: 'A built-in role preset key, the same list in every tenant and compiled into the product.',
   }],
+  ['incidents/:kind', {
+    static: 'provision_run_failed',
+    why: 'An incident KIND, one of a fixed list compiled into the product; the state row it writes is keyed by the tenant of the session.',
+  }],
   // ---- tenant administration ---------------------------------------------------
   ['deletion/requests/:id', 'deletionRequest'],
   ['webhooks/:id', 'webhook'],
