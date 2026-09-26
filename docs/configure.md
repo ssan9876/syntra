@@ -1,8 +1,34 @@
 # Configuring Syntra
 
-Every variable Syntra reads, what it does, and what it defaults to. Comments
-in `.env.example` and `packages/core/src/config.ts` are the source of truth;
-this page collects them in one place.
+Every variable Syntra reads, what it does, and what it defaults to; then the
+directories it reads from, the systems it provisions into, the applications
+it signs people in to, and the API an integration calls. Comments in
+`.env.example` and `packages/core/src/config.ts` are the source of truth for
+the variables; this page collects them in one place.
+
+- [Required](#required) and [Optional](#optional) environment variables,
+  including [outgoing mail](#outgoing-mail), [`TRUST_PROXY`](#trust_proxy-and-proxy-notes),
+  [bootstrap](#bootstrap-variables) and [seed](#seed-variables)
+- [Where the variables go](#where-the-variables-go) — `.env`, Compose, Helm,
+  the release layout
+- [Key management](#key-management) — `MASTER_KEY`, Vault Transit, AWS KMS
+- [Tenants and hostnames](#tenants-and-hostnames)
+- [Connecting a directory source](#connecting-a-directory-source), and
+  [Active Directory as a source](#active-directory-as-a-source)
+- [Connectors: provisioning into target systems](#connectors-provisioning-into-target-systems)
+  — [Active Directory](#active-directory), [Microsoft Entra ID](#microsoft-entra-id),
+  [SCIM 2.0](#scim-20-targets), [REST API documents](#rest-api-connector-documents)
+  including [Snipe-IT](#snipe-it), and
+  [certification and rollout](#connector-certification-capabilities-and-rollout)
+- [Access: signing in, second factors and policy](#access-signing-in-second-factors-and-policy),
+  including [signing in to applications](#signing-in-to-applications) and
+  [setting up a SAML application](#setting-up-a-saml-application)
+- [New accounts' sign-in details](#new-accounts-sign-in-details)
+- [Credentials and security notifications](#credentials-and-security-notifications)
+- [Machine access](#machine-access) — service accounts and API tokens
+- [Provisioning into Syntra with SCIM](#provisioning-into-syntra-with-scim)
+- [The administration API](#the-administration-api)
+- [Personal data](#personal-data)
 
 ## Required
 
@@ -23,6 +49,13 @@ The container path (`docker-compose.yml`) additionally requires:
 | `POSTGRES_PASSWORD` | The Postgres superuser password for the `postgres` container. |
 | `SYNTRA_APP_PASSWORD` | The password for the `syntra_app` role that `DATABASE_URL` connects as inside the container. Read by `infra/initdb/01-app-role.sh`; not read anywhere outside `docker-compose.yml`. |
 
+And reads two optional ones of its own:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SYNTRA_VERSION` | `latest` | Which published release to pull: the version part of a release tag (`1.4.0` for `v1.4.0`), not the tag itself. |
+| `SYNTRA_DOMAIN` | — | Required by the `docker-compose.tls.yml` overlay only: the hostname Caddy obtains a certificate for. It must resolve to this host on ports 80 and 443. Set `PUBLIC_URL=https://$SYNTRA_DOMAIN` with it, or every absolute link Syntra builds still says `http`. |
+
 ## Optional
 
 Everything below has a default, and an install that sets none of them is a
@@ -39,7 +72,8 @@ supported, working configuration.
 | `SYNTRA_ALLOW_RESET` | unset | Tests only. The exact name of the database `pnpm db:reset` may empty. Refuses anything that is not a scratch `syntra_test_*` database unless this names the database in `DATABASE_URL` exactly — typing the name out is the point, so nobody pastes a truthy flag into the wrong shell. |
 | `SYNTRA_TEST_WORKERS` | cores − 1, capped at 8 | Tests only. How many vitest workers/scratch databases the suite provisions. Force it to 1 to bisect a suspected ordering dependency, or match whatever CI pins it to. |
 | `GOVERN_BUDGET_MS` | `2500` (CI: `4500`) | Tests only. The transaction-budget check's ceiling in milliseconds, for a runner slower than the machine it was calibrated on. Anything under Prisma's 5000ms interactive-transaction ceiling keeps the check meaningful. |
-| `OUTBOUND_ALLOW_PRIVATE` | `false` | Whether outbound fetches to an administrator-supplied address (SAML metadata import, upstream OIDC discovery) may resolve to loopback, link-local, a private range or a unique-local range. Off by default as an SSRF guard; the SFTP integration test opens it on purpose because it connects to a container on a private address. Never set outside tests unless self-hosting an on-premises upstream identity provider genuinely needs it. |
+| `OUTBOUND_ALLOW_PRIVATE` | `false` | Whether outbound fetches to an administrator-supplied address (SAML metadata import, upstream OIDC discovery, the HR feed's SFTP connector) may resolve to loopback, link-local, a private range or a unique-local range. Only the exact value `true` opens it. Off by default as an SSRF guard; the SFTP integration test opens it on purpose because it connects to a container on a private address. Never set outside tests unless self-hosting an on-premises upstream identity provider genuinely needs it. Provisioning targets have their own per-target switch instead (`allowPrivateAddresses`, below). |
+| `NODE_EXTRA_CA_CERTS` | unset | Node's own variable, not Syntra's, and the only way to make Syntra trust a private certificate authority — an Active Directory enterprise CA for LDAPS, or the CA in front of Vault. **Node ignores the system CA store**: `update-ca-certificates` satisfies `openssl` and `curl` and does nothing for Node, so LDAPS fails with *unable to verify the first certificate* while `openssl s_client` against the same host verifies cleanly. Point it at the CA's PEM file. |
 | `SFTP_INTEGRATION` | unset | Tests only. The HR feed's SFTP integration test is skipped unless this is exactly `1`, so `pnpm test` stays hermetic. Bring the fixture up first with `pnpm sftp:up && pnpm sftp:wait`. |
 | `SFTP_PORT` | `2222` | Which port the SFTP integration test connects to, if 2222 is taken. |
 | `SAMBA_LDAPS_URL` | `ldaps://localhost:1637` | Tests only, for the Samba/Active Directory provisioning integration tests and the browser suite's provisioning spec. Matches `infra/docker-compose.yml`'s samba service; override only to point at a domain controller of your own. |
@@ -68,6 +102,16 @@ supported, working configuration.
 | `MAIL_GRAPH_CLIENT_ID` | — | Graph only, required. The application (client) id of the app registration. |
 | `MAIL_GRAPH_CLIENT_SECRET` | — | Graph only, required. The app registration's client secret. Keep it with the other secrets, not in a values file or a ConfigMap; it is never logged or audited. |
 | `MAIL_GRAPH_SENDER` | — | Graph only, required. The mailbox mail is sent as: its UPN or primary SMTP address. |
+
+`SMTP_URL` takes credentials and TLS in the URL:
+`smtps://user:password@mail.example.com:465`. The development default,
+`smtp://localhost:1025`, is MailDev, which accepts everything and delivers
+nothing. Two separate things decide whether a message is useful: **the address
+it goes to** comes from the account, which for a directory-managed account is
+the directory's `mail` attribute — `user@example.local` is an address no real
+mail server accepts, and has to be fixed in the directory, because the next
+sync rewrites it — and **the links inside it** come from `PUBLIC_URL`, which
+must be the externally reachable name.
 
 With `MAIL_TRANSPORT=graph` the API refuses to start unless all four `MAIL_GRAPH_*`
 variables are set, and names every missing one. The status page's mail check
@@ -157,6 +201,17 @@ ranges Docker allocates its bridge networks from, because nginx is the only
 thing a client reaches, it connects from inside that network, and its address
 there is assigned at run time rather than fixed.
 
+**Name the address the proxy connects from, which is not always the proxy's
+public one.** Behind a Cloudflare tunnel it is the host running the tunnel
+connector (`TRUST_PROXY=192.0.2.200`); behind an ingress controller it is the
+pod network's range (`api.trustProxy: 10.244.0.0/16` under Helm, which refuses
+to render `true` or a hop count for the same reason the API refuses to start
+on them). Get it wrong and nothing fails loudly: every request simply carries
+the proxy's address, and source-address policy conditions and per-address rate
+limits quietly stop meaning anything. A proxy that sets a country header can
+feed the policy engine's country conditions through `POLICY_COUNTRY_HEADER`;
+Cloudflare's is `cf-ipcountry`.
+
 ### BOOTSTRAP variables
 
 Read once, by `pnpm --filter @syntra/db bootstrap` (`packages/db/src/bootstrap.ts`),
@@ -179,6 +234,10 @@ the first signing key -- unlike the dev seed which
 merely warns — a production tenant with a SAML tile and no signing key is a
 deployment an operator has to come back and fix by hand, and refusing up
 front is cheaper than discovering it later as a `409 saml-no-key`.
+
+`pnpm bootstrap` at the repository root runs the same script. It is safe to
+run twice: a tenant whose slug already has an administrator is left alone and
+the script says *Nothing to do*.
 
 ### SEED variables
 
@@ -239,6 +298,43 @@ What is instrumented, what a span may carry, and how to follow one import
 through to a connector call is in
 [Operating Syntra](operate.md#observability).
 
+## Where the variables go
+
+The API reads its environment once, at start, through `loadConfig`; a change
+takes effect at the next restart and not before. Where the environment comes
+from depends on how Syntra runs:
+
+- **A checkout** (`pnpm dev`, `pnpm start`): the root `.env`, and
+  `packages/db/.env` beside it. Prisma's CLI reads `.env` from its own working
+  directory, which is `packages/db` when pnpm runs a migration, so
+  `DATABASE_URL`, `SHADOW_DATABASE_URL` and `SUPERUSER_DATABASE_URL` have to be
+  in both files and name the same database. `pnpm seed`, `pnpm bootstrap`,
+  `pnpm rekey` and `pnpm db:reset` read both files, the package's own winning.
+- **The release layout** (`ops/syntra-install`): `/opt/syntra/shared/.env`,
+  which the systemd unit passes with `--env-file-if-exists` and every release
+  shares. `RELEASE_*` and `PG_CONTAINER` live there too. See
+  [Operating Syntra](operate.md#upgrades).
+- **`docker-compose.yml`**: the shell environment, or a `.env` file beside the
+  compose file. The compose file passes through only the variables it names —
+  the required ones, `MASTER_KEY_PREVIOUS`, `MASTER_KEY_PROVIDER` with
+  `VAULT_ADDR`, `VAULT_TRANSIT_KEY`, `VAULT_TRANSIT_PREVIOUS_KEY`,
+  `VAULT_TRANSIT_MOUNT`, `VAULT_NAMESPACE`, `VAULT_TOKEN`, `VAULT_ROLE_ID`,
+  `VAULT_SECRET_ID`, `AWS_KMS_KEY_ID`, `AWS_KMS_PREVIOUS_KEY_ID` and
+  `AWS_REGION`, and every `MAIL_*` variable — and sets `TRUST_PROXY` itself.
+  Anything else (`METRICS_TOKEN`, `LOG_LEVEL`, `POLICY_COUNTRY_HEADER`, the
+  `GOVERN_*` keys, the `OTEL_*` variables, the remaining key-management
+  settings) goes in a `docker-compose.override.yml` under `api.environment`.
+- **Helm**: secrets from the Secret named by `existingSecret`, under the key
+  names in `secretKeys` (`DATABASE_URL`, `SESSION_SECRET`, `MASTER_KEY`,
+  `SMTP_URL`, `MAIL_GRAPH_CLIENT_SECRET`, `METRICS_TOKEN`,
+  `GOVERN_CHECKPOINT_KEY`); `publicUrl`, `mail.*`, `api.trustProxy`,
+  `api.authRateLimitMax`, `api.authRateLimitTenantMax`, `api.rateLimitStore`
+  and `api.logLevel` from values; anything else through `api.env` or a Secret
+  or ConfigMap named in `api.envFrom`. The chart refuses to render without
+  `existingSecret` (or `secret.create=true`, for a disposable environment) and
+  an absolute `publicUrl`. The chart's own
+  [README](../deploy/helm/syntra/README.md) has every value.
+
 ## Key management
 
 Every stored credential (the `Secret` table) is sealed with its own random
@@ -266,10 +362,10 @@ the API logs whether the provider answered, once, at startup.
 |---|---|---|
 | `MASTER_KEY_PROVIDER` | `local` | `local`, `vault-transit` or `aws-kms`. |
 | `MASTER_KEY` | — | 32 random bytes, base64. **Required** with `local`. With an external provider it is optional and **decrypt-only**: it reads data keys not yet moved by `rekey`, and nothing new is ever wrapped with it. Remove it when `pnpm rekey --status` shows no `local` rows; the API logs a warning at every start until you do. |
-| `MASTER_KEY_PREVIOUS` | — | The local key being rotated away from, decrypt-only. See [Secret rotation, Procedure B](runbooks/secret-rotation.md#procedure-b-the-master-key). |
+| `MASTER_KEY_PREVIOUS` | — | The local key being rotated away from, decrypt-only. See [Changing the master key](#changing-the-master-key). |
 | `MASTER_KEY_CACHE_TTL_SECONDS` | `300` | How long an unwrapped data key is kept in memory (0–3600; `0` turns the cache off). External providers only; see [Outages and revocation](#outages-and-revocation). |
 | `MASTER_KEY_CACHE_MAX_ENTRIES` | `1000` | How many unwrapped data keys are kept, least recently used evicted first (0–100000). |
-| `MASTER_KEY_PROVIDER_TIMEOUT_MS` | `5000` | Per-request deadline for the external provider. |
+| `MASTER_KEY_PROVIDER_TIMEOUT_MS` | `5000` | Per-request deadline for the external provider (100–60000). |
 | `VAULT_ADDR` | — | `vault-transit`: the server, e.g. `https://vault.internal:8200`. Trust a private CA with Node's own `NODE_EXTRA_CA_CERTS`. |
 | `VAULT_TRANSIT_KEY` | — | `vault-transit`: the Transit key's name. |
 | `VAULT_TRANSIT_PREVIOUS_KEY` | — | `vault-transit`: a *different* Transit key being moved away from, decrypt-only. Not needed for Transit's own key versions. |
@@ -392,16 +488,39 @@ event (`notify.webhook_secret_rotated`, target and source updates,
 `mfa.enrolled`, signing-key rotation). Syntra never logs a master key, a data
 key or a canary, and does not duplicate the KMS's per-call log.
 
-### Moving from `MASTER_KEY` to a KMS
+### Changing the master key
 
-In short -- the full procedure, with verification and rollback, is
-[Secret rotation, Procedure B](runbooks/secret-rotation.md#procedure-b-the-master-key):
+Changing the master key is a **rewrap**, not a re-entry: `pnpm rekey --yes`
+(`packages/db/src/rekey.ts`) unwraps each data key with whichever configured
+key recognises it and wraps it again under the provider `MASTER_KEY_PROVIDER`
+names. Secret values are never decrypted. Every change has the same three
+steps, and between them the deployment reads both old and new rows, because
+the old key is configured *decrypt-only*:
 
-1. Set `MASTER_KEY_PROVIDER` and the provider's variables, **keep
-   `MASTER_KEY`**, restart. New secrets go to the KMS; old ones still read.
-2. `pnpm rekey --yes` moves every tenant's data keys, one transaction per
-   tenant; it is safe to run again.
-3. `pnpm rekey --status` shows no `local` rows. Remove `MASTER_KEY`, restart.
+| Changing | Step 1: configure, restart | Step 3: remove, restart |
+|---|---|---|
+| Local key to a new local key | `MASTER_KEY=<new>`, `MASTER_KEY_PREVIOUS=<old>` | `MASTER_KEY_PREVIOUS` |
+| Local key to Vault Transit | `MASTER_KEY_PROVIDER=vault-transit` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| Local key to AWS KMS | `MASTER_KEY_PROVIDER=aws-kms` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| One Transit key to another | `VAULT_TRANSIT_KEY=<new>`, `VAULT_TRANSIT_PREVIOUS_KEY=<old>` | `VAULT_TRANSIT_PREVIOUS_KEY` |
+| One KMS key to another | `AWS_KMS_KEY_ID=<new>`, `AWS_KMS_PREVIOUS_KEY_ID=<old>` | `AWS_KMS_PREVIOUS_KEY_ID` |
+
+Moving directly between Vault and AWS is not supported: go through a local
+key. A Transit key's own versions and KMS automatic rotation need no Syntra
+change at all.
+
+1. **Back up first**, and put a new local key in your secret store before it
+   seals anything. Configure and restart as in step 1 of the table;
+   `/health/ready` should show `key-management` passing.
+2. `pnpm rekey --status` (it calls no KMS) shows what there is to move, per
+   tenant and provider. `pnpm rekey --yes` checks the new provider with a
+   canary, then moves every tenant's data keys, one transaction per tenant;
+   a failure rolls back that tenant only. It is safe to run again. Under
+   Compose: `docker compose exec api pnpm rekey --status`.
+3. When `--status` shows only the new provider for every tenant, remove the
+   old key (step 3 of the table) and restart every replica. Take a fresh
+   backup: backups taken before the move still need the old key to restore,
+   so keep it until they expire. See [Operating Syntra](operate.md#backups).
 
 ## Tenants and hostnames
 
@@ -426,7 +545,17 @@ tenant lookup is the check.
 Nothing derives an issuer, an entity ID, an audience or a redirect target
 from the `Host` header — those come from the tenant's own `primaryDomain`
 and from `PUBLIC_URL`. `assertProtocolHost` refuses a protocol request that
-did not arrive on the host those identifiers name.
+did not arrive on the host those identifiers name: SAML and OIDC reached by an
+IP address or an additional name answer `421`, naming the host to use.
+
+**Make the name people type the primary domain.** A tenant bootstrapped with
+`example.com` and published as `idm.example.com` matches neither the primary
+domain (compared exactly) nor, through the slug rule, a tenant called `idm`, so
+it answers as an unknown tenant — which looks like a proxy or tunnel fault and
+is not one. Adding the name under *Also answers on* makes the console reachable,
+but the SAML entity ID, the SSO endpoints and the WebAuthn relying party are
+built from the primary domain, so single sign-on and security keys want the
+public name there.
 
 ## Connecting a directory source
 
@@ -516,7 +645,7 @@ also needs the `directory.delete` permission and the name typed back; for a
 directory-managed object it is refused (`409 delete-not-enabled`) unless the
 delete switch is on, because removing only Syntra's row would let the next run
 create it again. What each switch needs from the bind account is in
-[the lab, §2.7](lab/README.md#27-write-back-changing-active-directory-from-syntra).
+[Write-back to Active Directory](#write-back-to-active-directory).
 
 A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and
@@ -544,6 +673,566 @@ unattended schedule is precisely when nobody is watching.
 Records the source returned but that could not be mapped are counted and
 named on the run, and are never treated as absent. A missing attribute is our
 failure to understand a record, not evidence that the person has left.
+
+### Active Directory as a source
+
+**Sources → New source → Start from Active Directory** fills in the mappings
+(`sAMAccountName`, `mail`, `displayName`), the `objectGUID` anchor and an
+AD-shaped user filter. What is left is the connection:
+
+| Field | Example |
+|---|---|
+| Server URL | `ldaps://ad-dc.example.local:636` — the domain controller's **hostname**, not its address: the certificate is issued to the name, and verification fails against an IP |
+| Transport | LDAPS, certificate verification **on** |
+| Bind DN | `CN=svc-syntra,OU=Syntra,DC=example,DC=local` |
+| User, group and OU search bases | `OU=Company,DC=example,DC=local` |
+
+Reading needs nothing beyond what any authenticated account already has. The
+bind account should **not** be a Domain Admin. Keep what Syntra reads and what
+it writes in separate subtrees (`OU=Company` read by the source,
+`OU=Syntra` written by a [provisioning target](#active-directory)), so a
+provisioning mistake cannot overwrite the directory being synced from.
+
+Three things break LDAPS from a Linux host with nothing wrong at either end:
+
+- **Node does not trust the domain's CA** until `NODE_EXTRA_CA_CERTS` names it
+  (see [Optional](#optional)). A domain controller serves LDAPS only once it
+  holds a certificate — from an enterprise CA, which a real AD estate already
+  has; `Restart-Service NTDS` after enrolment makes it bind.
+- **`.local` does not resolve.** `systemd-resolved` treats `*.local` as
+  multicast DNS and will not forward it to a unicast server, so `dig @dc`
+  answers and `getent hosts` does not. Turn it off for the host
+  (`MulticastDNS=no` and `LLMNR=no` in a `resolved.conf.d` drop-in).
+- **A public resolver listed beside the DC breaks internal names at random.**
+  `systemd-resolved` treats every server on a link as equivalent for every
+  name and switches between them, so whenever it settles on the public one,
+  every `example.local` lookup is NXDOMAIN. Name the domain controller alone;
+  it forwards what it cannot answer.
+
+**An account disabled in Active Directory is deactivated in Syntra.** Sync
+reads `userAccountControl`; the next run deactivates the user with the reason
+*Disabled in directory source, run &lt;id&gt;*, which ends their portal sign-in
+and their single sign-on into everything Syntra fronts. A later run does not
+reactivate an account the source still reports disabled.
+
+**Moving an account out of the search base is how a leaver reaches Syntra
+without write-back.** A record the source stops returning is proposed for
+deactivation on the next run. That is why a provisioning target's archive
+container must sit **outside** the source's search base, as a sibling:
+nested inside it, archived accounts keep being read as present and active,
+and nothing errors.
+
+### Write-back to Active Directory
+
+With write-back off, a directory-managed account has no Deactivate button: the
+next run would read it back as active and undo the change. **Sources → the
+source → Write-back** has four switches, all off until somebody turns them on:
+
+| Switch | What it allows | What the bind account needs |
+|---|---|---|
+| Allow Syntra to write to this directory | the master switch; nothing below works without it | — |
+| Deactivating a user disables their account here | the Deactivate button on a directory-managed user | write `userAccountControl` on the user objects in scope |
+| Self-service password change writes through | a portal password change sets the domain password | **nothing extra** |
+| Deleting a user or org unit removes it from this directory | Delete on a directory-managed account or empty org unit, with `directory.delete` and the name typed back; the one switch whose effect Syntra cannot undo | delete rights on the objects in scope |
+
+**A password change binds as the user**, with the password they just typed,
+and performs the standard LDAP change on their own object. The bind account is
+not involved, so do not grant it *Reset Password* across the user OU: a
+credential that can reset any password is an account-takeover primitive in a
+vault, and nothing here needs it. The domain's policy applies on top of the
+tenant's — minimum password age (one day by default), history and complexity
+— and a refusal says the directory refused it. A domain controller that cannot
+be reached refuses the change; it is never applied locally alone.
+
+**Delegate the disable right on the OU the source reads**, which is not
+necessarily the one a target writes to. The mistake is silent until the first
+leaver. Scoped to one attribute on one object class:
+
+```powershell
+Import-Module ActiveDirectory
+$sid      = (Get-ADUser -Identity "svc-syntra").SID
+$uacGuid  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"   # userAccountControl
+$userGuid = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"   # the user class
+foreach ($ouDn in @("OU=Company,DC=example,DC=local", "OU=Syntra,DC=example,DC=local")) {
+  $ou  = [ADSI]"LDAP://$ouDn"
+  $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+    $sid, "WriteProperty", "Allow", $uacGuid, "Descendents", $userGuid)
+  $ou.ObjectSecurity.AddAccessRule($ace)
+  $ou.CommitChanges()
+}
+```
+
+`GenericWrite` on the OU also works, and also lets the same credential rewrite
+everybody's group memberships.
+
+**Deactivate** on a directory-managed user sets the disable bit in AD first,
+immediately (the target's `disableGraceDays` is for scheduled departures, not
+for a person pressing a button); then marks the user inactive and revokes every
+session and refresh token; then puts the linked person on the ordinary leaver
+ladder. If AD refuses, nothing changes anywhere. **Reactivate** reverses it.
+
+## Connectors: provisioning into target systems
+
+A **target system** is somewhere Provision creates, updates, disables and
+archives accounts and grants entitlements, for **people with contracts** —
+not for synced logins. Business rules say who gets an account; the account
+profile says what it looks like; every run previews a plan before it applies.
+Targets are created under **Target systems → New target**, and each has four
+connector types to choose from:
+
+| Type | Console label | Talks to | Places accounts in containers | Support |
+|---|---|---|---|---|
+| `activeDirectory` | Active Directory | LDAP over LDAPS or StartTLS | yes (OUs) | supported |
+| `entraId` | Microsoft Entra ID | Microsoft Graph v1.0 | no | preview, controlled rollout |
+| `scim2` | SCIM 2.0 | any SCIM 2.0 service provider | no | supported |
+| `httpJson` | REST API | whatever a connector document describes: shipped for Snipe-IT, Google Workspace and Entra ID | only if the document describes `container` | preview, controlled rollout |
+
+What every target has in common:
+
+- **One credential**, typed once and sealed into the vault — the bind
+  password, SCIM bearer token, API key or client secret. It is never returned
+  to the browser; an edit that leaves it blank keeps it. A connection test
+  after changing the address, transport or certificate setting needs it typed
+  again, for the same reason as a source's. Rotating it without an outage is
+  [Rotating a connector credential](#rotating-a-connector-credential).
+- **Encrypted transport, always.** There is no plaintext option: the database
+  itself refuses an Active Directory target that is not LDAPS or StartTLS, and
+  any other target whose endpoints are not `https://`. SCIM, REST and Entra
+  targets refuse to reach a private address unless their configuration sets
+  `allowPrivateAddresses: true`, which is for an on-premises system you mean
+  to reach.
+- **Test connection** before saving, which reports what the target let it see
+  and, where the target publishes it, which rights the credential holds.
+- **A first run confirmed by a person**, whatever the thresholds say, and a
+  guard on every later run: see
+  [Safety thresholds](operate.md#safety-thresholds).
+- **A schedule and, optionally, automatic apply** (`schedule`, a UTC cron
+  expression; `autoApply`), with renames, late re-enables and re-creates held
+  for a person unless *Apply renames automatically* (`autoConfirmRenames`)
+  covers the rename: see
+  [Schedules and automatic apply](operate.md#schedules-and-automatic-apply) and
+  [Held actions and renames](operate.md#held-actions-and-renames).
+- **A leaver ladder** — revoke entitlements, disable, archive — timed by
+  `entitlementRevocationDelayDays`, `disableGraceDays` and `archiveAfterDays`.
+  No connector deletes an account.
+- **Failures surface as incidents** under **Activity → Attention** and on the
+  Overview's *Needs you*, where they can be acknowledged or resolved: see
+  [What is broken: incidents](operate.md#what-is-broken-incidents).
+
+Before the first run, the **Provisioning setup** checklist and the account
+profile's **Preview** (`POST /api/admin/targets/:id/profile/preview`) show the
+name and container each person would get, and **Preview impact** on a
+business rule shows exactly who it matches.
+
+### Active Directory
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | required | `ldaps://dc.example.local:636`, or `ldap://…` with StartTLS. The hostname the certificate names. |
+| `tlsMode` | required | `ldaps` or `starttls`; it has to agree with the URL's scheme. `plain` does not exist here: Active Directory refuses a password write over an unencrypted connection. |
+| `rejectUnauthorized` | `true` | Verify the server certificate. Trust a private CA with `NODE_EXTRA_CA_CERTS` rather than turning this off. |
+| `bindDn` | required | The service account. |
+| `baseDn` | required | Where accounts are created, e.g. `OU=Users,OU=Syntra,DC=example,DC=local`. |
+| `entitlementSearchBase` | required | Where groups are enumerated as entitlements. |
+| `archiveContainer` | required | Where `archive_account` moves a leaver. Outside every directory source's search base — see [above](#active-directory-as-a-source). |
+| `provenanceAttribute` | `info` | Where a create records the tenant and the action that created the account; or a nominated `extensionAttribute`. |
+| `accountFilter` / `groupFilter` | `(&(objectCategory=person)(objectClass=user))` / `(objectClass=group)` | |
+| `primaryGroupExternalIds` | `[]` | Groups left out of the catalog entirely: a primary group is not in `member`, and a revoke of it would fail forever. |
+| `pageSize`, `connectTimeoutMs`, `timeoutMs` | `1000`, `10000`, `60000` | |
+
+**Rights.** Delegate **full control over the subtree Syntra writes to** — the
+base DN, the archive container and, with mirroring on, the org-unit root —
+and nothing else; the account is not a Domain Admin:
+
+```powershell
+dsacls "OU=Syntra,DC=example,DC=local" /I:T /G "EXAMPLE\svc-syntra:GA"
+```
+
+The connection test reads, without exercising, the four write rights the
+connector needs: create a user under the base DN, move a user into the archive
+container, modify `userAccountControl` on an existing account, and modify
+`member` on an existing group. It reads Active Directory's constructed
+`allowedChildClassesEffective` and `allowedAttributesEffective` rather than
+creating a probe object, because there is no delete to remove one with. A right
+it could not confirm (an empty target has no account to read rights from) is
+reported as unverified, not assumed. An archive container outside the
+delegated subtree is refused at the first archive with
+`INSUFF_ACCESS_RIGHTS`: delegate it too, or put it inside the subtree — it only
+has to sit outside the *sync* search base.
+
+**Account profile.** Use `%baseDn%` as the container template when the base
+DN already ends in the users OU; the default template would give
+`OU=Users,OU=Users,…`. The fallback container is required. Provision creates
+an OU only for an org unit given a container on the target — by hand, or by
+**Mirror org units as OUs**, which places every active org unit at a DN
+derived from Syntra's tree under an *Org-unit root*, creates missing OUs
+(at most `maxContainerCreatesPerRun`, default 5, per run) and moves a renamed
+unit's OU with everything in it. A run that moves an OU is always held for a
+person. The whole mechanism is in [Org units as OUs](operate.md#org-units-as-ous);
+it is refused (`422 mirror-unsupported`) on a target that places accounts in no
+container.
+
+**New accounts' passwords.** A create sets a generated initial password (so
+the connection must be encrypted) and, when the profile's *Require a new
+password at first sign-in* is on, `pwdLastSet = 0`. How the person receives it
+is [New accounts' sign-in details](#new-accounts-sign-in-details).
+
+**Deletion is the domain's job, not Syntra's.** The connector has no delete of
+any kind; it refuses one before it binds. Archive moves a leaver into the
+archive container. Deleting what has sat there long enough is a scheduled task
+on the domain controller, with the AD Recycle Bin on so a mistake can be
+restored for the deleted-object lifetime. `archiveAfterDays: 0` archives on the
+departure date, so the whole retention period is served in the archive OU.
+Deleting a single account from the console is a directory source's write-back
+switch, above, not a provisioning target's.
+
+### Microsoft Entra ID
+
+The native connector, type `entraId`, calls Microsoft Graph v1.0 directly,
+through the same outbound guard as every administrator-supplied URL. It does
+what the shipped `entra-id` REST document cannot: an idempotent create, a
+per-user membership read that is complete or says it is not, a refusal to
+touch dynamic groups, and a read-back after every write. Code:
+`packages/connectors/src/entra/`.
+
+**Permissions.** Register an application with a client secret, and grant these
+**application** permissions with admin consent, and no more:
+
+- `User.ReadWrite.All`
+- `GroupMember.ReadWrite.All`
+- `Group.Read.All`
+
+Optionally `Application.Read.All`, only so the
+[credential inventory](#the-credential-inventory) can discover the client
+secret's expiry; provisioning never needs it. Graph does not publish an
+application's effective permissions, so the connection test reports each right
+as unverified. It does tell a refused credential (401) from missing consent
+(403). Record consent in the readiness check rather than assuming it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `tenantId` | required | The directory id (a GUID, which Microsoft recommends) or a verified domain. |
+| `clientId` | required | The application (client) id. |
+| `userPrincipalDomain` | — | The domain new users sign in with, e.g. `contoso.com`: lowercase, no `@`, scheme or path. **Required when `tenantId` is the GUID** — see below. Console: *User principal name domain*. |
+| client secret | vault | The target's one credential. |
+| `graphBaseUrl` | `https://graph.microsoft.com/v1.0` | Page links are pinned to this origin. |
+| `tokenUrl` | `https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token` | |
+| `correlationField` | `employeeId` | Where the create marker is written; or `extensionAttribute1`–`15`. |
+| `managedAttributes` | all ten | A subset of `displayName`, `givenName`, `familyName` (`surname`), `mail`, `title` (`jobTitle`), `department`, `officeLocation`, `companyName`, `employeeType`, `usageLocation`. |
+| `groupScope.securityEnabledOnly` | `true` | Microsoft 365 groups are not entitlements. |
+| `groupScope.includeMailEnabled` | `false` | Mail-enabled security groups are left out unless set. |
+| `timeoutMs` | `30000` | |
+
+**Capabilities.** `GET /api/admin/targets/:id/capabilities` serves the matrix
+and the target page renders it:
+
+| Capability | Status | Graph permission | What it does |
+| --- | --- | --- | --- |
+| readAccounts | available | `User.Read.All`, `GroupMember.Read.All` | Pages `/users`; reads direct memberships in `$batch`es of 20. A user whose membership read fails is returned marked as such, never dropped. |
+| createAccount | available | `User.ReadWrite.All` | `POST /users` carrying the correlation marker; a retry finds the user by it instead of creating a second. |
+| updateAccount | available | `User.ReadWrite.All` | `PATCH` of the requested attributes that are in `managedAttributes`. Never the UPN, `accountEnabled` or the marker. |
+| enable / disable | available | `User.ReadWrite.All` | `PATCH accountEnabled`. |
+| renameAccount | available | `User.ReadWrite.All` | `userPrincipalName` and `mailNickname`. |
+| archiveAccount | available | `User.ReadWrite.All`, `GroupMember.ReadWrite.All` | Revokes each managed membership, then disables. No container, no delete. |
+| grant / revoke entitlement | available | `GroupMember.ReadWrite.All` | Adds or removes a direct member. "Already a member" and "not a member" are success. Refused before any request for a dynamic group. |
+| readBack | available | `User.Read.All`, `GroupMember.Read.All` | The user and its direct `memberOf`; incomplete when the membership read fails. |
+| searchEntitlements | available | `Group.Read.All` | `$search` on `displayName`, falling back to `startswith`. |
+| readCredentialExpiry | optional | `Application.Read.All` | The app registration's own `passwordCredentials`, for the credential inventory. |
+| nestedGroups, dynamicGroups | unsupported | — | Direct memberships only; dynamic groups are listed as not manageable. |
+| deleteAccount | never | — | No code path issues `DELETE /users`. |
+
+**The correlation marker.** Every create writes a marker derived from the id
+of the action that proposed it into `correlationField`, and nothing ever
+changes it afterwards. Before any `POST /users`, the connector searches for
+that marker; a hit is the anchor and nothing is created. A search that fails
+is a failure, not "not found", because "not found" is what leads to a second
+account. (`employeeId` holds 16 characters, so a long action id is
+represented by a 16-character digest of it; retries derive the same one.)
+
+**User principal names.** A generated correlation key never contains `@`, so
+the connector completes it: a key that already has one is used as it is;
+otherwise `<key>@<userPrincipalDomain>`; otherwise `<key>@<tenantId>` when the
+tenant id is a domain; otherwise the create is refused, naming
+`userPrincipalDomain`. The account profile's Preview shows the full UPN each
+person would get and reports when none can be formed. Changing
+`userPrincipalDomain` never requires re-entering the secret.
+
+**Existing users.** A user read from Graph holds a correlation key only when
+its UPN is in the domain Syntra would create it in; the key is the local part
+(`anna.novak@contoso.com` holds `anna.novak`). A run never takes an existing
+user over: it binds a person only by object id, and an existing in-domain user
+reserves its name, so the person is proposed the next free one
+(`anna.novak2`). A create Graph refuses because the UPN is taken marks the
+account `conflict`, and later runs leave that person alone. **Adopt** on the
+person's account is the way out, and is a person's decision: it shows the
+specific user it would bind
+(`GET /api/admin/targets/:id/accounts/:personId/adoption-candidate`), then binds
+it on a written reason (`POST …/adopt`) with one read and no write in Entra.
+A user in another domain is not offered (`404 candidate-not-visible`).
+
+**No containers.** Entra ID has no OUs. Runs skip the container check for this
+target; the profile's container template and fallback are ignored (`/` is the
+conventional value); moving an account or mapping an org unit to a container
+is refused with `409 no-containers`; mirroring is refused with
+`422 mirror-unsupported`.
+
+**Nested and dynamic groups are not managed**, and no setting makes them so.
+A membership held through another group is not one Provision can revoke, so it
+is not reported as held; a rule naming such a group proposes a direct grant. A
+dynamic group's membership is computed by Entra, so a grant would be refused
+and a revoke undone: the catalog lists it as not manageable and a grant is
+refused before any request.
+
+**Errors.** Messages carry the HTTP status and Graph's `error.code`, never
+Graph's message or a request body. 401 and 403 are `unauthorized` (credential
+or consent), 404 `not_found`, 409 `conflict` — none retried. 429 is
+`throttled` and retried after `Retry-After`, within the run's budget; 5xx and
+connection failures are `transient` and retried up to `maxAttempts`. A token
+endpoint failure reads *the token endpoint answered HTTP &lt;n&gt;
+(AADSTS&lt;code&gt;)*.
+
+**Rotating the client secret.** Add the new secret to the app registration;
+type it into the target (or use the dual-secret
+[rotation](#rotating-a-connector-credential)); saving clears the cached tokens
+and tests the new secret, recording a readiness check that starts
+*credential rotated:*. Check that check passed, then remove the old secret
+from the app registration. The token cache is keyed on a digest of the secret,
+so a rotated secret is never served a token the old one obtained.
+
+**Moving a REST-document Entra target to the native connector.** The target
+page converts an `httpJson` target pointed at Graph in place. It first shows a
+revision-bound preview of the derived configuration and of what is kept —
+accounts, entitlements, rules, run history, schedule, profile and the saved
+credential — and applying it changes only the adapter type and configuration
+(`provision.target.connector-migrate` in the audit log). Only the standard
+Graph and Microsoft identity v2 endpoints are accepted. Test the connection and
+run a lifecycle simulation before enabling writes again: earlier readiness
+evidence is stale by design, because the configuration changed.
+
+**Validating against a disposable tenant.** The automated tests prove protocol
+handling against a fake Graph, not Graph itself. `pnpm entra:validate` checks a
+real tenant read-only (token, paged users, groups, search, a read-back), with
+`ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID` and `ENTRA_CLIENT_SECRET` set. `--write`,
+refused unless `ENTRA_DISPOSABLE_TENANT=yes`, also creates a user
+`${ENTRA_TEST_USER_PREFIX}<runid>@${ENTRA_TEST_DOMAIN}`, re-creates it under
+the same action id (expecting the same anchor), updates it, grants and revokes
+each group in `ENTRA_TEST_GROUP_IDS`, and disables it — never deleting it. The
+evidence is written to `test-results/entra-evidence-<timestamp>.json`.
+
+### SCIM 2.0 targets
+
+Type `scim2`, for any service provider that implements SCIM 2.0: users by
+`/Users`, entitlements as group membership by `PATCH` on `/Groups`, read back
+from the group. The credential is the bearer token the service provider issued.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `baseUrl` | required | The SCIM base, `https://…`. |
+| `userResourcePath` / `groupResourcePath` | `/Users` / `/Groups` | |
+| `pageSize` | `200` | |
+| `connectTimeoutMs`, `timeoutMs` | `10000`, `60000` | |
+| `allowPrivateAddresses` | `false` | |
+
+A SCIM target places accounts in no container, so container settings are
+ignored and mirroring is refused. This is Syntra pushing *out*; a system
+pushing users *into* Syntra is [Provisioning into Syntra with SCIM](#provisioning-into-syntra-with-scim).
+
+### REST API connector documents
+
+Type `httpJson` runs a **connector document**: JSON describing a system's REST
+API — its base URL, authentication, how to list, create, update, enable,
+disable and read back an account, optionally entitlements and containers, and
+how its refusals look. **Target systems → New target → REST API** offers the
+shipped documents as starting points (`GET /api/admin/targets/connector-documents`):
+Snipe-IT, Google Workspace and Microsoft Entra ID. The one you pick is
+**copied into the target's own configuration** and edited there under *Edit
+the connector document*, so editing one target's never changes another's —
+or changes a plan between its preview and its apply.
+
+- **Authentication** is one of `bearer` (the credential sent as a bearer
+  token), `basic` (a username in the document, the password in the vault),
+  `header` (a named header and optional prefix, e.g. `X-Api-Key`), or `oauth2`
+  client credentials (an `https://` token URL, client id and scope in the
+  document, the client secret in the vault). The credential never appears in
+  the document.
+- **Only what the document declares is possible.** A document with no create
+  cannot create, and no document can express `DELETE` on an account.
+- **Refusals**: HTTP status lists for unauthorized, not-found, conflict and
+  throttled, and optionally `failures.body` for an API that answers `200` and
+  puts the refusal in the body (Snipe-IT does).
+- **Naming**: without a `naming` block a correlation key follows Active
+  Directory's rule — letters, digits, `.` and `-`, 20 characters. A document
+  may allow an email-shaped key instead (Snipe-IT's does).
+- **A provenance field** records which action created an account, so a retried
+  create adopts only its own account; without one the connector refuses to
+  create.
+
+**Google Workspace** (Admin SDK Directory API; scopes
+`admin.directory.user` and `admin.directory.group.member`) comes with a caveat
+worth reading first: Google's service accounts authenticate with a signed JWT
+and domain-wide delegation, not the `client_id`/`client_secret` post the
+`oauth2` type performs, so its token URL works only where an OAuth client with
+a secret has been set up for the domain. Otherwise use `bearer` with a token
+refreshed outside Syntra. There is no archive: suspension is what archiving
+means there.
+
+**Microsoft Entra ID** as a document still works; the
+[native connector](#microsoft-entra-id) is the better choice, and an existing
+document target can be converted in place.
+
+### Snipe-IT
+
+The shipped Snipe-IT document provisions Snipe-IT **user accounts** through
+REST API v1:
+
+| Operation | Request | Notes |
+| --- | --- | --- |
+| Read accounts | `GET /api/v1/users?sort=id&order=asc&limit=500&offset=N` | Offset paging, held to the response's `total`. |
+| Create | `POST /api/v1/users` | `first_name`, `last_name`, `username`, `email`, `jobtitle`, `password` and `password_confirmation` (the run's initial password), `activated`, and Syntra's marker in `employee_num`. |
+| Update | `PATCH /api/v1/users/{id}` | `first_name`, `last_name`, `email`, `jobtitle`. |
+| Rename | `PATCH /api/v1/users/{id}` | `username`. |
+| Disable / enable | `PATCH /api/v1/users/{id}` | `activated: false` / `true` — Snipe-IT's *This user can login*. |
+| Read-back | `GET /api/v1/users/{id}` | |
+
+No groups, permissions or entitlements; no delete and no archive (Snipe-IT
+keeps a user's checkout history, so a leaver is deactivated); no departments,
+locations, companies or managers, which Snipe-IT takes by numeric id and a
+profile template cannot know.
+
+**Setting it up.**
+
+1. Sign in to Snipe-IT as the account Syntra should act as. It needs to view,
+   create and edit users; a permission group with the Users permissions is
+   better than a superuser.
+2. User menu → **Manage API Keys** → **Create New Token**, and copy it (it is
+   shown once).
+3. **Target systems → New target → REST API → Snipe-IT**, and paste the token
+   as **Personal API key**. It is sent as `Authorization: Bearer <key>`.
+4. **Edit the connector document** and replace `{instance}` in `baseUrl`:
+   `https://assets.example.com/api/v1`.
+5. If your Snipe-IT already uses employee numbers, point the provenance path
+   and the create body's `employee_num` at a field you do not use, before the
+   first create.
+
+**Account profile.** Correlation key `%person.businessEmail%`; attributes
+`givenName` = `%person.givenName%` (Snipe-IT refuses a user with no first
+name), `familyName` = `%person.familyName%`, `mail` = `%person.businessEmail%`,
+`title` = `%contract.jobTitle%`; no `displayName`. The generated initial
+password is sent as both password fields, so it must satisfy the instance's
+password policy (eight characters by default). **Use the email address as the
+username when people sign in to Snipe-IT through SAML**: Snipe-IT matches the
+assertion's NameID, which is the person's email address, against `username`,
+and any other template gives accounts nobody can sign in to by SSO. Without
+SSO, `%person.givenName.initial%%person.familyName%` works too.
+
+The document's `naming` block (`"allow": "email"`, `"maxLength": 191`) is what
+permits that: the key is lowercased, accents folded, and letters, digits,
+`.`, `-`, `_`, `+` and one `@` kept; a collision is suffixed before the `@`
+(`jane.doe2@example.com`), and truncation never cuts the domain. **A Snipe-IT
+target created before the block shipped has the old document embedded**, which
+folds the `@` away (`jane.doeexample.com`): add the block under *Edit the
+connector document* before switching to `%person.businessEmail%`. With renaming
+on, that can propose renames, each waiting for confirmation.
+
+**Refusals answered with 200.** Snipe-IT answers `200 OK` with
+`"status":"error"` in the body when it refuses. The document declares that, so
+such an answer is a `conflict` when a value is already taken, `not_found` when
+the user is gone, otherwise `rejected`, and the run shows Snipe-IT's own
+message with the API key, the initial password, addresses and token-shaped
+strings removed. Snipe-IT throttles its API at 120 requests a minute by
+default; a 429 is retried.
+
+**Cloudflare in front.** Cloudflare refuses a request with no user agent with
+*error 1010*, which looks like an authentication failure. The document sends
+`User-Agent: Syntra-Provisioning/1`; keep it, or another explicit value your
+rules allow.
+
+**Single sign-on to Snipe-IT** is a separate registration: **Applications →
+Add from the catalog → Snipe-IT**, with its hostname. It registers the entity
+ID `https://<host>`, the ACS `https://<host>/saml/acs`, an email NameID, the
+`username`, `email`, `firstname` and `lastname` attributes, single logout at
+`https://<host>/saml/sls` in the HTTP-Redirect binding (the only one Snipe-IT's
+SLS answers), and the launch address `https://<host>/login/saml`. Importing
+Snipe-IT's own SP metadata instead picks up the binding as well.
+
+The document's shapes follow Snipe-IT's API reference and are tested against an
+in-memory Snipe-IT; run a lifecycle simulation and one real create and
+deactivate against a test instance before enabling writes.
+
+### Connector certification, capabilities and rollout
+
+Syntra writes to a target only what the exact adapter release running it was
+certified to write, only what the target's configuration advertises, and only
+while that release is not past its deprecation date. Code:
+`packages/connectors/src/metadata.ts` (the catalog) and
+`packages/core/src/provision/adapter-rollout.ts` (enforcement).
+
+**The catalog.** Every connector type has one or more adapter releases, each
+with a version, a channel (`stable` or `canary`), a support state, a
+deprecation date, and a certification — `passed`, `partial`, `failed` or
+`not-run` — naming the writes it covers: `create_container`,
+`move_container`, `create_account`, `update_account`, `rename_account`,
+`enable_account`, `disable_account`, `archive_account`, `grant_entitlement`,
+`revoke_entitlement`. A certification speaks only for its own version; a
+`failed` or `not-run` one certifies nothing. Shipped releases, all 1.0.0 on
+the stable channel:
+
+| Type | Certification | Certified writes |
+| --- | --- | --- |
+| `activeDirectory` | passed | everything, including creating and moving OUs |
+| `scim2` | passed | every account and entitlement write; no containers |
+| `httpJson` | passed | every account and entitlement write; no containers |
+| `entraId` | partial | every account and entitlement write; no containers |
+
+**Enforcement.** Every action a run plans is checked twice — is the target's
+release certified for this write, and does its configuration advertise it (for
+`httpJson`, does the document describe it)? An action that fails either is
+**refused**, not dropped: it stays in the plan with status `refused` and a
+reason (*this target's configuration does not advertise the ability to grant
+entitlements*), is never attempted, does not count towards the guard, and
+leaves the run `partially_applied`. The run page shows a banner with the
+reasons. The check is repeated at apply time. Refusal is per action, so one
+uncertified capability never holds up a leaver's disable on the same target.
+
+**Canary, pin and rollback.** Each target has a channel (`stable`, the default,
+runs the newest stable release; `canary` the newest canary, falling back to
+stable) and an optional exact pin. When a change moves the target to a
+different release, the one it left becomes the **rollback point**, and a
+rollback pins the target back to it on the stable channel at once, so the next
+canary cannot undo it. Neither changes configuration, profile, rules or
+accounts — only which certified code runs them. A run previewed under one
+release refuses to apply under another (`409 adapter-version-changed`): preview
+again.
+
+**Deprecation.** A deprecated or not fully certified release raises a readiness
+warning on the target's **Adapter release** panel, the setup checklist and
+`GET /api/admin/targets/:id/readiness`. From its deprecation date (a UTC day)
+it **writes nothing**: previews are blocked and applies refused with
+`409 adapter-writes-blocked`, until the target moves to a supported release or
+an administrator records a **deprecation override** — a reason and an expiry at
+most 30 days away, bound to that exact release.
+
+| Method and path (under `/api/admin`) | Purpose |
+| --- | --- |
+| `GET /targets/:id/adapter` | Selection, effective release and why, every release, per-capability certification and refusal, warnings, the override |
+| `PUT /targets/:id/adapter` | `{ channel, version \| null, reason }` |
+| `POST /targets/:id/adapter/rollback` | `{ reason }` |
+| `POST /targets/:id/adapter/deprecation-override` | `{ reason, expiresAt }` |
+| `POST /targets/:id/adapter/deprecation-override/clear` | `{ reason }` |
+
+Reads need `provision.read`; changes need `provision.manage` and a reason of
+at least ten characters, and are audited in the **Configuration changes**
+webhook group (`provision.target.adapter.select`, `.rollback`,
+`.deprecation_override.grant`, `.deprecation_override.clear`).
+
+**Rolling out a new adapter release**: implement it beside the current one and
+register it in `IMPLEMENTATIONS` (`packages/connectors/src/registry.ts`); run
+the certification runner
+(`packages/connectors/src/testing/target-connector-certification.ts`) and the
+adapter's fixtures, and publish it on the `canary` channel naming only what
+passed; move a few targets to canary, preview, and watch their runs; promote it
+to `stable`, rolling back any target that misbehaves; then give the old release
+a deprecation date.
 
 ## Access: signing in, second factors and policy
 
@@ -1029,6 +1718,77 @@ is bounded by four things:
 If you are auditing this deployment, `oidc.client_credentials_authorized` is
 the event to read, and `clientCredentialsEnabled` is the column to list.
 
+### Setting up a SAML application
+
+**Applications → Add from the catalog** registers a known application with
+its endpoints, claims and launch address filled in from a hostname or tenant
+name you supply (`GET /api/admin/catalog`,
+`POST /api/admin/applications/from-catalog`). The catalog is deliberately
+short — SAML for Slack, Zoom, Google Workspace, Salesforce, Nextcloud,
+Snipe-IT and AWS IAM Identity Center, OpenID Connect for Grafana and GitLab —
+and each entry links to the vendor's own page, which stays authoritative.
+Where a service provider publishes SP metadata, importing it is better than an
+entry, and the console offers that first. An application made from the catalog
+has sign-in started from Syntra off.
+
+For anything else, create the application with type `saml` (a bookmark is
+refused) and use the **SAML** panel on its page, or the same settings over
+`PUT /api/admin/applications/:id/saml`:
+
+```json
+{
+  "spEntityId": "https://app.example.com",
+  "acsUrls": ["https://app.example.com/saml/acs"],
+  "defaultAcsUrl": "https://app.example.com/saml/acs",
+  "nameIdFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+  "wantAuthnRequestsSigned": true,
+  "spCertificates": ["-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"],
+  "sloUrl": "https://app.example.com/saml/sls",
+  "sloBinding": "HTTP-Redirect",
+  "allowIdpInitiated": false
+}
+```
+
+or import the provider's metadata (`POST /api/admin/applications/:id/saml/import`),
+which also takes the single logout binding, as above. `wantAuthnRequestsSigned`
+needs the service provider's signing certificate registered; set it `false`
+only for a provider that does not sign. The portal tile's **launch address** is
+the application's `launchUrl` (`PUT /api/admin/applications/:id`): the
+provider's SSO start page, used whenever `allowIdpInitiated` is off.
+
+Give the service provider Syntra's side, all on the tenant's primary domain:
+
+| Field | Value |
+|---|---|
+| IdP metadata | `https://<primary domain>/saml/metadata/<application id>` |
+| IdP entity ID | `https://<primary domain>/saml/idp` |
+| SSO URL | `https://<primary domain>/saml/sso` |
+| SLO URL | `https://<primary domain>/saml/slo` |
+
+**An assertion carries no attributes until you map them.** Registering the
+provider is not enough: with no claim mappings the `AttributeStatement` is
+empty, the provider finds nothing to match on, and the sign-in fails with
+nothing in either side's log. Map them on the application's **Claims** panel
+(`POST /api/admin/applications/:id/claims`), and take the names from the
+provider's documentation, not from Syntra: Snipe-IT reads an attribute called
+`username`, another application wants `uid` or a full
+`http://schemas.xmlsoap.org/…` URI. `username` from `login`, `email` from
+`email` and `displayname` from `displayName` covers most.
+
+**The account has to exist on both sides under the same name.** Most providers
+match the assertion against a user they already hold, often by username rather
+than the NameID. When Syntra knows somebody as `a.brennan` and the application
+as `abrennan`, the assertion validates, no user matches, and the browser lands
+back on the application's login page. Fix it at the source of the name — the
+directory, or the provisioning target's correlation key template.
+
+**Testing it.** Some providers, Snipe-IT among them, do not sign anybody in at
+the ACS: they validate the assertion, keep it in their session and redirect to
+their own login route, which is what establishes the session. A test that
+stops at the ACS sees a redirect to `/login` and reads it as a rejection when
+the handshake worked. Assertions are single-use, so each attempt needs a fresh
+one.
+
 ### Retiring and deleting an application
 
 The application page ends with a **Danger zone** (shown to holders of
@@ -1202,9 +1962,10 @@ for it.
 
 **A policy change does not reach sessions that are already live.** Turning on a
 `require_mfa` rule takes effect at the next sign-in, elevation or application
-launch; every session issued before it stays usable until it expires. A portal
-session lasts twelve hours, or one idle hour; an administrative one lasts two
-hours, or fifteen idle minutes. That is a deliberate trade against re-evaluating
+launch; every session issued before it stays usable until it expires — by
+default twelve hours, or one idle hour, for a portal session and two hours, or
+fifteen idle minutes, for an administrative one (see
+[Session lifetimes](#session-lifetimes)). That is a deliberate trade against re-evaluating
 policy on every request, and it is why an administrator who turns a rule on can
 still take it away again from the same session. If you need a rule to bite
 immediately, revoke the sessions as well: **Sessions** on the account in the
@@ -1316,9 +2077,12 @@ their manager, that address is sent a **one-time link**, never the password:
 
 **Send login info**, on a person's access page beside each account, sends a
 new link to the profile's recipient, the personal email, the manager or you,
-and withdraws every link nobody has opened. It needs `provision.manage` and a
-console session elevated in the last ten minutes, is refused to API tokens,
-and answers 409 when Syntra holds no initial password for the account. Every
+and withdraws every link nobody has opened
+(`POST /api/admin/targets/:id/accounts/:personId/send-login-info`; the links
+already sent are listed by `GET …/credential-pickups`). It needs
+`provision.manage` and a console session elevated in the last ten minutes, is
+refused to API tokens, and answers 409 when Syntra holds no initial password
+for the account. Every
 link sent, opened or refused is in the audit log
 (`provision.credential.sealed` on create, `provision.credential.link_sent` on
 a resend, `provision.credential.picked_up` for each reveal), never with the
@@ -1353,7 +2117,8 @@ are identified by their public SHA-256 fingerprint. Each entry can be given an
 whose issuer does not tell Syntra — a **declared expiry**. A declared expiry is
 refused for anything that carries its own. Deployment secrets
 (`SESSION_SECRET`, the master key, `METRICS_TOKEN`, SMTP) are not tenant data
-and are not listed; see the [secret-rotation runbook](runbooks/secret-rotation.md).
+and are not listed; they are replaced in the environment and take effect at a
+restart (the master key through [a rewrap](#changing-the-master-key)).
 
 **Entra expiry discovery is optional and never required.** Granting the app
 registration `Application.Read.All` (the `readCredentialExpiry` entry in the
@@ -1452,7 +2217,11 @@ Mark as service account**), by `PATCH /api/admin/users/:id` with
 account**, or `"kind": "service"` on `POST /api/admin/users`). It needs
 `directory.write`, and the change is audited as `user.kindChanged` with the
 before and after. An account linked to a person cannot be one, and a service
-account cannot be linked to a person: both are refused with `409`.
+account cannot be linked to a person: both are refused with `409`. Service
+accounts are also left out of the list of accounts with no person behind them
+(*Accounts with no person*, reached from **Users**;
+`GET /api/admin/users/unlinked`), which is a backlog of
+logins waiting to be matched to people; an integration's login is not one.
 
 **An integration's login that was given a person by mistake** is unlinked
 first: **Unlink** beside the person on the account's page, or
@@ -1635,8 +2404,175 @@ next page skips somebody.
 `/Me`, bulk operations, and ETags. `ServiceProviderConfig` reports each as
 unsupported so a client learns it by reading rather than by failing.
 
+## The administration API
+
+The console is a client of Syntra's own HTTP API, and that API is published so
+integrations can call it too. Its contract is an OpenAPI 3.1 description of
+every `/api/admin/…` operation, [`apps/api/openapi.json`](../apps/api/openapi.json)
+— generated, committed and checked in CI — and a running deployment serves the
+same document at **`GET /api/openapi.json`**, with no session, on any hostname,
+and with nothing from any tenant in it.
+
+**Covered:** everything under `/api/admin` — directory, people, lifecycle,
+provisioning, governance, access, tenant settings and the rest — including the
+routes a token is refused at, published with session-only security so an
+integrator can see that they exist. **Not covered, deliberately:** SCIM
+(`/scim/v2`, which follows RFC 7643 and 7644), the protocols (`/oidc`, `/saml`,
+`/federation`, each described by its own discovery or metadata document), and
+sign-in and the portal (`/api/auth`, `/api/portal`), which are for people.
+
+### Authenticating
+
+An integration presents an [API token](#machine-access) issued to a service
+account, as `Authorization: Bearer syntra_pat_…`. It can do what the account's
+roles allow, narrowed to the token's scopes. The description names two schemes,
+`bearerToken` and `sessionCookie` (the console's own), and each operation
+carries extensions that answer "can my token call this?" without trial and
+error:
+
+| Extension | Meaning |
+| --- | --- |
+| `x-syntra-permission` | The permissions the operation checks. **All** of them are required. Read from the route's own guards when the document is generated, so it cannot disagree with the server. |
+| `x-syntra-token-allowed` | `false` where a bearer token is refused whatever it holds — setting a password or minting a password link, issuing tokens, the tenant-wide session revoke, tenant deletion, change control, break-glass, a privacy case's erasure, *Send login info*, and deleting an application — with `403 token-not-accepted`. |
+| `x-syntra-paginated` | The operation takes `page` and `pageSize` and returns the paging envelope below. |
+| `x-syntra-rate-limit` | A per-route limit, where the route has one. |
+| `x-syntra-deprecation` | `since`, `sunset` and, when there is one, `replacement`. |
+
+### Versioning and deprecation
+
+The contract's version is `info.version` (1.0.0 today), semantically versioned,
+and it is the version of the **API**, not of the product. **Within major version
+1 only additive changes ship**: a new operation, a new optional request field or
+query parameter, a new response field, a new enum value in a response, a new
+problem `type`, a looser input limit. Removing or renaming an operation, a path,
+a field or an `operationId` (generated clients name methods after it), making an
+optional input required, narrowing an input, changing a success status or the
+meaning of a field — those wait for a new major version, served beside version
+1 under a new prefix. The prefix carries no version today (`/api/admin`), and
+existing paths are never repurposed. **A client should ignore response fields
+and tolerate enum values it does not know.**
+
+Anything removed or changed incompatibly is deprecated first, with **at least
+six months' notice** — a sunset closer than that fails the test suite. The
+operation is marked `deprecated: true` with `x-syntra-deprecation`, and every
+response from it carries `Deprecation` (RFC 9745), `Sunset` (RFC 8594) and, with
+a replacement, `Link: <…>; rel="successor-version"`, so a client that never
+rereads the document still hears. Log or alert on any response carrying
+`Deprecation`. Nothing is deprecated today.
+
+### Errors
+
+Every error is an RFC 9457 problem, `application/problem+json`:
+
+```json
+{
+  "type": "https://syntra.dev/problems/forbidden",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "Requires directory.write"
+}
+```
+
+**Branch on `type`**, which is stable; `title` and `detail` are prose and may
+be reworded. Some problems carry extension members a client can act on: a
+schema failure is always `validation-failed` with an `errors` array of
+`{ path, message }`. Request bodies and query strings are **strict** — an
+unknown field is a `400`, not something silently ignored — and where a route
+asks for `confirm`, only the exact value `true` counts.
+
+| Status | `type` | When |
+| --- | --- | --- |
+| 400 | `validation-failed` | The body, query or path failed its schema. |
+| 400 | `bad-request` | Malformed before validation, such as invalid JSON. |
+| 401 | `unauthenticated` | No valid session or token. |
+| 403 | `forbidden` | The account lacks the permission, or the token's scopes do not include it. |
+| 403 | `token-not-accepted` | The route refuses tokens whatever they hold. |
+| 404 | `not-found` | No such resource **in this tenant**; another tenant's id looks exactly like one that never existed. |
+| 503 | `unavailable` | The database did not answer within the transaction budget. The transaction was rolled back, so retry after a short delay. |
+| 500 | `internal-error` | A bug. The response carries no detail; the server log has it. |
+
+Operations add their own types, mostly `409`s — a stale preview,
+`approval-required`, `four-eyes-required`, `change-approval-required`,
+`step-up-required`, `run-not-appliable`, `adapter-version-changed` — and their
+descriptions name the ones a client is likely to meet.
+
+### Idempotency, rate limits and paging
+
+There is **no general `Idempotency-Key` header.** `GET` changes nothing; `PUT`
+replaces and can be repeated; a `DELETE` repeated answers `404`, which a retry
+should treat as success. `POST` is not idempotent in general, and where a
+duplicate would do harm the operation takes a key of its own:
+`POST /api/admin/lifecycle-operations/onboard` takes `idempotencyKey` (a repeat
+with the same input answers `200` with what the first created; the same key
+with different input is `409 idempotency-key-reused`), and
+`POST /api/admin/persons/:id/provision-receipts` takes a `requestKey` UUID.
+Preview-then-apply operations — sync and provisioning runs, movers,
+offboarding — are guarded by a **revision** instead: applying a preview whose
+data has moved is refused with a `409`; preview again.
+
+Two operations have per-route limits: `POST /api/admin/policy/rules/impact`
+and `POST /api/admin/targets/test`, each `AUTH_RATE_LIMIT_MAX` a minute (10 by
+default) per tenant and client address. `GET /api/openapi.json` allows 60 a
+minute per address. Other administration operations have no per-route limit;
+the database's transaction budget is the real ceiling, and exceeding it is a
+`503`. An exceeded limit answers `429` with `Retry-After` and
+`x-ratelimit-*` headers, and a problem `type` of the generic `bad-request`, so
+**branch on the status**. With `RATE_LIMIT_STORE=postgres`, the default, the
+counters are shared by every API replica; with `memory` each replica counts
+its own.
+
+A list that can grow without bound is paged: `page` (1-based, default 1) and
+`pageSize` (default 50, at most 200 — more is refused, not clamped), often `q`
+for a search, and the answer `{ "rows": [...], "total": 1234, "page": 2,
+"pageSize": 50 }`, where `total` counts what matches. Stop when
+`page * pageSize >= total`.
+
+### Generating a client
+
+Point any OpenAPI 3.1 generator at the committed file or at a deployment's
+`/api/openapi.json`, and pin the file you generated from:
+
+```sh
+npx openapi-typescript https://syntra.example.com/api/openapi.json -o syntra-api.d.ts
+npx @openapitools/openapi-generator-cli generate -i apps/api/openapi.json -g python -o ./syntra-client
+curl -fsS "https://syntra.example.com/api/admin/users?pageSize=100" -H "Authorization: Bearer $SYNTRA_TOKEN"
+```
+
+Request bodies, query strings and path parameters are fully described; most
+response bodies are not yet, and are published as "a JSON object" apart from the
+paging envelope and the operations with a contracts schema. Adding one is a
+minor-version change.
+
+**Changing a route** means describing it in the module's
+`apps/api/src/routes/admin/<module>.openapi.ts` (a summary, the Zod schemas the
+handler already parses, the success status when it is not 200), then running
+`pnpm openapi:generate` and committing `apps/api/openapi.json` with the change —
+the diff is the contract change a reviewer reads. The method, path,
+permissions, token refusal and rate limit come from the registered route table
+and are never written by hand. `apps/api/src/openapi/openapi.test.ts` fails on
+an undescribed `/api/admin` route or a description of one that no longer
+exists, and CI (and `pnpm openapi:check` locally) fails when the committed file
+is stale.
+
+## Personal data
+
+What Syntra stores about a person, and where, is listed field by field in the
+data inventory, [`packages/core/data-inventory.md`](../packages/core/data-inventory.md),
+generated from the code by `pnpm privacy:inventory` and checked in CI by
+`pnpm privacy:inventory:check`. Access, rectification, restriction and erasure
+requests are handled as cases under **Privacy requests** in the console
+(`privacy.manage`); erasure is
+decided by two administrators, each signed in, and is refused to API tokens.
+How a case runs, and what erasure does and keeps, is in
+[Data-subject requests](operate.md#data-subject-requests). Deactivating an
+account, deleting a SCIM user and retiring an application are not erasure:
+each keeps the record on purpose.
+
 ## Further reading
 
-- [Install](install.md) — development and container installs, TLS.
-- [Operating Syntra](operate.md) — upgrades, backups, CI, tests,
-  troubleshooting.
+- [Install](install.md) — development, single-process, container and
+  Kubernetes installs, TLS.
+- [Operating Syntra](operate.md) — upgrades, backups, incidents, data-subject
+  requests, CI, tests, troubleshooting.
+- [The console, screen by screen](console-guide.md).
+- [The Helm chart's values](../deploy/helm/syntra/README.md).

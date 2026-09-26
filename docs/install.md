@@ -1,9 +1,10 @@
 # Installing Syntra
 
-Two paths: a development install that runs everything from source with hot
-reload, and a container path that runs a built image behind Docker Compose.
-Pick the development install to work on Syntra itself; pick the container
-path to run it for real.
+A development install that runs everything from source with hot reload, and
+three ways to run it for real: the built application as one process, the
+container path behind Docker Compose, and a Helm chart for Kubernetes. Pick
+the development install to work on Syntra itself; pick one of the others to
+put it in front of people.
 
 ## Development install
 
@@ -14,7 +15,7 @@ install looks clean until nothing can reach the database.
 
 ```bash
 pnpm install
-pnpm db:up                                  # PostgreSQL 16 (+ a tmpfs postgres-test on :5433), MailDev, OpenLDAP, SFTP and the privileged Samba domain controller
+pnpm db:up                                  # PostgreSQL 16 (+ a tmpfs postgres-test on :5433), MailDev, OpenLDAP, SFTP and the privileged Samba domain controller; `pnpm vault:up` adds a dev Vault
 
 # BEFORE db:migrate, both of them. Prisma's CLI reads `.env` from its own
 # working directory, and pnpm runs `migrate` with the cwd set to packages/db,
@@ -43,7 +44,9 @@ SEED_USER_PASSWORD='choose-another-one' \
 pnpm dev                                    # api on :3000, web on :5173
 ```
 
-Then open **http://acme.localhost:5173** and sign in as `admin`. The seed
+Then open **http://acme.localhost:5173** and sign in as `admin`; confirming
+the password again for the administration console lands on its **Overview**.
+Outgoing mail goes to MailDev, at **http://localhost:1080**. The seed
 also creates `jdoe` (an ordinary portal user), `sroe` (a deactivated leaver)
 and `svc-backup` (an account with no person behind it and no password); `SEED_DEMO=1` adds lifecycle
 scenarios — see [Configuration](configure.md#seed-variables).
@@ -100,8 +103,7 @@ WEB_ROOT=$PWD/apps/web/dist pnpm start      # one process, one origin, on PORT
 directory set to `apps/api`, so a bare `apps/web/dist` is resolved against
 *that* and becomes `apps/api/apps/web/dist`. Nothing is there, and the error
 names a path you never typed. (It at least refuses to start rather than
-serving 404s — see below — but only because the path does not exist. Point it
-at one that does and is not a build, and readiness is what says so.)
+serving 404s — see below.)
 
 Then open **http://acme.localhost:3000**. There is no second port and no proxy:
 the same process answers `/api`, `/saml`, `/oidc`, `/federation` and every
@@ -124,7 +126,8 @@ What the served build does that the dev server does not:
 
 `WEB_ROOT` is unset by default, which is the API-only deployment the test suite
 and `pnpm dev` both use. Set it to a path that is not a build and the server
-refuses to start and says which of the two problems it is — a wrong path
+refuses to start and says which problem it is — no such path, not a
+directory, or a directory with no `index.html` in it. A wrong path
 otherwise produces a server that looks healthy and 404s every page, which reads
 as a routing bug for as long as it takes somebody to check.
 
@@ -143,11 +146,9 @@ and an nginx-fronted web image whose `apps/web/nginx.conf` proxies `/api/`,
 `/saml/`, `/oidc/`, `/federation/`, `/scim/`, `/health` and `/metrics` to it —
 everything the API owns, so that a path it owns never falls through to the
 single-page bundle and answers a machine caller with a 200 and a page of HTML.
-`docs/lab/systemd/` holds the
-service units the lab itself runs under — `syntra.service`, which still runs
-the API from source with `tsx` rather than either image, and
-`syntra-infra.service`, which brings up `infra/docker-compose.yml` for the
-database and directory fixtures the lab depends on.
+The API container applies migrations each time it starts, before it serves,
+and its health check is `/health/ready`, so `web` does not start in front of
+an API that cannot reach its database.
 
 `docker-compose.yml` runs published images, `ghcr.io/ssan9876/syntra-api` and
 `ghcr.io/ssan9876/syntra-web`, pinned by `SYNTRA_VERSION` (default `latest`).
@@ -179,7 +180,11 @@ docker compose exec \
 
 The required and optional environment variables for this compose file are in
 [Configuration](configure.md#required); `BOOTSTRAP_*` variables are covered
-[there too](configure.md#bootstrap-variables).
+[there too](configure.md#bootstrap-variables). The compose file passes through
+only the variables it names — the required ones, key management and mail —
+so `METRICS_TOKEN`, `LOG_LEVEL` and the rest go in a
+`docker-compose.override.yml`; the list is in
+[Where the variables go](configure.md#where-the-variables-go).
 
 ### TLS
 
@@ -203,6 +208,29 @@ If the proxy is on a different host, change that mapping in
 `docker-compose.yml` deliberately — and restrict who can reach it with a
 firewall, because nothing else will.
 
+Whatever the proxy — Caddy, nginx, a load balancer, a Cloudflare tunnel —
+three things decide whether it works:
+
+- **Speak plain HTTP to the origin** unless the origin itself terminates TLS.
+  An `https://` upstream in front of a plain-HTTP origin fails with a generic
+  *request failed* at the proxy, the same error a stale origin address gives.
+- **Pass the `Host` header through untouched.** Syntra picks the tenant from
+  it, and the name users type has to be a name the tenant answers on — ideally
+  its primary domain (see
+  [Tenants and hostnames](configure.md#tenants-and-hostnames)). A rewritten
+  `Host` is an unknown tenant, which looks like a proxy fault.
+- **`TRUST_PROXY` names the address the proxy connects from** — the tunnel
+  connector's host, the ingress controller's range — so source-address policy
+  and per-address rate limits see the client rather than the proxy. The
+  compose file already trusts Docker's private ranges for its own nginx; a
+  single-process install sets it in `.env`. See
+  [TRUST_PROXY](configure.md#trust_proxy-and-proxy-notes).
+
+Point external uptime monitoring at `/health`, which answers while the process
+is up. `/health/ready` is the stricter question — database, migrations, the
+master key, the built console — and belongs to orchestrators and the updater;
+a liveness check that fails whenever Postgres blips restarts a healthy API.
+
 **Use the bundled overlay.** `docker-compose.tls.yml` is a Compose overlay
 that runs Caddy in front of the stack and obtains and renews a certificate
 automatically for `SYNTRA_DOMAIN`:
@@ -223,7 +251,13 @@ The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
 runs the same two images. It adds a pre-upgrade migration Job, hardened pods
 with read-only root filesystems, and optional Ingress, NetworkPolicy,
 autoscaling, Prometheus Operator monitoring and a backup CronJob. It needs an
-existing Secret and `publicUrl`, and it refuses to render without them. Read
+existing Secret (`existingSecret`, holding `DATABASE_URL`, `SESSION_SECRET`,
+`MASTER_KEY` and `SMTP_URL` — or `MAIL_GRAPH_CLIENT_SECRET` with
+`mail.transport=graph`) and `publicUrl`, and it refuses to render without
+them; `secret.create=true` with the values in `secret.data` is for a
+disposable environment only, since it puts the secrets in a values file.
+Which variables come from values and which from the Secret is in
+[Where the variables go](configure.md#where-the-variables-go). Read
 the chart README's multi-replica section before you run more than one API
 pod. Postgres HA, PgBouncer and connection sizing are covered in
 [Operating Syntra](operate.md#kubernetes-and-high-availability).
@@ -234,10 +268,67 @@ The container path is nginx plus a Node process plus Postgres, each in its
 own container. `WEB_ROOT` (described above, under "Running the built
 application as one process") is the same idea with no container and no
 proxy: build the web app, point `WEB_ROOT` at the built assets, and run the
-API alone as the entire deployment. That is what `docs/lab/systemd/` runs in
-production — `syntra.service` runs `tsx src/server.ts` directly rather than
-either Docker image. Choose it over the container path when you would rather
-manage one process under systemd than a Compose stack.
+API alone as the entire deployment, from TypeScript source through `tsx`
+rather than either Docker image. Choose it over the container path when you
+would rather manage one process under systemd than a Compose stack.
+
+```bash
+pnpm install && pnpm db:generate && pnpm db:migrate
+pnpm build                                  # vite build -> apps/web/dist
+```
+
+```ini
+# .env, beside the checkout's packages/db/.env
+PUBLIC_URL=https://idm.example.com
+WEB_ROOT=/srv/syntra/apps/web/dist
+TRUST_PROXY=192.0.2.200                     # the address your proxy connects from
+NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/example-ca.crt   # if a directory uses a private CA
+```
+
+A unit for it, `/etc/systemd/system/syntra.service`. `ops/syntra-install`
+(below) expects exactly this shape — a `WorkingDirectory=` naming the tree's
+`apps/api` and an `--env-file-if-exists=` argument — because those are the two
+lines it rewrites:
+
+```ini
+[Unit]
+Description=Syntra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=/srv/syntra/apps/api
+ExecStart=/usr/bin/env node --env-file-if-exists=/srv/syntra/.env --import tsx src/server.ts
+Restart=always
+RestartSec=5
+# The API drains HTTP, stops the scheduler and disconnects on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Anywhere the API itself writes: /opt/syntra/var once on the release layout,
+# and GOVERN_ANCHOR_DIR if you set one.
+# ReadWritePaths=/opt/syntra/var
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Order it after the database, and mean *accepting connections*.** An API
+that starts before PostgreSQL answers does not crash: it starts anyway and
+logs *no directory sources were scheduled*, and nothing runs until the next
+restart. If PostgreSQL runs on the same host under Docker, the development
+compose file brings it up with no restart policy, so after a reboot nothing
+comes back unless a unit starts it. Give `syntra.service` an `After=` and
+`Requires=` on whatever runs the database, and an `ExecStartPre=` that waits
+for `pg_isready` to succeed. Then reboot once and check the boot was clean:
+
+```bash
+journalctl -u syntra -b | grep -ciE "scheduler failed|ECONNREFUSED"   # expect 0
+```
 
 To update such an install from the console, convert it once to the release
 layout with `ops/syntra-install` (`--dry-run` first says what it will do):
@@ -249,9 +340,12 @@ backup timers that come with the layout are in
 ## Further reading
 
 - [Configuration](configure.md) — every environment variable, directory
-  sources, SSO and federation configuration.
+  sources, connectors, SSO and federation configuration, and the
+  administration API. Connecting Active Directory over LDAPS is
+  [Active Directory as a source](configure.md#active-directory-as-a-source) and
+  [Active Directory](configure.md#active-directory) as a target; SAML single
+  sign-on to a third-party application is
+  [Setting up a SAML application](configure.md#setting-up-a-saml-application).
 - [Operating Syntra](operate.md) — upgrades, backups, CI, tests and
   troubleshooting.
-- [docs/lab/README.md](lab/README.md) — a complete worked build: Syntra over
-  HTTPS, an Active Directory domain behind it, sync in both directions, and
-  SAML single sign-on to a third-party application.
+- [The console, screen by screen](console-guide.md).
