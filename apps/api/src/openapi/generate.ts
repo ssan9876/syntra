@@ -1,5 +1,5 @@
 /**
- * `pnpm openapi:generate` — writes `docs/api/openapi.json`.
+ * `pnpm openapi:generate` — writes `apps/api/openapi.json`.
  *
  * Builds the real application and asks it for the document, rather than
  * assembling one from the descriptions alone: the permission, token and
@@ -25,7 +25,7 @@ import { buildApp } from '../app.js';
 import { OPENAPI_PATH } from './route.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const target = resolve(here, '../../../../docs/api/openapi.json');
+const target = resolve(here, '../../openapi.json');
 
 const config = loadConfig({
   DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:1/unused',

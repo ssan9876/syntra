@@ -3999,7 +3999,7 @@ model NotificationPreference {
 }
 
 // ---------------------------------------------------------------------------
-// Govern — Access Governance. Spec docs/superpowers/specs/2026-08-16-syntra-govern-design.md
+// Govern — Access Governance.
 //
 // Govern reads every other subsystem's tables and writes only these. It holds
 // no target credential, opens no socket, and writes no access-bearing row.

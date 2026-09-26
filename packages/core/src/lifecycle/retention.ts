@@ -48,7 +48,7 @@ function cutoff(now: Date, days: number): Date {
  *
  * Audit events are the special case: the database refuses to delete them
  * from the application role, so this pass only counts what the policy makes
- * eligible. The archive procedure in `docs/runbooks` removes events at or
+ * eligible. The archive procedure in `docs/operate.md` (Runbooks) removes events at or
  * before the latest verified checkpoint, and `verifyChain` seeds from that
  * checkpoint's hash when the log no longer starts at sequence 1. No
  * checkpoint, nothing is eligible.

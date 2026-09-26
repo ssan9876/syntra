@@ -4,7 +4,7 @@
     "title": "Syntra administration API",
     "version": "1.0.0",
     "summary": "Tenant administration and machine-token API for Syntra.",
-    "description": "The API the Syntra administration console itself uses, published so that\nintegrations can call it with a machine token.\n\nEvery operation names the permission it requires in `x-syntra-permission`\n(every listed permission is required) and says in `x-syntra-token-allowed`\nwhether an API token may call it at all. A token is always the\nINTERSECTION of its own scopes and its service account's roles.\n\nThe few unauthenticated routes a person reaches from a link in an email\nare described too, marked `x-syntra-public` and with no security\nrequirement.\n\nErrors are RFC 9457 problem details (`application/problem+json`). See\ndocs/api/README.md for versioning, deprecation, idempotency and rate limits.",
+    "description": "The API the Syntra administration console itself uses, published so that\nintegrations can call it with a machine token.\n\nEvery operation names the permission it requires in `x-syntra-permission`\n(every listed permission is required) and says in `x-syntra-token-allowed`\nwhether an API token may call it at all. A token is always the\nINTERSECTION of its own scopes and its service account's roles.\n\nThe few unauthenticated routes a person reaches from a link in an email\nare described too, marked `x-syntra-public` and with no security\nrequirement.\n\nErrors are RFC 9457 problem details (`application/problem+json`). See\ndocs/configure.md (The administration API) for versioning, deprecation, idempotency and rate limits.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"

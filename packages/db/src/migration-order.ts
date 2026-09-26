@@ -30,8 +30,7 @@
  *   mv prisma/migrations/2026082X.._add_a_column \
  *      prisma/migrations/20260831000000_add_a_column
  *
- * Blocks are allocated per remediation plan in
- * `docs/superpowers/specs/2026-08-24-audit-findings.md` section 11.
+ * Blocks were allocated per remediation plan.
  *
  * When the real clock passes the floor this check becomes a no-op and can be
  * deleted along with the hand-dated names.

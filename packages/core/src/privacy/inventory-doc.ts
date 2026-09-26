@@ -12,7 +12,7 @@ import {
 
 /**
  * Renders the data inventory as the human-readable document committed at
- * `docs/privacy/data-inventory.md`. Deterministic: no dates, no environment,
+ * `packages/core/data-inventory.md`. Deterministic: no dates, no environment,
  * so the committed file can be compared byte for byte (`inventory.test.ts`).
  */
 

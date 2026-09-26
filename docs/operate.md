@@ -1,22 +1,176 @@
 # Operating Syntra
 
-Upgrades, backups, what "delete" actually means in this product, and how the
-test suite and CI are put together — including the troubleshooting notes that
-save the most time.
+Upgrades, backups, monitoring, what "delete" actually means in this product,
+the day-to-day work that waits for a person, and the runbooks for when
+something goes wrong — plus how the test suite and CI are put together.
+
+**Contents**
+
+1. **Running it** — [Upgrades](#upgrades), [Backups](#backups),
+   [Kubernetes and high availability](#kubernetes-and-high-availability)
+2. **Watching it** — [Metrics](#metrics), [Observability](#observability),
+   [Status reporting](#status-reporting)
+3. **What it keeps and what it deletes** —
+   [What a session records](#what-a-session-records-about-a-person),
+   [Machine credentials](#finding-machine-credentials-nobody-uses),
+   [Deactivate, never delete](#deactivate-never-delete),
+   [Tenant deletion](#tenant-deletion),
+   [Data-subject requests](#data-subject-requests)
+4. **Day-to-day work** — [Cancelling a run](#cancelling-a-long-running-run),
+   [Work held for review](#work-held-for-review),
+   [Incidents](#what-is-broken-incidents),
+   [Background work](#background-work-and-job-health),
+   [Exports](#exports), [Audit search](#audit-search)
+5. **Building and testing** — [Continuous integration](#continuous-integration),
+   [Tests](#tests), [Troubleshooting](#troubleshooting)
+6. **[Active Directory in practice](#active-directory-in-practice)** — the
+   host, the domain and the traps met when running against a real domain
+7. **[Runbooks](#runbooks)** — the on-call quick reference, then one
+   procedure per situation: [incident response](#runbook-incident-response),
+   [backup and restore](#runbook-backup-and-restore),
+   [master-key recovery](#runbook-master-key-recovery),
+   [database migration](#runbook-database-migration),
+   [secret rotation](#runbook-secret-rotation),
+   [target rollback](#runbook-target-rollback),
+   [queue recovery](#runbook-queue-recovery),
+   [scale validation](#runbook-scale-validation),
+   [tabletop exercises](#runbook-tabletop-exercises)
 
 ## Upgrades
 
-Syntra's own in-console updater and the `syntra-update` / `syntra-install`
-scripts under `ops/` are covered end to end, including the systemd units and
-a full worked run, in [`docs/lab/README.md`](lab/README.md#why-this-is-not-an-ordinary-update-button)
-— that document is written from an actual lab deployment and is the source
-of truth for the update workflow. In short: the updater is not part of
-Syntra, runs as its own transient systemd unit outside the API process, takes
-a pre-migration database dump through the Postgres container before it acts,
-and can roll back. The environment variables that configure it —
-`RELEASE_REPO`, `RELEASE_TOKEN`, `RELEASE_ROOT`, `PG_CONTAINER` — are listed
-in [Configuration](configure.md#updating-from-the-console); all are optional,
-and an install that sets none of them simply has no update button.
+Three deployment shapes exist, and each upgrades differently:
+
+- **Release layout** — `/opt/syntra/current` (a symlink into
+  `/opt/syntra/releases/<version>`), `/opt/syntra/shared/.env`, a `syntra`
+  systemd unit, Postgres in a Docker container named by `PG_CONTAINER`.
+  `syntra-update` and `syntra-backup` are written for this layout and only
+  this layout.
+- **Compose path** (`docker-compose.yml`, optionally `docker-compose.tls.yml`)
+  — `postgres`, `api` and `web` services; the `api` image migrates before it
+  starts; data in the `syntra-data` volume.
+- **Helm** (`deploy/helm/syntra`) — `<release>-api` and `<release>-web`
+  Deployments, a `<release>-migrate` pre-install/pre-upgrade Job, secrets in
+  the Secret the values name.
+
+For the container path, an upgrade is pulling a newer image: set
+`SYNTRA_VERSION` to the release you want and re-run `docker compose up -d`
+(see [Install](install.md#running-it-for-real-the-container-path)). For Helm,
+set the new image tags and `helm upgrade`. Both are walked through, with their
+rollbacks, in the [database migration runbook](#runbook-database-migration).
+The rest of this section is the release layout.
+
+### Why the updater is not an ordinary update button
+
+Syntra is what you sign in with. An update that breaks authentication takes
+away the console you would use to undo it, and the SSO it fronts goes with it.
+Three things follow, and they are the whole design:
+
+- **The updater is not part of Syntra.** `ops/syntra-update` runs as its own
+  transient systemd unit (`systemd-run --unit=syntra-update`), from
+  `/opt/syntra/bin`, not from a release. A child process of the API would be
+  killed by the restart the update itself causes, between the migration and
+  the symlink swap — the least recoverable state this system has.
+- **The rollback needs nobody.** If the new version does not come up, the
+  updater puts the old one back — code *and* database — on its own. "Sign in
+  and click rollback" is exactly what a broken sign-in prevents.
+- **What it checks can fail.** `/health` is a constant: it returns 200 with the
+  database unreachable and the migration half-applied. `/health/ready` is the
+  gate. Keep the reverse proxy and external liveness monitoring pointed at
+  `/health` all the same: a liveness probe that fails when Postgres blips
+  restarts a healthy API.
+
+### One-time setup
+
+1. **Convert to the release layout.** An install that runs from one directory
+   has nothing to roll back *to* — the old files are the ones an update
+   overwrites.
+
+   ```bash
+   ./ops/syntra-install --dry-run     # read what it will do
+   ./ops/syntra-install
+   ```
+
+   It copies the checkout to `/opt/syntra/releases/dev`, moves `.env` into
+   `/opt/syntra/shared/`, points `current` at the release, rewrites `WEB_ROOT`
+   and the systemd unit's working directory to follow it, installs
+   `syntra-update` and `syntra-backup` into `/opt/syntra/bin`, and installs
+   the backup units (left disabled; see [Backups](#backups)). It expects an
+   existing configured systemd install and refuses to run twice. **The old
+   tree is left exactly where it is**, so recovery is restoring
+   `syntra.service.pre-release-layout` and restarting.
+2. **A release token.** A fine-grained GitHub token, **read-only**, scoped to
+   the one repository, with `Contents: Read` and nothing else, in
+   `/opt/syntra/shared/.env`:
+
+   ```
+   RELEASE_REPO=ssan9876/syntra
+   RELEASE_TOKEN=github_pat_…
+   RELEASE_ROOT=/opt/syntra
+   ```
+
+   Not a git credential: the host never gains the ability to read source
+   history, only to download release assets. Revoke it from GitHub without
+   touching the box. The variables (and `PG_CONTAINER`) are listed in
+   [Configuration](configure.md#updating-from-the-console); all are optional,
+   and an install that sets none of them simply has no update button.
+3. **Take the converted tree to its first release**, once, by hand:
+   `SYNTRA_RELEASE_TOKEN=… /opt/syntra/bin/syntra-update --adopt <version>`.
+   A working tree reports itself as `dev` and the console will not update it.
+
+**Cutting a release.** Nothing is updatable until something has been released:
+
+```bash
+git tag -a v1.5.0 -m "What changed, for the operator deciding whether to take it."
+git push origin v1.5.0
+```
+
+The tag message becomes the notes an operator reads before deciding. **Tag a
+commit that is on `main`:** the release workflow refuses any other. It reuses
+`main`'s own green CI run for that exact commit when there is one, and runs
+the whole suite when there is not (see
+[Continuous integration](#continuous-integration)) — either way, a tag whose
+tests fail produces no release.
+
+### Updating
+
+From the console, **Updates** (`/admin/updates`, `deployment.manage`; the API
+is `POST /api/admin/update` and `POST /api/admin/update/rollback`) shows the
+running version, what is available, and a button. The console cannot
+downgrade. By hand:
+
+```bash
+/opt/syntra/bin/syntra-update --check        # what is running, what is available; changes nothing
+/opt/syntra/bin/syntra-update 1.5.0          # update
+/opt/syntra/bin/syntra-update --rollback     # go back deliberately
+cat /opt/syntra/var/update.status            # what it is doing right now
+```
+
+What an update does, in order:
+
+1. Downloads the release and checks its SHA-256.
+2. Unpacks it beside the running one, installs its dependencies, generates the
+   client.
+3. **Dumps the database into `/opt/syntra/shared/backups/` — and stops if that
+   fails.** Migrating without a backup is the one step that cannot be undone.
+4. Applies migrations, swaps the `current` symlink, restarts.
+5. Polls `/health/ready` for 90 seconds.
+6. If it does not go green: stops the service, drops every non-system schema
+   and restores the dump (so tables the new migration created do not
+   survive), relinks the previous release, restarts, and writes `rolled_back`.
+   If the restore itself leaves an empty database it writes `failed` and
+   leaves the service **stopped**, with the dump's path in the message.
+
+Signing in stops working for about a minute. Sessions already open survive.
+
+Things worth knowing before you need them:
+
+- **Anything written into `current` by hand is invisible to the updater**, and
+  the next update overwrites it silently. Cut a release instead.
+- **A rollback does not undo what happened during the update.** The dump is
+  from just before the migration; a login or a sync run in the minute since is
+  not in it.
+- **Three releases and three dumps are kept.** The one you are running is
+  never pruned. These dumps are the updater's, not your backup schedule.
 
 **A refused update leaves the status alone.** `syntra-update` writes
 `var/update.status`, which is what the console shows. Anything it refuses
@@ -29,13 +183,82 @@ record of the last successful update survives a typo or a double click. Only a
 failure after work has begun (download, checksum, install, dump, migration,
 restart) writes `failed`.
 
-The scripts themselves are not tied to the lab: `SYNTRA_ROOT` moves the
-release layout away from `/opt/syntra`, and `SYNTRA_RELEASE_REPO` names the
-GitHub repository whose releases they download, for a fork that cuts its own.
+The scripts are not tied to one host: `SYNTRA_ROOT` moves the release layout
+away from `/opt/syntra`, `SYNTRA_SERVICE` names a unit other than `syntra`,
+and `SYNTRA_RELEASE_REPO` names the GitHub repository whose releases they
+download, for a fork that cuts its own. `ops/rehearsal/README.md` describes a
+full rehearsal of the updater against a local release server, in its own root,
+unit, port and database.
 
-For the container path (`docker-compose.yml`), an upgrade is pulling a newer
-image: set `SYNTRA_VERSION` to the release you want and re-run
-`docker compose up -d` (see [Install](install.md#running-it-for-real-the-container-path)).
+### Running under systemd
+
+The single-process install (see
+[Install](install.md#the-single-process-alternative-to-the-container-path))
+runs as one systemd unit, and `ops/syntra-install` converts that unit rather
+than writing one. It needs a `WorkingDirectory=` line and an
+`--env-file-if-exists=` argument to repoint. A unit of the shape it expects:
+
+```ini
+# /etc/systemd/system/syntra.service
+[Unit]
+Description=Syntra
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/syntra/current/apps/api
+ExecStart=/usr/bin/env node --env-file-if-exists=/opt/syntra/shared/.env --import tsx src/server.ts
+Restart=always
+RestartSec=5
+# The API drains HTTP, stops the scheduler and disconnects on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# The one place the API process writes: var/update.status, when the
+# updater could not even be started.
+ReadWritePaths=/opt/syntra/var
+
+[Install]
+WantedBy=multi-user.target
+```
+
+systemd follows the `current` symlink at every start, so a swap under it
+needs no unit change.
+
+**If Postgres runs in Docker on the same host, make the API wait for it.**
+`infra/docker-compose.yml` is a development file with no restart policies, so
+after a reboot nothing comes back unless a unit brings it up; and "the
+container has started" is not "PostgreSQL is accepting connections". The API
+tolerates a missing database by starting anyway with no jobs scheduled — a
+quiet failure — so catch it in the unit. A oneshot `syntra-infra.service`
+(`Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=/usr/bin/docker compose -f
+infra/docker-compose.yml up -d`) owns the containers, and a drop-in on the
+API waits for the database:
+
+```ini
+# /etc/systemd/system/syntra.service.d/10-wait-for-postgres.conf
+[Unit]
+After=syntra-infra.service
+Requires=syntra-infra.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do docker exec <PG_CONTAINER> pg_isready -U syntra -d syntra >/dev/null 2>&1 && exit 0; sleep 2; done; echo "postgres never became ready" >&2; exit 1'
+```
+
+A private CA for LDAPS goes in a second drop-in as
+`Environment=NODE_EXTRA_CA_CERTS=…` — see
+[Active Directory in practice](#the-host). Prove the arrangement with a reboot
+rather than assuming it, and check the boot was clean:
+
+```bash
+systemctl reboot
+journalctl -u syntra -b | grep -ciE "scheduler failed|ECONNREFUSED"   # expect 0
+```
 
 ## Backups
 
@@ -63,7 +286,10 @@ syntra-backup list                 what is here, and whether it can be restored
 Backups land in `/opt/syntra/backups`, one directory each, holding a
 `pg_dump` archive and a manifest. `SYNTRA_BACKUP_DIR` moves them and
 `SYNTRA_BACKUP_KEEP` changes how many are kept (seven by default; the oldest
-beyond that are pruned after each successful run).
+beyond that are pruned after each successful run). The step-by-step
+procedures — taking one before a risky change, restoring, rehearsing a restore
+in isolation, reconciling before and after, and the compose and Helm
+equivalents — are the [backup and restore runbook](#runbook-backup-and-restore).
 
 **They are deliberately not in `shared/backups`.** That is where the updater
 puts its pre-migration dumps, and it prunes that directory to the last three on
@@ -228,9 +454,14 @@ checked in the code and against a real PgBouncer:
   Keep it that way.
 - The lockout and audit-chain locks are `pg_advisory_xact_lock`, which are
   also transaction-scoped.
-- **Prepared statements are the one real requirement.** Prisma uses named
-  prepared statements. Tested against PgBouncer 1.25.2 in `pool_mode =
-  transaction`:
+- **Prepared statements.** Syntra now runs Prisma 7 through its
+  node-postgres driver adapter (`@prisma/adapter-pg`, wired in
+  `packages/db/src/client.ts`). The adapter names a statement only when given
+  a `statementNameGenerator`, and Syntra does not give it one, so queries go
+  out as unnamed statements — the kind transaction pooling has always handled.
+  The measurements below were taken against PgBouncer 1.25.2 in
+  `pool_mode = transaction` under Prisma 6, whose query engine **did** name
+  its statements, and have not been repeated under Prisma 7:
   - With `max_prepared_statements = 200` (the protocol-level prepared
     statement support added in PgBouncer 1.21), sign-in, the RLS-scoped
     reads, `/health/ready` and the pg-boss scheduler all worked unchanged.
@@ -238,13 +469,13 @@ checked in the code and against a real PgBouncer:
     with `prepared statement "s1" does not exist`, and `/health/ready`
     correctly returned 503.
   - With `max_prepared_statements = 0` and `?pgbouncer=true` added to
-    `DATABASE_URL`, everything worked again. That flag makes Prisma stop
-    using named statements. pg-boss (node-postgres) ignores the parameter
-    and ran normally.
+    `DATABASE_URL`, everything worked again.
 
-  So: on PgBouncer 1.21 or later, set `max_prepared_statements` above zero.
-  On anything older, or on a pooler you cannot configure, append
-  `pgbouncer=true`.
+  `pgbouncer=true` was a flag for Prisma 6's query engine; the driver adapter
+  does not read it. The conservative setting is unchanged and costs nothing:
+  on PgBouncer 1.21 or later, set `max_prepared_statements` above zero. If you
+  run an older pooler, test sign-in and `/health/ready` through it before
+  relying on it.
 - **Migrations and backups must bypass the pooler.** `prisma migrate
   deploy` holds a session-level advisory lock, and `pg_dump` needs a
   consistent session snapshot. Put a direct connection URL in the Secret and
@@ -263,10 +494,11 @@ Each API process opens two pools against `DATABASE_URL`:
 
 | Pool | Default size | Set with |
 |---|---|---|
-| Prisma | `physical CPUs × 2 + 1`. The CPUs are the ones the query engine detects, which is usually the **node's** count, not the pod's CPU limit. A pod on a 32-core node can open up to 65 connections. | `?connection_limit=N` in `DATABASE_URL` (and `pool_timeout=S`) |
+| Prisma | 10 — Prisma 7 pools through node-postgres, and that is its `Pool` default | `?connection_limit=N` in `DATABASE_URL`. Prisma 6 read this itself; `packages/db/src/client.ts` now strips it from the URL and hands it to node-postgres as `max`, so existing URLs keep working. Prisma 6's other pool parameters (`pool_timeout`) are not translated. |
 | pg-boss | 10 (node-postgres `Pool` default; connections show `application_name = pgboss`) | not configurable today |
 
-Set `connection_limit` explicitly. 10 is a sensible start for a 2-CPU pod.
+Set `connection_limit` explicitly all the same, so the number in your sizing
+is the number in the URL. 10 is a sensible start for a 2-CPU pod.
 Then size the server's `max_connections` (or PgBouncer's
 `default_pool_size`) for the worst case:
 
@@ -345,23 +577,36 @@ Process and runtime metrics — heap, CPU, event-loop lag — plus:
 
 | Metric | Answers |
 |---|---|
-| `syntra_http_request_duration_seconds` | Request latency, by route pattern and status |
+| `syntra_http_request_duration_seconds` | Request latency, by method, route pattern and status |
 | `syntra_build_info` | Which release is running |
+| `syntra_readiness` | The same probe `/health/ready` runs, 1 or 0 |
+| `syntra_scheduler_running` | 1 when the job scheduler is up (published only when the process wires one) |
+| `syntra_jobs_pending` | pg-boss jobs in `created` or `retry`; absent if the scheduler has never run |
 | `syntra_webhook_deliveries_pending` | Is the webhook sender keeping up? |
 | `syntra_webhook_deliveries_abandoned` | Has any integration stopped being fed? |
 | `syntra_logout_deliveries_pending` | Back-channel logouts still in flight |
 | `syntra_logout_deliveries_abandoned` | **Offboardings a relying party was never told about** |
-| `syntra_jobs_pending` | Is the scheduler running at all? |
-| `syntra_sessions_active` | |
+| `syntra_sessions_active` | Live sessions |
 | `syntra_users_total{status}` | Accounts, active and inactive |
 | `syntra_accounts_locked` | A lockout spike, before the tickets arrive |
 | `syntra_lifecycle_operations_unresolved` | Lifecycle work still in progress or awaiting verification |
 | `syntra_lifecycle_operations_failed` | Lifecycle work requiring recovery |
 | `syntra_lifecycle_operations_overdue` | Unacknowledged lifecycle work past its due date |
+| `syntra_lifecycle_operations_awaiting_approval` | Lifecycle work waiting for a second person |
+| `syntra_lifecycle_operations_slo_breached` | Unresolved work past its service-level deadline |
+| `syntra_lifecycle_oldest_unresolved_age_seconds` | Age of the oldest open operation; absent when none |
+| `syntra_lifecycle_retry_rate` | Share of operations resolved in the last day that needed more than one attempt; absent when none resolved |
+| `syntra_lifecycle_receipts_deferred` | Target operations stepping back from a saturated tenant (the concurrency cap) |
+| `syntra_lifecycle_operation_duration_seconds{kind,quantile}` | p50 / p95 of operations resolved in the last day |
+| `syntra_provision_actions_pending_retry` | Actions that exhausted their retries and wait for the next run (the dead-letter equivalent) |
+| `syntra_provision_actions_failed_24h` | Actions failed permanently in the last day |
+| `syntra_provision_runs_failed_24h` | Provisioning runs that failed in the last day |
+| `syntra_targets_stale` | Enabled, scheduled targets that have not run in a day |
+| `syntra_target_readiness_age_seconds` | Age of the oldest current connection test across targets; absent when none |
+| `syntra_target_operation_duration_seconds{target_type,quantile}` | p50 / p95 of applied target operations, by connector type, never by target |
 | `syntra_signing_key_expires_in_seconds` | The nearest signing key's expiry |
 | `syntra_audit_events_total{action,outcome}` | Security events, by kind |
-| `syntra_readiness` | The same probe `/health/ready` runs |
-| `syntra_job_health_findings{kind,finding}` | Background work that is orphaned, stuck, duplicated, delayed, poisoned or deferred by saturation — see [Queue recovery](#queue-recovery) |
+| `syntra_job_health_findings{kind,finding}` | Background work that is orphaned, stuck, duplicated, delayed, poisoned or deferred by saturation — see [Background work](#background-work-and-job-health) |
 | `syntra_job_queue_readable` | 0 when the job queue cannot be read, so orphaned work cannot be detected |
 
 **Four are worth alerting on before the rest.**
@@ -372,11 +617,14 @@ scheduled monthly and its failure is completely silent until every token stops
 verifying at once. `syntra_readiness` at 0 is the process telling you it cannot
 do its job.
 
-`ops/prometheus-alerts.yml` is an installation-wide starter rule group. Load it
-into Alertmanager/Prometheus and route its alerts to the operations channel;
-the lifecycle rules intentionally name no tenant because metrics expose no
-tenant labels. Use the authenticated employee-work queue to identify the owner
-and record.
+`ops/prometheus-alerts.yml` is an installation-wide starter rule group (the
+Helm chart carries a copy as its PrometheusRule, and CI fails if the two
+differ). Load it into Prometheus and route its alerts to the operations
+channel; every rule carries a `runbook` annotation, and the
+[on-call quick reference](#on-call-quick-reference) says where each one leads.
+The lifecycle rules intentionally name no tenant because metrics expose no
+tenant labels. Use the authenticated **Employee work** queue to identify the
+owner and record.
 
 Two metrics are **absent rather than zero** when the answer is unknown:
 `syntra_jobs_pending` where the scheduler has never run, and
@@ -497,7 +745,8 @@ set it accordingly.
 
 Metrics labels carry no redaction pass at all, so their safety is
 structural: a closed set of label names (`method`, `route`, `status`,
-`kind`, `quantile`, `target_type`, `action`, `outcome`, `version`), each
+`kind`, `quantile`, `target_type`, `action`, `outcome`, `version`,
+`finding`, and Prometheus's own `le`), each
 holding a bounded vocabulary, enforced by a test that fails when a new label
 appears.
 
@@ -626,7 +875,7 @@ disables their account here*. Otherwise the next sync run reads them as
 present and puts them back, so the console says who owns them rather than
 offering a control that silently reverts. With that switch on, Deactivate
 disables the account in the directory first, then in Syntra (see
-[the lab, §2.7](lab/README.md#27-write-back-changing-active-directory-from-syntra)).
+[What deactivating a directory-managed user does](#what-deactivating-a-directory-managed-user-does)).
 
 Deactivation is also the one place policy changes are immediate rather than
 waiting for a session to expire — a user's status is re-read on every
@@ -751,7 +1000,7 @@ holding it.
 
 ### The data inventory
 
-[`docs/privacy/data-inventory.md`](privacy/data-inventory.md) lists every
+[`packages/core/data-inventory.md`](../packages/core/data-inventory.md) lists every
 column of every table, classified as `identity`, `contact`, `hr`,
 `authentication`, `audit`, `operational` or not personal, with each area's
 purpose, source, retention, access and a legal-basis **placeholder** for the
@@ -854,7 +1103,7 @@ Anyone with `privacy.manage` can cancel a pending erasure. Machine tokens are
 refused on every erasure route.
 
 What the erasure does, per the inventory (the per-column detail is in
-[the data inventory](privacy/data-inventory.md#data-subject-erasure-at-a-glance)):
+[the data inventory](../packages/core/data-inventory.md#data-subject-erasure-at-a-glance)):
 
 | Treatment | Tables | Why |
 | --- | --- | --- |
@@ -1215,7 +1464,7 @@ The setting itself is audited on
 `{ from, to }`. Mirroring is refused on a target that does not place accounts
 in containers (Entra ID, SCIM, HTTP), and the target page says why.
 
-## Queue recovery
+## Background work and job health
 
 Background work has a row (a sync run, an HR import run, a provisioning run, a
 person's target operation, an export, a lifecycle operation) and a pg-boss job
@@ -1261,7 +1510,7 @@ filtered on the job payload's `tenantId`; a tenant never sees another tenant's
 jobs. When the table cannot be read, nothing is reported orphaned. The alert
 rules are `SyntraJobsOrphaned`, `SyntraJobsStuck`, `SyntraJobsPoisoned`,
 `SyntraJobsDelayed`, `SyntraJobsDuplicated` and `SyntraJobHealthBlind`; the
-procedure is the [queue recovery runbook](runbooks/queue-recovery.md).
+procedure is the [queue recovery runbook](#runbook-queue-recovery).
 
 ## Status reporting
 
@@ -1407,14 +1656,15 @@ Two operational notes:
 
 `GET /api/admin/audit` filters on the server: `actor` (user id), `action`
 (a prefix — `auth.` is every authentication event), `target` (target id),
-`targetType`, `outcome`, `from` (inclusive) and `to` (exclusive), and
-`subject` (repeatable; done by or to any of the ids). Pages are at most 200
-events, newest first, and are keyset-paged on the chain's own `sequence`:
+`targetType`, `outcome`, `from` (inclusive) and `to` (exclusive), `subject`
+(repeatable; done by or to any of the ids) and `correlation` (the 32-hex
+correlation id — see [Correlation ids](#correlation-ids)). Pages are at most
+200 events, newest first, and are keyset-paged on the chain's own `sequence`:
 the response's `nextBefore` is the `before` of the next page, or `null` when
 there is none. There is no total, deliberately — counting a log that grows for
-ever is the cost this avoids. The audit log records no correlation or request
-id, so there is no filter for one; the subject filter follows a person or an
-object through everything done by it and to it.
+ever is the cost this avoids. The subject filter follows a person or an object
+through everything done by it and to it; the correlation filter follows one
+request or job through everything it caused.
 
 Saved searches (`GET`/`PUT /api/admin/audit/views`,
 `DELETE /api/admin/audit/views/:id`) are filters only, private to the
@@ -1435,7 +1685,7 @@ same names (see the migration file); the migration then skips them.
 
 The query plans at 100,000 events are asserted by
 `packages/core/src/audit/audit-search.test.ts` on every run; see
-[Scale validation](runbooks/scale-validation.md) for the recorded figures.
+[the scale validation runbook](#runbook-scale-validation) for the recorded figures.
 
 A known limit: every page still carries a full chain verification
 (`verifyChain`), which reads the tenant's whole log. The search itself is
@@ -1445,28 +1695,37 @@ verification Govern already runs nightly is the follow-up.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request. Its two main
-jobs are the unit and integration suite, against a real PostgreSQL, OpenLDAP
-and Samba domain controller, and the browser suite, against a running, seeded
-stack. The unit and integration suite is split by file into four shards
-(`tests (shard N/4)`), each on its own runner with its own containers and
-scratch databases, running `pnpm test -- --shard=N/4`. A `typecheck, lint and
-console` job runs the operational shell-tool tests, the typecheck, the lint,
-the console's component tests and its production build once, beside the
-shards, since none of them needs a database. A job named `tests` needs all of
-them and is green only when every shard and that job are, so there is still
-one `tests` status to require. Locally, `pnpm test` with no argument is still
-the whole suite. Other jobs:
+`.github/workflows/ci.yml` runs on every pull request, every push to `main`,
+on demand (`workflow_dispatch`), and as a reusable workflow that the release
+workflow calls. Its jobs:
 
-- `docker build` builds both images.
-- `helm chart` runs `helm lint --strict` and `helm template` over
+- **`tests (shard N/4)`** — the unit and integration suite, against a real
+  PostgreSQL, OpenLDAP, Samba domain controller, MailDev and Vault dev server,
+  split by file into four shards, each on its own runner with its own
+  containers and scratch databases, running `pnpm test -- --shard=N/4`. One
+  red shard does not cancel the other three. Locally, `pnpm test` with no
+  argument is still the whole suite, unsharded.
+- **`typecheck, lint and console`** — the operational shell tools' own tests
+  (`bash -n` over `ops/syntra-update`, `ops/syntra-install` and
+  `ops/syntra-backup`, then `ops/syntra-update.test.sh` and
+  `ops/syntra-backup.test.sh`), `tsc -b`, `pnpm lint`, the console's
+  component tests and its production build. Run once, beside the shards,
+  since none of it needs a database.
+- **`tests`** — needs the shards and the checks job and is green only when
+  every one of them is, so there is still one `tests` status to require.
+- **`browser`** — the Playwright suite (`pnpm e2e`) against a running, seeded
+  stack; the report is uploaded as an artifact.
+- **`docker build`** builds both images (`apps/api/Dockerfile`,
+  `apps/web/Dockerfile`).
+- **`helm chart`** runs `helm lint --strict` and `helm template` over
   `deploy/helm/syntra/ci/*.yaml` and validates the output with kubeconform.
   It also checks that the chart refuses to render without a Secret, that the
-  backup script parses, and that the chart's copy of the alert rules matches
-  `ops/prometheus-alerts.yml`.
-- `openapi document` regenerates `docs/api/openapi.json` with
+  backup CronJob's script parses, and that the chart's copy of the alert
+  rules matches `ops/prometheus-alerts.yml`.
+- **`openapi document`** regenerates `apps/api/openapi.json` with
   `pnpm openapi:generate` and fails when the committed copy differs; the fix
-  it prints is to run the generator and commit the result.
+  it prints is to run the generator and commit the result
+  (`pnpm openapi:check` asks the same question locally).
 
 The suite shards and the browser job bring the infrastructure up with
 `infra/docker-compose.yml` rather than GitHub's `services:` (the shards also
@@ -1487,20 +1746,18 @@ two. The fix is fewer workers, forced through `SYNTRA_TEST_WORKERS`: four on
 an eight-core machine (0 crashes, 0 hook timeouts across three measured runs),
 two in this job specifically, because GitHub's standard runner is two vCPUs
 and four workers there trips a separate, hardcoded 60-second vitest RPC
-heartbeat timeout, unrelated to `hookTimeout`. The arithmetic, the RPC timeout,
-and why the number differs between a workstation and this runner are written
-up in `docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md`.
-Two workers is per runner, so it holds unchanged in each shard.
+heartbeat timeout, unrelated to `hookTimeout`. Two workers is per runner, so
+it holds unchanged in each shard.
 
 **Releases reuse a green run.** `.github/workflows/release.yml` refuses a tag
 whose commit is not reachable from `main`, then looks for a `ci.yml` run in
 this repository for exactly that commit, on `main`, from a `push` or
 `workflow_dispatch`, that completed with `success`. If it finds one it skips
 the suite and names that run in the log and the job summary; otherwise, or if
-the API call fails, it runs `ci.yml` in full as before. The release jobs run
-only when one of the two is green. A tag pushed while `main`'s own run is
-still going finds nothing and runs the suite. `security.yml` is not part of
-the release gate.
+the API call fails, it runs `ci.yml` in full. The release jobs run only when
+one of the two is green. A tag pushed while `main`'s own run is still going
+finds nothing and runs the suite. `security.yml` is not part of the release
+gate.
 
 ## Tests
 
@@ -1510,6 +1767,9 @@ pnpm test:watch                 # the same suite, watching
 pnpm --filter @syntra/web test  # web component tests
 pnpm e2e                        # browser tests against a running stack
 pnpm typecheck                  # tsc -b, no emit
+pnpm lint                       # eslint
+pnpm openapi:check              # the committed OpenAPI document matches the code
+pnpm privacy:inventory:check    # the committed data inventory matches the code
 ```
 
 The integration tests run against a real PostgreSQL in Docker. They are not
@@ -1711,8 +1971,8 @@ argon2, and the install looks clean until nothing can reach the database.
 **`pnpm db:reset` refuses to run.** It empties whichever database
 `DATABASE_URL` names, and refuses anything that is not a scratch
 `syntra_test_*` database unless you name the one you mean with
-`SYNTRA_ALLOW_RESET` — the development database and the lab's are both called
-`syntra`, and nothing about the connection string tells them apart:
+`SYNTRA_ALLOW_RESET` — the development database and a real deployment's are both
+called `syntra`, and nothing about the connection string tells them apart:
 `SYNTRA_ALLOW_RESET=syntra pnpm db:reset && pnpm seed`.
 
 **Suite hook timeouts / fsync-bound test runs.** See
@@ -1720,35 +1980,1714 @@ argon2, and the install looks clean until nothing can reach the database.
 count issue (`SYNTRA_TEST_WORKERS`) and its two different correct values on a
 workstation versus a two-vCPU CI runner.
 
+## Active Directory in practice
+
+What running against a real Windows domain teaches, written from a build that
+put Syntra behind HTTPS with an AD domain behind it, sync in both directions
+and SAML to a third-party application. None of these failures is obvious from
+its error message. Directory and target configuration itself is in
+[Configuration](configure.md#connecting-a-directory-source).
+
+### The host
+
+- **Writes to AD need LDAPS, so the domain controller needs a certificate.** A
+  target has no plaintext transport option at all. An enterprise CA is the
+  ordinary way to get one (`Install-AdcsCertificationAuthority -CAType
+  EnterpriseRootCA`, then `certutil -pulse` and a restart of `NTDS` rather
+  than waiting for auto-enrolment). Installing a CA changes the forest and is
+  not casually reversible; decide deliberately. Connect by the DC's
+  **hostname**, not its address: the certificate is issued to the name, and
+  verification fails against an IP.
+- **Node ignores the system CA store.** `update-ca-certificates` satisfies
+  `openssl` and `curl` and does nothing for Node, which carries its own
+  bundled list. LDAPS fails with *unable to verify the first certificate*
+  while `openssl s_client` against the same host verifies cleanly. Set
+  `NODE_EXTRA_CA_CERTS` to the CA's PEM (a unit drop-in with
+  `Environment=NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/<ca>.crt`
+  is the tidy way) — it is the only fix short of disabling verification.
+- **`.local` does not resolve on Linux by default.** `systemd-resolved` treats
+  `*.local` as multicast DNS and will not forward it to a unicast server, so
+  `dig @dc` answers and `getent hosts` does not. Turn it off:
+
+  ```ini
+  # /etc/systemd/resolved.conf.d/10-ad-local.conf
+  [Resolve]
+  MulticastDNS=no
+  LLMNR=no
+  ```
+
+- **Name the DC as the only resolver.** A public resolver listed beside it is
+  not a fallback: `systemd-resolved` treats every server on a link as
+  equivalent, switches between them freely, and whenever it settles on the
+  public one every internal lookup answers NXDOMAIN — LDAP and Kerberos fail
+  at random with nothing in any log. The DC forwards what it cannot answer.
+- **Publishing it.** Point the reverse proxy or tunnel at the API's port over
+  plain HTTP, with the `Host` header left untouched. An `https://` origin URL
+  in front of an HTTP origin, and a stale origin address, both show up as the
+  same `Request failed` at a tunnel connector.
+- **`TRUST_PROXY` must name the proxy or connector** (see
+  [Configuration](configure.md#trust_proxy-and-proxy-notes)). Without it every
+  request carries the proxy's address: source-address policy conditions match
+  everyone or nobody, and every per-IP rate limit is one bucket shared with
+  the internet.
+- **The tenant must claim the hostname it is reached on.** `syntra.example.com`
+  matches neither a `primaryDomain` of `example.com` nor the slug fallback
+  (which takes the leftmost label, `syntra`), and 404s as an unknown tenant —
+  which looks like a proxy fault. Make the public name the **primary** domain:
+  the SAML entity ID, the SSO endpoints and the WebAuthn relying party are
+  built from it, and SSO is served only there. Reaching Syntra by any other
+  name answers SAML with `421 wrong-protocol-host`, naming the right host.
+
+### The domain: subtrees and the service account
+
+Keep what Syntra reads and what it writes in **separate subtrees**, so a
+provisioning mistake cannot overwrite the directory being synced from:
+
+```
+DC=example,DC=local
+├── OU=Company            ← the directory source reads
+└── OU=Syntra             ← the provisioning target writes
+    ├── OU=Users
+    └── OU=Archive
+```
+
+The service account is **not** a Domain Admin. Full control over the write
+subtree only; reading the rest is what any authenticated account can already
+do, which is all the sync needs:
+
+```powershell
+dsacls "OU=Syntra,DC=example,DC=local" /I:T /G "EXAMPLE\svc-syntra:GA"
+(Get-ADUser svc-syntra -Properties MemberOf).MemberOf   # expect nothing
+```
+
+**Write-back** (a directory source's switches, described in
+[Configuration](configure.md#connecting-a-directory-source)) needs one more
+right for one switch. *Deactivating a user disables their account here* needs
+write access to `userAccountControl` — **on the OU the directory source reads,
+not only the one the target writes to.** Delegating it on the wrong one is
+silent: everything saves, and the first refusal arrives on the day somebody
+leaves. Scope it to the one attribute on the user class:
+
+```powershell
+Import-Module ActiveDirectory
+$sid      = (Get-ADUser -Identity "svc-syntra").SID
+$uacGuid  = [Guid]"bf967a68-0de6-11d0-a285-00aa003049e2"   # userAccountControl
+$userGuid = [Guid]"bf967aba-0de6-11d0-a285-00aa003049e2"   # the user class
+foreach ($ouDn in @("OU=Company,DC=example,DC=local", "OU=Syntra,DC=example,DC=local")) {
+  $ou  = [ADSI]"LDAP://$ouDn"
+  $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule(
+    $sid, "WriteProperty", "Allow", $uacGuid, "Descendents", $userGuid)
+  $ou.ObjectSecurity.AddAccessRule($ace)
+  $ou.CommitChanges()
+}
+(Get-Acl "AD:OU=Company,DC=example,DC=local").Access |
+  Where-Object { $_.IdentityReference -like "*svc-syntra*" }      # check it took
+```
+
+`GenericWrite` on the OU also works, and also lets the same credential rewrite
+everybody's group memberships. *Self-service password change writes through*
+needs **nothing extra**: Syntra changes a password by binding as the user,
+with the password they just typed. Do not grant the service account **Reset
+Password** to make that work — a bind credential that can reset any password
+in the OU is an account-takeover primitive sitting in a vault. The delete
+switch needs delete rights on the objects in scope, and is the one switch
+whose effect Syntra cannot undo.
+
+### What deactivating a directory-managed user does
+
+With the disable switch on, **Deactivate** on a directory-managed user:
+
+1. sets the disable bit in AD — immediately;
+2. marks the user inactive in Syntra and revokes every session and refresh
+   token;
+3. stamps an administrative departure on the linked person, which puts them
+   on the ordinary leaver ladder (entitlements revoked, archived, and deleted
+   by the domain's own sweep if you run one — below).
+
+The directory is written **first**. If AD refuses, nothing changes anywhere
+and the console says why. `disableGraceDays` is bypassed: it delays the
+disable after a *scheduled* departure, and a person pressing Deactivate means
+now. **Reactivate** reverses all three.
+
+Sync reads the bit too: an account disabled in AD is deactivated in Syntra on
+the next sync run, with the reason *Disabled in directory source, run <id>*,
+and the reactivate branch will not resurrect an account the source still
+reports disabled.
+
+### Passwords
+
+**A joiner's first password.** A person who arrives through directory sync or
+provisioning has a login and no Syntra password; Syntra verifies against its
+own hash and never binds to the directory to do it, so the domain password
+provisioning generated does nothing here. **Users → Accounts → the account →
+Password link** mints a link to copy: it lasts 24 hours, works once, and
+minting another (or the person requesting a self-service reset) kills the
+first. Every issuance is audited as `auth.password_setup_issued` with the
+administrator who minted it — the link is a bearer credential. It is refused
+for an account whose password lives at an upstream identity provider.
+
+**With password write-back on, the domain's policy applies, not only
+Syntra's.** A change the domain refuses is reported as refused by the
+directory, and the usual causes are:
+
+- **Minimum password age** — one day by default; a password set yesterday
+  cannot be changed today. That is the evidence the change is done as the
+  user rather than as an administrative reset, which would bypass it.
+- **Password history** — 24 by default.
+- **Complexity and length** — the domain's, checked after the tenant's own,
+  so an obviously weak password is refused before it costs a lockout attempt.
+  A wrong *current* password does count against the domain's lockout.
+
+If the DC is unreachable the change is refused with nothing changed — never
+applied locally, which would leave the person with two passwords.
+
+### Leavers: archive in Syntra, delete in the domain
+
+Provisioning never deletes anything at a target (see the
+[target rollback runbook](#what-cannot-be-undone)). On AD a leaver's account
+is disabled and then **archived** — moved into the target's archive container.
+What happens afterwards is the domain's decision, and running the deletion on
+the domain controller keeps the blast radius to one domain with the AD Recycle
+Bin as the safety net.
+
+**The archive OU must sit outside the directory source's search base**, as a
+sibling, not inside it:
+
+| | |
+|---|---|
+| Sync search base | `OU=Company,DC=example,DC=local` |
+| Archive container | `OU=Deactivated,DC=example,DC=local` |
+
+Provisioning moves the object to the archive; the object thereby leaves the
+sync's search base; the next sync run reads it as absent and proposes
+`deactivate_user`, reviewed and applied like any other change. Nest the
+archive inside the search base and none of this happens, and nothing errors.
+The archive must also be somewhere the service account can write — at the
+domain root it needs the OU delegated to it, or put the archive inside the
+subtree it already holds (`OU=Deactivated,OU=Syntra,…`), which is outside the
+sync base all the same. The refusal otherwise is `INSUFF_ACCESS_RIGHTS` on the
+move, and is correct.
+
+The repository ships a retention sweep for the domain controller, in
+[`ops/windows/`](../ops/windows/): `install-reap.ps1` (run once as a domain administrator: `-Domain`,
+`-ArchiveOu`, `-RetentionDays` default 30, `-MaxDeletesPerRun` default 25,
+`-Apply`) creates and protects the archive OU, **enables the AD Recycle Bin —
+which cannot be undone, and needs a 2008 R2 forest functional level** —
+installs `syntra-reap.ps1` into `C:\ProgramData\Syntra` and registers a daily
+task as SYSTEM. It installs in **dry run**: read
+`C:\ProgramData\Syntra\reap.log` for a few days, then re-run the installer
+with `-Apply`. Its rules:
+
+- The clock is a `syntra-reap-after=<date>` line the sweep writes into
+  `adminDescription` (not `info`, which holds Syntra's provenance note). On
+  first sight of an unstamped account the due date is `whenChanged` plus the
+  retention — **and never earlier than tomorrow**, so no account is deleted on
+  the run that first stamps it. A stamp that does not parse holds the account
+  forever rather than restarting its clock.
+- An **enabled** account in the archive is held (somebody put it back), as is
+  one **protected from accidental deletion**. More than `-MaxDeletesPerRun`
+  due at once deletes up to the cap and logs the rest.
+- A deletion is undone within the deleted-object lifetime with
+  `Get-ADObject -Filter 'SamAccountName -eq "<name>"' -IncludeDeletedObjects |
+  Restore-ADObject`; it comes back in its original OU.
+
+Point the target's archive container at the same OU and set the ladder's
+archive rung: `archiveAfterDays: 0` archives on the departure date so the
+whole retention runs in the OU; `archiveAfterDays: 7` with `-RetentionDays 23`
+gives the same total.
+
+### First runs against a small directory
+
+Two guard refusals meet everybody on a small or rebuilt directory. Both are
+the guard working.
+
+- *"the target returned no accounts at all, and a run has been applied against
+  it before"* is **not confirmable**: an empty target and an unreachable one
+  look identical. On a target whose accounts were deliberately removed by hand
+  after a successful run, the input is `TargetSystem.lastAppliedRunAt`, and
+  clearing that column (and only that — the runs and their audit events are
+  the record) states what is actually true: the target has no surviving
+  applied run.
+- *"would disable 1 of 4 active accounts (25.0%), above the 10% threshold"* is
+  confirmable, and on four people every leaver will trip it. Confirm it, or
+  raise the threshold deliberately (see [Safety thresholds](#safety-thresholds)).
+  Container moves share the archive axis, so the first run that places people
+  by org unit on a small tenant is held for the same reason. Raise thresholds
+  in advance, knowing which axis and why — not mid-incident because a run
+  skipped.
+
+### SAML to a third-party application: what goes wrong
+
+The service provider needs the IdP metadata URL
+`https://<primary domain>/saml/metadata/<application-id>` (or the entity ID
+`https://<primary domain>/saml/idp`, SSO `…/saml/sso`, SLO `…/saml/slo`).
+Application setup is in
+[Configuration](configure.md#signing-in-to-applications). Then:
+
+- **An assertion carries no attributes until claims are mapped.** Registering
+  the service provider is not enough: the `AttributeStatement` is empty, the
+  SP finds nothing to match on, and the sign-in fails with nothing in either
+  side's log. Map claims under the names **the service provider** documents
+  (`username`, `uid`, a full schema URI…), commonly `login`, `email` and
+  `displayName`.
+- **The account must exist on both sides under the same name.** Most SPs match
+  on the username, not the NameID email. `a.brennan` here and `abrennan`
+  there fails silently: the assertion validates, no user matches, the browser
+  lands on the login page. Fix it in the directory (the `sAMAccountName`), so
+  the two agree permanently.
+- **`wantAuthnRequestsSigned` defaults to true** and is refused without the
+  SP's certificate to check against. Turn it off only for an SP that does not
+  sign.
+- **Portal tiles.** With *Allow sign-in started from Syntra* on, the tile
+  posts an assertion straight to the SP. Off (the default), the tile opens the
+  application's launch address, which must be the SP's own SSO start page;
+  with neither, the tile answers `409 not-launchable`.
+- **Testing without a browser.** `GET /saml/start/<application-id>` with an
+  administrator's session returns the IdP-initiated form; post its
+  `SAMLResponse` to the SP's ACS, then **follow the SP's redirect to its own
+  login route** — several SPs only establish the session there, so a test
+  that stops at the ACS reads a working handshake as a rejection. Do not use
+  `curl -L` (it re-POSTs into a GET route), and generate a fresh assertion for
+  every attempt: they are single-use.
+
+**Mail addresses come from the directory.** An account synced with `mail`
+set to `user@example.local` is mailed there, and a real mail server will not
+accept it. Fix `mail` in AD and re-run the sync — the source owns the field.
+Links inside mail come from `PUBLIC_URL`, which must be the external name.
+
 ## Runbooks
 
-Step-by-step procedures for the situations this page describes, written
-against the scripts and routes in this repository, live under
-[`docs/runbooks/`](runbooks/README.md):
+Step-by-step procedures for a running deployment. Each says when to reach for
+it, the exact commands and console screens, how to verify the result, how to
+back out, and what it deliberately does not cover. Where the product has no
+capability a procedure needs, the runbook says so rather than inventing one.
+The deployment shapes they name are the three described under
+[Upgrades](#upgrades).
 
-- [Backup and restore](runbooks/backup-and-restore.md) — the `syntra-backup`
-  procedures, a restore rehearsal in isolation, and a before/after
-  reconciliation checklist.
-- [Master-key recovery](runbooks/master-key-recovery.md) — a wrong or lost
-  `MASTER_KEY`, the fingerprint refusal, and the full list of secrets that
-  would have to be re-entered.
-- [Database migration](runbooks/database-migration.md) — the release layout,
-  compose and Helm paths, the migration-name floor, and rollback by restore.
-- [Secret rotation](runbooks/secret-rotation.md) — every rotatable secret and
-  what rotating it does to sessions and integrations.
-- [Incident response](runbooks/incident-response.md) — severity, the first
-  fifteen minutes, evidence capture, and which alert leads where.
-- [Target rollback](runbooks/target-rollback.md) — stopping a target, blocked
-  and partial runs, reverting a mover, and what cannot be undone.
-- [Tabletop exercises](runbooks/tabletop-exercises.md) — four rehearsed
-  incidents with scorecards.
-- [Queue recovery](runbooks/queue-recovery.md) — orphaned, stuck, delayed,
-  duplicated and poisoned background work, and the Operations page's repairs.
+### On-call quick reference
+
+Every rule in `ops/prometheus-alerts.yml`, and where it leads:
+
+| Alert | Fires on | Severity | Go to |
+|---|---|---|---|
+| `SyntraNotReady` | `syntra_readiness == 0` for 5m | critical | [Incident response: not ready](#not-ready), then by failing probe: `database` or `migrations`, [database migration](#runbook-database-migration); `vault` or `key-management`, [master-key recovery](#runbook-master-key-recovery); `web`, [the web probe](#the-web-probe) |
+| `SyntraSchedulerDown` | `syntra_scheduler_running == 0` for 10m | critical | [Scheduler unavailable](#scheduler-unavailable) |
+| `SyntraUndeliveredLogout` | `syntra_logout_deliveries_abandoned > 0` for 5m | critical | [An abandoned delivery](#an-abandoned-delivery): a relying party was never told an account ended |
+| `SyntraLifecycleServiceLevelBreached` | `syntra_lifecycle_operations_slo_breached > 0` for 1m | critical | [Lifecycle work alerts](#lifecycle-work-alerts); for an urgent leaver, [exercise 4](#exercise-4-an-urgent-leaver-during-an-outage) is the drill. The operation page names the breach and who it was escalated to |
+| `SyntraLifecycleWorkOverdue` | `syntra_lifecycle_operations_overdue > 0` for 15m | warning | [Lifecycle work alerts](#lifecycle-work-alerts); the queue is **Employee work** |
+| `SyntraLifecycleWorkFailed` | `syntra_lifecycle_operations_failed > 0` for 5m | warning | [Lifecycle work alerts](#lifecycle-work-alerts); for a target-side cause, [target rollback](#runbook-target-rollback) |
+| `SyntraLifecycleApprovalsWaiting` | `syntra_lifecycle_operations_awaiting_approval > 0` for 4h | warning | Somebody with `provision.manage` other than the requester opens the operation and approves or rejects |
+| `SyntraLifecycleBacklogAging` | `syntra_lifecycle_oldest_unresolved_age_seconds > 2d` for 30m | warning | [Lifecycle work alerts](#lifecycle-work-alerts): **Employee work**, oldest first |
+| `SyntraTenantSaturated` | `syntra_lifecycle_receipts_deferred > 0` for 15m | warning | Raise the cap in **Lifecycle policy**, or wait: deferred receipts retry every 30 s |
+| `SyntraProvisioningRunsFailing` | `syntra_provision_runs_failed_24h > 0` for 5m | warning | [Target rollback](#runbook-target-rollback); an expired credential shows here first ([exercise 1](#exercise-1-expired-entra-client-secret)) |
+| `SyntraProvisioningRetriesExhausted` | `syntra_provision_actions_pending_retry > 0` for 30m | warning | [Target rollback: a credential or target that stopped working](#a-credential-or-target-that-stopped-working) |
+| `SyntraTargetStale` | `syntra_targets_stale > 0` for 1h | warning | [Target rollback](#runbook-target-rollback) |
+| `SyntraReadinessEvidenceStale` | `syntra_target_readiness_age_seconds > 7d` for 1h | warning | **Test connection** on the target; [secret rotation](#runbook-secret-rotation) if it fails |
+| `SyntraUndeliveredWebhook` | `syntra_webhook_deliveries_abandoned > 0` for 15m | warning | [An abandoned delivery](#an-abandoned-delivery) |
+| `SyntraSigningKeyExpiring` | `syntra_signing_key_expires_in_seconds < 7d` for 1h | warning | [Secret rotation: signing keys](#signing-keys) |
+| `SyntraJobQueueDeep` | `syntra_jobs_pending > 500` for 15m | warning | [Queue recovery: the queue is behind](#the-queue-is-behind) |
+| `SyntraJobsOrphaned`, `SyntraJobsStuck`, `SyntraJobsPoisoned`, `SyntraJobsDelayed`, `SyntraJobsDuplicated`, `SyntraJobHealthBlind` | `syntra_job_health_findings{finding=…}`, `syntra_job_queue_readable` | warning | [Queue recovery](#runbook-queue-recovery); each tenant's **Operations** page names the work and offers the safe repair |
+
+Worth a rule of your own: the rate of `syntra_accounts_locked` (credential
+stuffing, or a broken upstream password change) and `syntra_jobs_pending`
+**absent** (the scheduler has never run in this process).
+
+Where things are, when you need them:
+
+- **Readiness** — `GET /health/ready`, unauthenticated:
+  `{ ready, version, probes: [{ name, status, detail }] }`, probes
+  `database`, `migrations`, `vault`, `key-management` and `web`. A failing
+  probe's detail is redacted to `this check did not pass` on the wire; the
+  cause is in the process log. A probe slower than five seconds fails. `GET
+  /health` is liveness only and answers 200 with the database down.
+- **Incidents** — **Activity → Attention** (`/admin/activity?tab=attention`),
+  or `GET /api/admin/incidents` (`audit.read`). See
+  [What is broken: incidents](#what-is-broken-incidents).
+- **Tenant status** — **Operations → Service status**, `GET
+  /api/admin/status`; deployment-wide, `GET /api/admin/deployment/status`
+  (`deployment.manage`). See [Status reporting](#status-reporting).
+- **Audit log** — **Activity → All events**, or
+  `GET /api/admin/audit?limit=200&before=<sequence>&subject=<uuid>`, newest
+  first, `chainValid` on every page.
+- **Process logs** — release layout `journalctl -u syntra`; compose `docker
+  compose logs api`; Helm `kubectl -n <namespace> logs deploy/<release>-api`.
+- **Backups** — `/opt/syntra/bin/syntra-backup list`; failed runs in
+  `journalctl -p err -t syntra-backup --since -7d --no-pager`.
+- **Update state** — `/opt/syntra/var/update.status`, or **Updates** in the
+  console.
+
+### Runbook: incident response
+
+The starting point when something is wrong and the cause is not yet known:
+an alert fires, **Activity → Attention** lists something critical, people
+cannot sign in or a joiner, mover or leaver did not get what they should, or a
+backup, update or restore did not end as it should. You need the host or
+cluster (journal, `docker compose`, `kubectl`), an administrator with
+`audit.read` (`provision.manage` and `deployment.manage` to act), and
+somewhere to write the timeline as it happens.
+
+**Severity.**
+
+| Level | Definition | Examples | Response |
+|---|---|---|---|
+| **SEV1** | Syntra cannot do its job for everyone, or a control that revokes access has failed | `SyntraNotReady`; `SyntraUndeliveredLogout`; sign-in down for all tenants; a leaver's access provably live past its due date | Page now; work it until resolved; communicate every 30 minutes |
+| **SEV2** | One function down or degraded for a tenant or a target | A target's runs all fail; an HR import fails; one webhook receiver abandoned; a mover stopped by a threshold | Within the hour; communicate at start and end |
+| **SEV3** | Something gave up that has a manual path | One delegated task failing; one notification undelivered; a run held for confirmation | Next working day |
+
+A SEV3 that recurs is a SEV2. A leaver is at least SEV2 while their access is
+not confirmed revoked.
+
+#### The first fifteen minutes
+
+1. **What does the product think is wrong?** `curl -s
+   http://127.0.0.1:3000/health/ready`, then **Activity → Attention** (or `GET
+   /api/admin/incidents`) — critical first, then most recent, each with a link
+   into the console. **Acknowledge** what you are taking, with a note, so the
+   next person sees it is handled.
+2. **What changed?** `GET /api/admin/audit?limit=50`, or **Activity → All
+   events**: look for `deployment.*`, `provision.*`, `policy.*`,
+   `tenant.settings_updated`, `notify.*`. On the release layout, `cat
+   /opt/syntra/var/update.status` — an update in the last hour is the prime
+   suspect.
+3. **Stop the bleeding, not the product.** The levers in
+   [target rollback](#stopping-a-target) stop a target without losing state.
+   When you cannot yet say which target is wrong, press **Stop writes** on
+   **Target systems → Tenant-wide external writes**: no connector writes
+   anywhere until a second administrator resumes it or its expiry passes, and
+   everything else keeps running. Do not restore a backup, disable a directory
+   source or rotate a key in the first fifteen minutes unless the failure is
+   exactly that.
+4. **Declare the severity and open the record**: timestamp, what was seen, who
+   is working it.
+5. **Communicate** (below).
+
+#### Not ready
+
+`SyntraNotReady`: `syntra_readiness == 0` for five minutes. Read which probe
+failed, then the unredacted cause:
+
+```bash
+curl -s http://127.0.0.1:3000/health/ready | tr ',' '\n'
+journalctl -u syntra -n 200 --no-pager
+```
+
+| Probe | Meaning | Go to |
+|---|---|---|
+| `database` | This process cannot reach Postgres with its own credentials | The container or service (`docker ps`, `docker compose ps`, `kubectl get pods`), then credentials ([database role passwords](#database-role-passwords)) |
+| `migrations` | Schema behind the code, or a migration half-applied | [Database migration](#runbook-database-migration) |
+| `vault` | The master key does not unseal a signing key | [Master-key recovery](#runbook-master-key-recovery) |
+| `key-management` | The external key provider (Vault Transit, AWS KMS) is not answering or refusing | [An external provider refuses](#an-external-key-provider-refuses) |
+| `web` | `WEB_ROOT` set but no build there | [The web probe](#the-web-probe) |
+
+#### The web probe
+
+Only on a single-process deployment with `WEB_ROOT` set. The API refuses to
+start on a path that is not a build, so this fails at runtime only if the
+bundle vanished after start — for example a rollback that relinked `current`
+while `WEB_ROOT` was an absolute path into the old release (`syntra-install`
+rewrites `WEB_ROOT` at conversion for this reason). Fix the path in
+`shared/.env`, restart.
+
+#### Lifecycle work alerts
+
+`SyntraLifecycleWorkOverdue`, `SyntraLifecycleWorkFailed`,
+`SyntraLifecycleBacklogAging`, `SyntraLifecycleServiceLevelBreached`. The
+queue is **Employee work** (`/admin/employee-work`, `GET
+/api/admin/employee-work`), filterable by onboarding, offboarding and failed.
+Each row links to the person and, for a lifecycle operation, to
+`/admin/lifecycle-operations/:id`, where the operator can **Acknowledge
+work**, **Retry operation** (which also re-queues the operation's unapplied
+target receipts, and refuses with 503 while the scheduler is down rather than
+pretending), **Record observed state**, and close it with a reason.
+
+Metrics carry no tenant label; the queue is how you find the owner and
+record. The overdue alert counts operations with an owner and a past due
+date. Assigning one (`PATCH /api/admin/lifecycle-operations/:id/assignment`
+with `ownerUserId`, `priority`, `dueAt`) queues a `lifecycle-assigned` mail,
+and the hourly `lifecycle.maintenance` job mails owners about failed and
+overdue work, once per operation.
+
+#### An abandoned delivery
+
+`SyntraUndeliveredLogout`: a back-channel logout was never delivered, so a
+relying party still believes an ended session is live. There is no retry for
+logout deliveries; the compensating action is at the relying party (end the
+session there by hand), and the incident record must name which one.
+`syntra_logout_deliveries_abandoned` says how many; the `LogoutDelivery`
+table says which.
+
+`SyntraUndeliveredWebhook`, and `webhook_undelivered` among the incidents, is
+the webhook counterpart: `GET /api/admin/webhooks/:id/deliveries` shows them
+and `POST /api/admin/webhooks/:id/deliveries/:deliveryId/retry` retries one.
+Once handled, **Resolve** the incident so the next failure brings it back.
+
+#### Scheduler unavailable
+
+`scheduler_unavailable` at the top of the incidents, `SyntraSchedulerDown`,
+`syntra_jobs_pending` absent. Nothing scheduled runs: no provisioning, sync,
+retries, lifecycle maintenance or OIDC key rotation, and routes that need the
+scheduler answer `503 scheduler-unavailable`. The API retries starting it;
+read the log for the pg-boss error. It is almost always the database —
+permissions on the `pgboss` schema, or a restore that dropped it. Restart the
+API once the cause is fixed. An urgent leaver in the meantime is
+[exercise 4](#exercise-4-an-urgent-leaver-during-an-outage).
+
+#### Sign-in failing
+
+- Password sign-in works, SSO does not: the vault (signing keys) — treat it as
+  [Not ready](#not-ready) even if the alert has not fired.
+- Everything 404s: the `Host` header is not a tenant's name. Check
+  `PUBLIC_URL`, the proxy, and **Settings → Sign-in → Address** (*Also answers
+  on*).
+- Lockouts climbing (`syntra_accounts_locked`): `auth.lockout` in the audit
+  log. Failures from one address are an attack; from many users at once, a
+  broken upstream password change.
+
+#### Communication
+
+- **Who**: the operations channel; tenant administrators for anything they
+  will see; application owners for SSO or webhook failures; HR for anything
+  touching joiners, movers or leavers.
+- **What**: severity, what is affected, what is not, the next update time.
+  Never the cause until it is known.
+- **Cadence**: SEV1 every 30 minutes; SEV2 at start, at any change of plan,
+  and at close.
+- **Close**: what happened, what was lost (an audit gap after a restore,
+  abandoned deliveries), what remains to be done by hand (relying-party
+  sessions, TOTP re-enrolment, SP metadata), and where the record is.
+
+Syntra has no public status page; tenant administrators can read their own
+**Operations → Service status**.
+
+#### Evidence capture
+
+Capture before fixing where the fix would overwrite the evidence.
+
+| Evidence | How |
+|---|---|
+| Readiness | `curl -s http://127.0.0.1:3000/health/ready > ready-$(date -u +%Y%m%dT%H%M%SZ).json` |
+| Incidents | `GET /api/admin/incidents`, saved as JSON |
+| Audit log | An `audit_log` export (**Export these results** on the audit search), or `GET /api/admin/audit?limit=200` paged backwards with `before=`; repeat `subject=<uuid>` for one person and their accounts, or `correlation=<id>` for one request |
+| Process log | `journalctl -u syntra --since '-2h' --no-pager > syntra.log`; `docker compose logs --since 2h api > api.log`; `kubectl -n <ns> logs deploy/<release>-api --since=2h` |
+| Backup and update state | `syntra-backup list`; `cat /opt/syntra/var/update.status`; `journalctl -p err -t syntra-backup --since -7d` |
+| Metrics | `curl -s -H "Authorization: Bearer $METRICS_TOKEN" http://127.0.0.1:3000/metrics > metrics.txt` |
+| A run's plan | `GET /api/admin/targets/:id/runs/:runId` |
+| A person's state | `GET /api/admin/persons/:id`, `/access`, `/offboarding`, `/provision-receipts` |
+| Background work | `GET /api/admin/job-health`; for a support case, a [support bundle](#support-bundles) |
+| Database counts | The [reconciliation queries](#reconciliation-checklist) |
+
+The audit log is append-only and hash-chained; note `chainValid` in the
+record. A `false` with `brokenAtSequence` is its own SEV1.
+
+#### Closing an incident
+
+- The triggering signal has cleared: a condition clears itself once fixed; an
+  event (a failed run, an undelivered webhook) is **Resolved** by someone with
+  the area's management permission.
+- `/health/ready` is ready and `syntra_readiness` is 1.
+- Any lifecycle operation involved reads `completed`.
+- The record names every compensating action taken outside Syntra.
+
+Incident response is not itself a change; the rollbacks belong to the runbooks
+it sends you to. If something done during the incident made things worse,
+record it as its own event before undoing it. Forensic preservation, legal
+notification and alert routing (Alertmanager) are outside this runbook.
+
+### Runbook: backup and restore
+
+Take a backup known to be restorable, prove it, restore it, and reconcile what
+came back. Use it before any change you cannot otherwise undo (a migration, a
+bulk import, a first run against a large target, a key rotation), on the
+schedule, when the database is lost or changed beyond the product's own
+controls, and as a rehearsal before the first real restore is needed. The
+tool is described under [Backups](#backups).
+
+**Needs:** the release layout (`syntra-backup` reads
+`/opt/syntra/shared/.env`, runs `pg_dump` inside the `PG_CONTAINER`
+container, and stops the `syntra` unit to restore — other shapes are
+[below](#compose-and-helm-backups)); root on the host; a role that bypasses
+row-level security (the tool uses the user in `SUPERUSER_DATABASE_URL`,
+otherwise a role named after the database — a dump taken as `syntra_app` is a
+valid archive of no rows, and the tool refuses it); disk for
+`SYNTRA_BACKUP_KEEP` copies; and `MASTER_KEY` kept somewhere other than this
+host. For a host whose `shared/.env` is not the source of truth the tool
+honours `SYNTRA_ROOT`, `SYNTRA_SERVICE`, `SYNTRA_PG_CONTAINER`,
+`SYNTRA_PG_ROLE`, `SYNTRA_PG_DB`, `SYNTRA_DATABASE_URL`,
+`SYNTRA_SUPERUSER_DATABASE_URL` and `SYNTRA_MASTER_KEY`.
+
+#### Taking and proving a backup
+
+```bash
+/opt/syntra/bin/syntra-backup create
+/opt/syntra/bin/syntra-backup list          # NAME SIZE VERSION TABLES KEY
+/opt/syntra/bin/syntra-backup verify        # the newest; or: verify <name>
+```
+
+`create` dumps with `pg_dump -Fc` into `<name>.partial/`, checks the archive
+starts with `PGDMP` and lists at least one `TABLE DATA` section, writes
+`manifest.json` (time, running version, database, section and byte counts,
+the salted key fingerprint), then renames it into place. An interrupted one
+stays `.partial`, which `list` shows as `INCOMPLETE` and `restore` refuses.
+`KEY` is `ok` when the fingerprint matches the running key, `MISMATCH` when it
+does not, `unknown` when either side could not be read.
+
+`verify` restores into a scratch `syntra_verify_<pid>` database in the same
+container, runs `ANALYZE`, counts tables and rows, and drops it on exit —
+`verified <name> -- N tables, ~M rows, restored and dropped`. Zero is a
+failure. Record the figure with the backup's name: it is the first number a
+reconciliation compares against.
+
+#### Restoring the live database
+
+This replaces the live database and stops the service while it does.
+
+1. **Take a backup of the current state first** (`syntra-backup create`), so
+   the state you are leaving is itself a named backup you can return to.
+2. **Capture the before state** with the
+   [reconciliation queries](#reconciliation-checklist).
+3. **Confirm the key.** `syntra-backup list` must show `KEY ok` for the backup
+   you mean to restore. `MISMATCH`: stop, and go to
+   [master-key recovery](#a-restore-refuses-over-the-fingerprint). Do not
+   reach for `--accept-secret-loss` as a first response.
+4. **Tell people.** Sign-in and every SSO flow stop for the duration.
+5. **Restore:** `/opt/syntra/bin/syntra-backup restore <name> --yes`. It
+   re-checks the archive, compares fingerprints, stops `syntra`, drops and
+   recreates `public`, runs `pg_restore --clean --if-exists`, counts tables
+   and rows, and only then starts `syntra`. If nothing arrived it says so and
+   **leaves the service stopped**, with the dump untouched at
+   `/opt/syntra/backups/<name>/database.dump`.
+6. **Wait for readiness:** every probe in `curl -s
+   http://127.0.0.1:3000/health/ready` is `pass` or `skip`. `vault` failing
+   means this host's key is not the one the backup was sealed under.
+7. **Reconcile** — the after-state queries and the product checks below.
+
+**A backup older than the running release** leaves the `migrations` probe
+reporting pending migrations; the service starts, and the first request that
+touches a missing column fails. Apply migrations
+([database migration](#runbook-database-migration)) or roll the code back to
+the version in `manifest.json`. Do not serve traffic on a half-matched schema.
+`syntra-backup restore` drops only `public`; if the pg-boss schema changed
+between the two releases, `DROP SCHEMA pgboss CASCADE` by hand before starting
+the service.
+
+**If `restore` left the service stopped** because nothing arrived, the live
+database is empty and the dump intact: restore it by hand with the
+`pg_restore` line from the rehearsal below pointed at the live database, check
+the counts yourself, then `systemctl start syntra`.
+
+#### Rehearsing a restore in isolation
+
+Restore somewhere the live deployment cannot be reached from, then reconcile
+as you would for real. Use a second host, or on the same host a separate
+root, unit, port and database (`/opt/syntra-rehearsal`, `syntra-rehearsal`,
+3999, `syntra_rehearsal`; `ops/rehearsal/README.md` uses the same separation
+for the updater).
+
+```bash
+mkdir -p /opt/syntra-rehearsal/backups
+cp -a /opt/syntra/backups/<name> /opt/syntra-rehearsal/backups/      # the directory, so the manifest travels
+docker exec <PG_CONTAINER> createdb -U <PG_ROLE> syntra_rehearsal
+docker exec -i <PG_CONTAINER> psql -v ON_ERROR_STOP=1 -U <PG_ROLE> -d syntra_rehearsal \
+  -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;'
+docker exec -i <PG_CONTAINER> pg_restore -U <PG_ROLE> -d syntra_rehearsal --clean --if-exists \
+  < /opt/syntra-rehearsal/backups/<name>/database.dump
+```
+
+`pg_restore` exits non-zero on ownership notices; what arrived is the test,
+not its status. (To prove restorability only, `SYNTRA_ROOT=/opt/syntra-rehearsal
+SYNTRA_PG_CONTAINER=… SYNTRA_PG_ROLE=… SYNTRA_PG_DB=syntra_rehearsal
+syntra-backup verify <name>` does the restore-count-drop cycle for you.)
+
+To run an API against it: a copy of `shared/.env` with `DATABASE_URL` naming
+`syntra_rehearsal`, `PORT=3999`, the **same** `MASTER_KEY`, a `PUBLIC_URL`
+nothing real resolves to, and `SMTP_URL` pointed at a sink so it cannot mail
+anybody. **Clear every target's schedule first** or the rehearsal runs real
+provisioning against real directories. The safest rehearsal starts the API
+and reads. Check readiness on 3999, reconcile, then stop the unit, `dropdb
+syntra_rehearsal` and remove the copy. Write down the date, the backup, the
+`tables/rows` figure and any discrepancy: a rehearsal that was not written
+down did not happen.
+
+#### Reconciliation checklist
+
+Run before a restore (against the live database) and after (against the
+restored one), as the RLS-bypassing role — otherwise every count is zero.
+They only read.
+
+```bash
+docker exec -i <PG_CONTAINER> psql -U <PG_ROLE> -d <PG_DB> -tA <<'SQL'
+SELECT 'tenants',              count(*) FROM "Tenant";
+SELECT 'persons',              count(*) FROM "Person";
+SELECT 'persons_active',       count(*) FROM "Person" WHERE status = 'active';
+SELECT 'contracts',            count(*) FROM "Contract";
+SELECT 'users',                count(*) FROM "User";
+SELECT 'target_systems',       count(*) FROM "TargetSystem";
+SELECT 'target_accounts',      count(*) FROM "TargetAccount";
+SELECT 'account_entitlements', count(*) FROM "AccountEntitlement";
+SELECT 'lifecycle_ops',        count(*) FROM "LifecycleOperation";
+SELECT 'lifecycle_unresolved', count(*) FROM "LifecycleOperation" WHERE status NOT IN ('completed','cancelled');
+SELECT 'provision_runs',       count(*) FROM "ProvisionRun";
+SELECT 'provision_actions',    count(*) FROM "ProvisionAction";
+SELECT 'secrets',              count(*) FROM "Secret";
+SELECT 'audit_events',         count(*) FROM "AuditEvent";
+SELECT 'audit_max_sequence',   coalesce(max(sequence),0) FROM "AuditEvent";
+SELECT 'audit_newest',         coalesce(max("occurredAt")::text,'') FROM "AuditEvent";
+SELECT 'migrations_applied',   count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;
+SQL
+```
+
+Keep a before/after table of these. For a restore every difference should be
+"what happened between the backup and now"; anything else is a question to
+answer before serving traffic. The audit gap in particular goes into the
+incident record: those events are gone, and the chain resumes from the
+restored sequence. Then:
+
+1. `GET /health/ready` is ready; `vault` is `pass` (or `skip` on an empty
+   install).
+2. `GET /api/admin/audit?limit=1` returns `chainValid: true`.
+3. **Activity → Attention** lists nothing you cannot explain. A restore that
+   brings back an old failure is normal if the fix came after the backup.
+4. **Target systems → a target → Test connection** passes: it proves the key
+   works for the secret you care about.
+5. One SAML or OIDC sign-in succeeds. Signing keys are vault rows; password
+   sign-in keeps working with a broken vault and proves nothing.
+6. Before running any target, read its plan: accounts written between the
+   backup and the restore are at the target and not in the backup, and Syntra
+   should catch up with the target rather than pull it back.
+7. If tenants were erased after the backup was taken, erase them again
+   before serving traffic ([Deleted tenants and backups](#deleted-tenants-and-backups)).
+
+#### Compose and Helm backups
+
+**Compose.** There is no backup tool for it; take the dump with the same
+checks the tool makes, and keep the Syntra version beside it by hand:
+
+```bash
+docker compose exec -T postgres pg_dump -U syntra -d syntra -Fc > syntra-$(date -u +%Y%m%dT%H%M%SZ).dump
+head -c 5 syntra-<stamp>.dump | grep -q PGDMP && echo archive-ok
+docker compose exec -T postgres pg_restore -l < syntra-<stamp>.dump | grep -c 'TABLE DATA'
+```
+
+Restore: `docker compose stop api web`, drop and recreate `public`,
+`pg_restore --clean --if-exists` through `docker compose exec -T postgres`,
+reconcile, `docker compose up -d`. The `api` container migrates on start, so a
+dump older than the image is brought forward on the way up.
+
+**Helm.** Managed-Postgres point-in-time recovery, or the chart's backup
+CronJob, restored as described under
+[Backups in Kubernetes](#backups-in-kubernetes). Record the chart's image tag
+beside every backup.
+
+Not covered: point-in-time recovery (this is `pg_dump`); getting backups off
+the host (point `rsync`, `restic` or an object-store client at the directory);
+keeping `MASTER_KEY` (a separate procedure with a separate custodian); and the
+target side — accounts in AD or Entra are not in the backup.
+
+### Runbook: master-key recovery
+
+When `MASTER_KEY` is missing, wrong, or not the key a backup was taken under
+— or, with Vault Transit or AWS KMS holding the master key, when that provider
+stops unwrapping. **Read the whole of this before acting**: the wrong move is a
+restore that reports success and has quietly made every stored credential
+unusable.
+
+The facts:
+
+- `MASTER_KEY` is 32 random bytes, base64, from the environment (`shared/.env`,
+  the compose environment, the Helm Secret). The API refuses to start without
+  a well-formed one unless an external provider is configured.
+- It is never stored in the database. A backup's manifest records a salted
+  SHA-256 fingerprint and nothing else (with an external provider, a
+  fingerprint of the key reference).
+- Every stored secret is a `Secret` row sealed with its own data key; the data
+  key is wrapped by the provider `MASTER_KEY_PROVIDER` names — `local` under
+  `MASTER_KEY` with AES-256-GCM, or `vault-transit` / `aws-kms`
+  ([Configuration](configure.md#key-management)). Every one authenticates, so
+  a wrong key is a loud error, not garbage.
+- **`pnpm rekey --status`** counts rows per provider and key version per
+  tenant without calling any KMS. Run it first in every procedure below.
+- `/health/ready`'s `vault` probe unseals one active signing key per tenant;
+  its `key-management` probe wraps and unwraps a canary with the provider,
+  bypassing the cache.
+
+**What lives under the key**, and what re-entering it means if the key is
+gone for good:
+
+| Secret | How to re-enter |
+|---|---|
+| Provisioning target credential (AD bind password, SCIM token, Entra/HTTP client secret) | **Target systems → the target**, credential field, Save; or `PATCH /api/admin/targets/:id` with `bindPassword` |
+| Directory source bind password | **Sources → the source**; or `PATCH /api/admin/sources/:id` |
+| HR feed credential | **Sources → the person source**; or `PATCH /api/admin/person-sources/:id` |
+| Upstream identity provider client secret | Re-create the upstream through its API |
+| SAML and OIDC signing keys | New keys must be minted. OIDC rotates monthly on the scheduler; SAML has no console button (`rotateKey(tenantId, provider, 'saml')` in `packages/core/src/keys/signing-key-service.ts`), and every SP that pinned the old certificate needs new metadata |
+| Webhook signing secrets | `POST /api/admin/webhooks/:id/secret`, then give it to the receiver |
+| TOTP secrets | Users re-enrol; remove the dead factor with `DELETE /api/admin/users/:id/factors/:type` |
+| Federation PKCE verifiers | Transient; in-flight sign-ins fail once |
+| Initial passwords sealed for delivery | Not recoverable; the account gets a new one on the next create or reset |
+
+The `Secret` table's `name` column is the complete inventory:
+`SELECT "tenantId", name FROM "Secret" ORDER BY 1,2` as the RLS-bypassing
+role.
+
+#### The key is wrong, not lost
+
+The common case: a rebuilt host, a copied `.env` with a fresh placeholder, a
+recreated Helm Secret.
+
+1. Confirm: `vault` is `fail` on `/health/ready`, and the log says why
+   (`journalctl -u syntra -n 200 --no-pager | grep -i vault`).
+2. Compare without exposing the key: `syntra-backup list` shows `KEY ok`
+   beside backups taken under the running key. Every recent backup showing
+   `MISMATCH` means the running key is the odd one out.
+3. Put the original back: release layout, edit `/opt/syntra/shared/.env` and
+   `systemctl restart syntra`; compose, export it and `docker compose up -d
+   api`; Helm, update the Secret and restart the `api` Deployment.
+4. Verify (below).
+
+**Never "fix" a mismatch by generating a new key.** A new key runs, passes
+every probe on a fresh install, and unseals nothing that already exists.
+
+#### A restore refuses over the fingerprint
+
+`syntra-backup: this backup was taken under a different MASTER_KEY` is the
+control working. Do not add `--accept-secret-loss`. The fingerprint is
+`sha256(salt || key)` with the fixed salt `syntra-backup-fingerprint-v1`, so
+any candidate key can be checked against the manifest without restoring:
+
+```bash
+printf '%s%s' 'syntra-backup-fingerprint-v1' "$CANDIDATE_KEY" | sha256sum
+# compare with masterKeyFingerprint in /opt/syntra/backups/<name>/manifest.json
+```
+
+Install the matching key as above, then [restore](#restoring-the-live-database)
+normally.
+
+#### An external key provider refuses
+
+With `vault-transit` or `aws-kms` the key cannot be wrong in `.env`; access to
+it is what fails. The wire answer is redacted; the journal keeps the
+provider's own error:
+
+```bash
+journalctl -u syntra -n 200 --no-pager | grep -iE 'key-management|master-key provider'
+```
+
+| Error | Means | Fix |
+|---|---|---|
+| `vault-transit: … did not answer` | Vault unreachable (network, DNS, TLS) | Restore the path; check `VAULT_ADDR`, `NODE_EXTRA_CA_CERTS` |
+| `vault-transit: … HTTP 503: Vault is sealed` | Sealed after a restart | Unseal Vault |
+| `vault-transit: … HTTP 403: permission denied` | Token expired or revoked, AppRole secret id expired, policy changed | New `VAULT_SECRET_ID` / `VAULT_TOKEN`; restore the policy ([Configuration](configure.md#what-each-provider-needs)) |
+| `vault-transit: … HTTP 400: … disallowed by policy (too old)` | The row's key version was retired | `pnpm rekey --status`; lower `min_decryption_version`, rekey, raise it again |
+| `vault-transit: … HTTP 400: … message authentication failed` | The row is under a different Transit key, or was copied from another tenant | Configure the key `rekey --status` names as `VAULT_TRANSIT_PREVIOUS_KEY`; a row copied between tenants is tampering — open an incident |
+| `aws-kms: … AccessDeniedException` | The role lost `kms:Encrypt` / `Decrypt` / `GenerateDataKey`, or the key policy changed | Restore the grant |
+| `aws-kms: … DisabledException` | The key was disabled | `aws kms enable-key` |
+| `aws-kms: … KMSInvalidStateException` | Pending deletion | `aws kms cancel-key-deletion`, then enable — only within the waiting period |
+| `aws-kms: … IncorrectKeyException` | Rows sealed under a different key than `AWS_KMS_KEY_ID` | Configure it as `AWS_KMS_PREVIOUS_KEY_ID` |
+| `aws-kms: … TimeoutError` / `NetworkingError` | Endpoint unreachable | Restore the path, or set `AWS_KMS_ENDPOINT` to the VPC endpoint |
+
+Until access returns, data keys cached within `MASTER_KEY_CACHE_TTL_SECONDS`
+still read, every other secret read and every secret write fails, and password
+sign-in is unaffected ([Configuration](configure.md#outages-and-revocation));
+nothing needs restarting once the provider answers. **Do not switch to a local
+key to "get going"**: KMS-wrapped rows cannot be read by any local key. A KMS
+key actually deleted after its waiting period is the case below; alarm on
+`ScheduleKeyDeletion` in CloudTrail so it never gets there.
+
+#### When the original key is genuinely gone
+
+There is no recovery of the sealed values. The choice is between the database
+without its secrets and no database.
+
+1. **Decide, and record who decided** — this is an incident.
+2. **Generate a new key once, and back it up before using it:**
+   `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+3. If you were restoring: `syntra-backup restore <name> --yes
+   --accept-secret-loss`. If the database is simply running under a lost key,
+   install the new key and restart.
+4. **Re-enter everything in the inventory**, in this order: signing keys (so
+   SSO returns — the `vault` probe stays failed until they are replaced);
+   target and source credentials, testing each; webhook secrets, telling each
+   receiver; upstream IdP secrets; then announce TOTP re-enrolment.
+5. **Take a fresh backup** and confirm `list` shows `KEY ok` for it.
+
+`--accept-secret-loss` has no rollback. That is why the procedure insists on a
+backup of the current state and a written decision first.
+
+#### Verifying the key
+
+- `/health/ready`: `vault` and `key-management` are `pass`; `syntra_readiness`
+  is back to 1.
+- **Test connection** succeeds on each target.
+- One SAML and one OIDC sign-in succeed.
+- A new `syntra-backup create` shows `KEY ok`.
+
+Rotating a key that works, and moving to a KMS, are not recovery: see
+[rotating the master key](#rotating-the-master-key). **Restoring a backup from
+before a KMS migration** into a deployment that has moved: its rows are
+wrapped by the old local key, so configure that key as `MASTER_KEY` beside the
+KMS (decrypt-only), restore, `pnpm rekey --yes`, and remove it again. Azure
+Key Vault and GCP KMS are not implemented.
+
+### Runbook: database migration
+
+Apply schema migrations and know whether the schema and the code agree. The
+mechanism is `prisma migrate deploy`, run as `pnpm --filter @syntra/db
+migrate` from `packages/db`, where Prisma 7 finds its configuration
+(`packages/db/prisma.config.ts`; the CLI looks only in its working directory,
+which is why every caller runs from there). **There is no down migration:
+rollback is a database restore.** Use it when upgrading to a release with new
+migrations, when the `migrations` probe fails, and after restoring a backup
+older than the code.
+
+Migrations run as the application role (`syntra_app`), so the tables they
+create are owned by it — which is what makes `FORCE ROW LEVEL SECURITY` bind.
+Take a verified backup immediately before; `syntra-update`'s own
+pre-migration dump is not a substitute for your schedule. Nothing measures
+migration duration for you; plan a window if the release notes say a
+migration is long.
+
+#### Checking migration state
+
+- **Readiness** (`packages/db/src/migration-state.ts`): the `migrations` probe
+  passes with `N applied`, or `N applied (M newer than this build)` after a
+  rollback to older code; it fails with `K migration(s) not applied: …` or `K
+  migration(s) started and did not finish: …`. The names are in the process
+  log.
+- **Prisma:** `cd /opt/syntra/current && pnpm --filter @syntra/db exec prisma
+  migrate status` (compose: `docker compose exec api pnpm --filter @syntra/db
+  exec prisma migrate status`).
+- **The bookkeeping table**, which both read: `SELECT migration_name,
+  finished_at, rolled_back_at FROM "_prisma_migrations" ORDER BY
+  migration_name`. Applied means `finished_at` set and `rolled_back_at` null.
+
+| State | Meaning | Action |
+|---|---|---|
+| `pending` | On disk, never applied: schema behind code | Apply |
+| `failed` | Started and not finished, or rolled back: tables in a state no migration describes | Restore, then apply. Re-running `migrate deploy` over a failed row is refused by Prisma |
+| `unknown` | Applied, absent from disk: code behind schema — normal right after a rollback to an older release | Reported, not failed. Move forward again, or restore a matching dump |
+
+Migration names sort the replay order, and the tree holds migrations named
+with dates ahead of the real clock. A new migration named with today's real
+timestamp would sort before migrations production already applied and, on a
+fresh database, run before the columns it references exist.
+`packages/db/src/migration-order.ts` sets a floor
+(`MIGRATION_NAME_FLOOR`) and its test refuses any new name at or below it:
+rename what `prisma migrate dev --create-only` generates to sort after every
+existing migration. An operator does not touch this; it is here because a
+migration that sorts wrong looks like a corrupt database.
+
+#### Migrating on the release layout
+
+`syntra-update` migrates as one step of an update and rolls itself back if
+readiness does not return (see [Updating](#updating)):
+
+1. `syntra-backup create` and `syntra-backup verify`.
+2. `syntra-update --check`.
+3. `syntra-update <version>`, or **Update** in the console.
+4. Watch `cat /opt/syntra/var/update.status` until `succeeded`,
+   `rolled_back` or `failed`.
+5. Verify (below). Rollback is `syntra-update --rollback`, which restores the
+   pre-migration dump and relinks the previous release; anything written in
+   between is lost — say so in the record.
+
+#### Migrating on the compose path
+
+The `api` image runs `pnpm --filter @syntra/db migrate` before it starts the
+server; there is no separate step and no automatic rollback.
+
+1. Take a dump ([compose backups](#compose-and-helm-backups)).
+2. `export SYNTRA_VERSION=1.5.0 && docker compose pull api web && docker
+   compose up -d`. The `web` service waits on the `api` health check
+   (`/health/ready`), so nginx does not serve until migrations have applied.
+3. Watch `docker compose logs -f api` and `docker compose ps`. An `api`
+   container restarting repeatedly is a migration or startup that failed; read
+   the log before touching anything.
+4. Verify. If it failed: `docker compose stop api web`, restore the dump, set
+   `SYNTRA_VERSION` back, `docker compose up -d`.
+
+#### Migrating on Helm
+
+The chart's `<release>-migrate` Job runs `pnpm --filter @syntra/db migrate` as
+a `pre-install,pre-upgrade` hook (`backoffLimit: 1`; a failed Job is kept for
+a day so its log can be read; `migration.enabled: false` turns it off). Under
+PgBouncer it needs a direct connection (`secretKeys.migrationDatabaseUrl`).
+
+1. Back up the database with the provider's tooling.
+2. Set the new immutable image tags in the values file.
+3. `helm upgrade --install syntra ./deploy/helm/syntra --namespace syntra -f
+   values-<env>.yaml`. Helm aborts the upgrade if the Job fails, so the old
+   Deployment keeps running on a schema that may be **partly ahead** of it;
+   check the state before retrying.
+4. A failed Job: `kubectl -n syntra get jobs`, `kubectl -n syntra logs
+   job/syntra-migrate`.
+5. Verify. `helm rollback` restores the images but **not** the database: the
+   older code then reports `unknown` migrations and passes readiness, which is
+   tolerable only if the release notes say the migration was additive.
+   Otherwise restore the database too.
+
+#### Verifying a migration
+
+1. `/health/ready` is ready, with no pending and no failed names.
+2. `_prisma_migrations` lists every directory in the release's
+   `packages/db/prisma/migrations`, finished.
+3. `syntra_build_info` reports the intended version; `syntra_readiness` is 1.
+4. Sign in, open **Activity → Attention**, one target and one person — a
+   half-applied migration fails on the first route that touches the new
+   column, and these touch the most tables.
+5. The [reconciliation counts](#reconciliation-checklist) have not moved.
+
+`pnpm db:reset` has no place here: it empties a database and is refused for
+anything not named in `SYNTRA_ALLOW_RESET`. Some releases carry a backfill
+job that runs after start; the release notes say so.
+
+### Runbook: secret rotation
+
+Rotate each credential a deployment holds or issues, and know what rotating
+it does to running sessions, integrations and scheduled work. Before any of
+it, take a verified backup. Random values:
+`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`.
+
+| Secret | Lives in | Rotate by | Effect |
+|---|---|---|---|
+| `SESSION_SECRET` | environment | new value, restart | Console and portal sessions **survive**; in-flight OIDC interactions fail once |
+| Master key (`MASTER_KEY`, or the Transit / KMS key) | environment, or the KMS | old key decrypt-only, `pnpm rekey --yes`, remove old key | None if done in order ([below](#rotating-the-master-key)) |
+| `METRICS_TOKEN` | environment | new value, restart, update scraper | Scrapes 401 until the scraper is updated |
+| `SMTP_URL` credential | environment | new value, restart | Queued mail retries under the new credential |
+| `MAIL_GRAPH_CLIENT_SECRET` | environment | second secret in Entra, new value, restart, delete the old | None if the old is deleted after the restart |
+| `GOVERN_CHECKPOINT_KEY` / `_ID` | environment | new value and id, restart | One-time `critical` finding (below) |
+| `RELEASE_TOKEN` | `shared/.env` | revoke in GitHub, new token; no restart | Updates fail with an auth error until replaced |
+| Postgres passwords | environment and role | `ALTER ROLE`, then environment, restart | `database` probe fails until both agree |
+| Target credential (AD bind password, SCIM token, Entra client secret) | vault | **Settings → Credentials → Rotate**, or `PATCH /api/admin/targets/:id` | Next run uses it; cached access tokens dropped |
+| Directory source bind password | vault | **Settings → Credentials → Rotate**, or `PATCH /api/admin/sources/:id` | Next sync uses it |
+| HR feed credential | vault | **Settings → Credentials → Rotate**, or `PATCH /api/admin/person-sources/:id` | Next import uses it |
+| Upstream IdP client secret | vault | API only | Immediate |
+| API tokens, including the SCIM machine token | hashed in `ApiToken` | issue new, install at the caller, revoke old | Old token refused from revocation |
+| Webhook signing secret | vault | `POST /api/admin/webhooks/:id/secret` | Deliveries after the call are signed with the new secret |
+| SAML signing key | vault | `rotateKey(tenantId, provider, 'saml')`; no console or CLI | Every SP that pinned the certificate breaks until reconfigured |
+| OIDC signing key | vault | automatic, monthly | Outgoing key published beside the incoming one for a week |
+
+For stored secrets you need the route's permission: `provision.manage`
+(targets), `sync.manage` (sources), `token.manage` (API tokens),
+`tenant.manage` (webhooks).
+
+#### `SESSION_SECRET`
+
+It signs the OIDC provider's interaction cookies; the session cookie itself
+is a random token looked up by hash in the `Session` table, so sessions are
+not tied to it. Generate a value (at least 32 characters; the
+`.env.example` placeholder is refused), replace it, restart (`systemctl
+restart syntra`, `docker compose up -d api`, or the `api` Deployment). There
+is no dual-key window, so choose a quiet minute; an OIDC sign-in mid-flow at
+the restart fails once and succeeds on retry.
+
+#### Rotating the master key
+
+The master key wraps every stored secret's data key, so changing it is a
+**rewrap**, not a re-entry: `pnpm rekey --yes` (`packages/db/src/rekey.ts`,
+operator-run, never a web route) unwraps each data key with whichever
+configured key recognises it and wraps it again under the provider
+`MASTER_KEY_PROVIDER` names. Secret values are never decrypted. Every variant
+has the same shape and the same safety property — between the steps the
+deployment reads both old and new rows, because the old key is configured
+*decrypt-only*:
+
+| Changing | Step 1: configure, restart | Step 3: remove, restart |
+|---|---|---|
+| Local key → new local key | `MASTER_KEY=<new>`, `MASTER_KEY_PREVIOUS=<old>` | `MASTER_KEY_PREVIOUS` |
+| Local key → Vault Transit | `MASTER_KEY_PROVIDER=vault-transit` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| Local key → AWS KMS | `MASTER_KEY_PROVIDER=aws-kms` and its variables; keep `MASTER_KEY` | `MASTER_KEY` |
+| Transit key → another | `VAULT_TRANSIT_KEY=<new>`, `VAULT_TRANSIT_PREVIOUS_KEY=<old>` | `VAULT_TRANSIT_PREVIOUS_KEY` |
+| KMS key → another | `AWS_KMS_KEY_ID=<new>`, `AWS_KMS_PREVIOUS_KEY_ID=<old>` | `AWS_KMS_PREVIOUS_KEY_ID` |
+| A Transit key's version | `vault write -f transit/keys/<key>/rotate`; no Syntra change | raise `min_decryption_version` |
+| A KMS key's backing material | KMS automatic rotation; nothing to do | nothing; no rekey needed |
+
+Moving directly between Vault and AWS is not supported: go through a local
+key.
+
+1. **Back up** (`syntra-backup create`). With a local key, put the *new* key
+   in the secret store now, before it seals anything.
+2. **Configure and restart** (step 1 of the table). For an external provider,
+   check it answers: `key-management: pass` on `/health/ready`, and the log
+   line naming the provider (`journalctl -u syntra -n 50 | grep -i
+   'master-key provider'`), which also warns about each decrypt-only key
+   still configured.
+3. **See what there is to move:** `pnpm rekey --status` (compose: `docker
+   compose exec api pnpm rekey --status`). It calls no KMS.
+4. **Rewrap:** `pnpm rekey --yes`. It checks the new provider with a canary
+   first and touches nothing if that fails, then works one transaction per
+   tenant; a failure rolls back that tenant and stops. It is safe to run
+   again. Each tenant gets a `vault.data_keys_rewrapped` audit event.
+5. **Check** `pnpm rekey --status` shows only the new provider (and, for
+   Transit, only the latest version). `local=` anywhere is a tenant not
+   finished — run step 4 again and read its error.
+6. **Remove the old key** (step 3 of the table) and restart every replica.
+   Then `vault` and `key-management` pass, one SAML and one OIDC sign-in
+   succeed, and **Test connection** passes on a target.
+7. **Take a fresh backup** and confirm `KEY ok`. With an external provider the
+   manifest fingerprints the key reference, so backups keep matching after the
+   move; backups from before it show `MISMATCH`. **Keep the old local key
+   until those backups expire** — it is the only thing that reads them.
+
+To **retire a Transit version**, run steps 3–5 with no configuration change
+(rekey moves every row to the latest version), then `vault write
+transit/keys/<key>/config min_decryption_version=<latest>`. Backups taken
+before the rekey become unreadable with it; lower the setting again to
+restore one.
+
+Rollback before step 6: rows already moved are unreadable to the old
+configuration, so rekey in the other direction first (swap current and
+previous), then put it back. After step 6, add the old key back decrypt-only.
+A master key that was **exposed** can still unwrap every data key in every
+backup taken before the rekey; for an exposure that matters, also re-enter the
+high-value secrets themselves after the rekey.
+
+#### `METRICS_TOKEN`
+
+Generate a value of at least 16 characters; set it in the scraper's
+`bearer_token` without reloading; replace it in the environment and restart
+the API; reload the scraper. Check `curl -s -o /dev/null -w '%{http_code}' -H
+"Authorization: Bearer <new>" http://127.0.0.1:3000/metrics` is 200 and the
+old value 401. Unsetting it unregisters the route (404).
+
+#### Outgoing mail credentials
+
+**`SMTP_URL`:** replace the credential, restart, then cause one mail — a
+password reset for a test account, or assign a lifecycle operation to
+yourself. A `notification_undelivered` incident means the outbox gave up after
+five attempts; the outbox is the test.
+
+**`MAIL_GRAPH_CLIENT_SECRET`** (`MAIL_TRANSPORT=graph`): an app registration
+can hold two client secrets at once. Add a new one in Entra (**Certificates &
+secrets**; copy the **value**, not the id), replace the variable (or the
+Secret key `secretKeys.mailGraphClientSecret` names), restart — the Graph
+token is cached per process — then check **Operations → Service status**'s
+mail check (it acquires a token and sends nothing) and cause one mail.
+`invalid_client` / `AADSTS7000215` means the value was copied wrong. Then
+delete the old secret.
+
+#### Connector credentials
+
+Targets, directory sources and HR feeds share a **dual-secret rotation**
+([Configuration](configure.md#rotating-a-connector-credential)):
+
+1. Create the new credential at the issuer. **Keep the old one valid.**
+2. **Settings → Credentials**, the entry, **Rotate**: paste the new secret
+   (and its expiry at the issuer, if known), **Stage new secret**
+   (`POST /api/admin/credentials/rotations`).
+3. **Test staged secret** (`…/rotations/:id/verify`). Fix a failure at the
+   issuer and test again, or cancel.
+4. **Cut over** (`…/cutover`): refused unless the test passed within a day
+   against the configuration as saved now. The old secret is kept.
+5. Optionally **Run now** on the target for a full read under the new secret.
+6. **Complete and erase old secret** (`…/complete`): tests again, and on
+   success erases the kept secret and records a readiness check. On failure
+   nothing is erased; **Roll back** (`…/rollback`) restores the old one.
+7. Revoke the old credential at the issuer.
+
+The rotation's evidence (`GET /api/admin/credentials/rotations/:id`) and its
+`credential.rotation_*` audit events are the change record, and the declared
+expiry schedules the next warning. Replacing the credential directly —
+paste it into the target or source, **Test connection** (for an unsaved one,
+`POST /api/admin/targets/test`, `/sources/test`), Save — still works and is
+audited as `credential.changed`, with no overlap and no pre-test of the saved
+configuration. For Entra the credential is the app registration's client
+secret (the tenant and client ids are configuration); a wrong one comes back
+as `the token endpoint answered HTTP 401 (AADSTS…)`, the AADSTS code being
+the only part of Microsoft's answer kept.
+
+Saving or cutting over clears the OAuth access-token caches **in the API
+process that handled it**. Other API replicas keep a token minted under the
+old secret for up to its lifetime (about an hour) — harmless after a correct
+rotation, misleading after a wrong one: runs on those replicas keep working
+until the cached token expires. Treat **Test connection** as the truth, and
+restart the replicas if the cache must go now.
+
+For an SFTP HR feed, the server's host key is pinned separately
+(`POST /api/admin/person-sources/:id/host-key`); a rotated server key is a
+different change from a rotated credential. Entra client secrets are read for
+expiry only when the app registration was granted `Application.Read.All`;
+otherwise declare the expiry on **Settings → Credentials**, or the first
+warning is a failed run.
+
+#### API tokens, including the SCIM machine token
+
+Tokens are `syntra_pat_…` bearer credentials, hashed at rest and shown once.
+
+1. Issue a new one on the same service account: **Users → Accounts → the
+   account → API tokens**, or `POST /api/admin/users/:id/tokens`. Set an
+   expiry (the console suggests ninety days).
+2. Install it at the caller (the IdP's provisioning configuration).
+3. Confirm the caller used it: the token list shows last use.
+4. Revoke the old one: `DELETE /api/admin/users/:id/tokens/:tokenId`.
+
+`api_token.issued` and `api_token.revoked` are in the **Credentials** webhook
+group. Revoking the service account's role revokes every token it issued at
+once — that is the emergency stop. Revoked tokens cannot be un-revoked.
+
+#### Webhook signing secrets
+
+`POST /api/admin/webhooks/:id/secret` returns `{ endpoint, secret }` with the
+new secret **once** and records `notify.webhook_secret_rotated`. Deliveries
+from then on are signed with it (pending retries are re-signed at send time),
+and the receiver rejects them until updated — hand it over before or at once.
+
+#### Signing keys
+
+- **OIDC** keys rotate monthly on the scheduler; the failure mode is silent,
+  which is what `SyntraSigningKeyExpiring` is for. When it fires, the
+  scheduler is the first suspect ([scheduler unavailable](#scheduler-unavailable)).
+- **SAML** keys last three years and are never rotated automatically.
+  `rotateKey(tenantId, provider, 'saml')` is the only way — no console button
+  or CLI — and every service provider that pasted the certificate must be
+  reconfigured, so plan it as a change with every SP owner. The credential
+  inventory warns ahead of the active key's `notAfter`, and every rotation is
+  audited as `signing_key.rotated`.
+
+#### `GOVERN_CHECKPOINT_KEY`
+
+Optional; signs Govern's audit checkpoints. Turning it on for the first time
+refuses the pre-existing unsigned checkpoint once, walks the chain from
+genesis once, and raises one `critical` finding that clears on the following
+run. A change of key is not further documented in the code beyond
+`GOVERN_CHECKPOINT_KEY_ID` naming the key: expect the same one-time finding,
+and keep the old key until a checkpoint has been established under the new
+one.
+
+#### Database role passwords
+
+Compose path:
+
+1. `docker compose exec postgres psql -U syntra -c "ALTER ROLE syntra_app
+   PASSWORD '<new>'"`.
+2. Export the new `SYNTRA_APP_PASSWORD` and `docker compose up -d api`.
+3. The `database` probe passes.
+
+`POSTGRES_PASSWORD` is read only when the volume is first initialised;
+changing it later changes nothing. Use `ALTER ROLE syntra PASSWORD`, then
+update the variable so a future re-initialisation matches. On the release
+layout or Helm, the same order: `ALTER ROLE`, then the URL, then restart.
+
+**Verifying any rotation:** `/health/ready` is ready; **Activity →
+Attention** shows nothing new; the audit log carries the rotation event where
+one exists; the old credential is refused where that can be tested. Rolling
+back an environment secret is putting the old value back and restarting;
+a stored credential's previous value cannot be read back out of Syntra.
+
+### Runbook: target rollback
+
+Stop a provisioning target from doing anything further, deal with a run that
+is wrong or held, and put back what a bad mover changed. You need
+`provision.read` to look and `provision.manage` to act (a mover also needs
+`identity.write`), and the target's id.
+
+The vocabulary: a **run** reads the target, computes a plan and lands
+`previewed` or `blocked`; applying moves it through `applying` to `applied` or
+`partially_applied`; a run that could not read the target is `failed`. Each
+**action** is one proposed change: `create_account`, `update_account`,
+`enable_account`, `disable_account`, `archive_account`, `rename_account`,
+`grant_entitlement`, `revoke_entitlement`, `deactivate_syntra_user`,
+`reactivate_syntra_user`, `create_container`. **There is no delete of any
+kind, and no type that could become one.** Action statuses are `proposed`,
+`in_flight`, `applied`, `failed`, `conflict`, `pending_retry`, `superseded`.
+
+The guard is described under [Safety thresholds](#safety-thresholds); on the
+API the settings are `createAccountThresholdPercent`,
+`disableAccountThresholdPercent`, `archiveAccountThresholdPercent` (container
+moves too), `revokeEntitlementThresholdPercent`,
+`deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent` and
+the absolute `maxContainerCreatesPerRun` — all confirmable — and
+`personPopulationDropPercent`, which is **not**. Nor are an empty target that
+has had a run applied, a threshold that is not a percentage, or an axis with
+no denominator. `autoApply` never confirms anything. Additive actions (enable,
+grant, rename, reactivate, attribute-only update) are not thresholded: they
+are visible in the plan and reversible by the next run.
+
+#### Stopping a target
+
+From least to most disruptive; each takes effect on the scheduler at once.
+
+1. **Turn off automatic apply** — runs still produce plans; nothing is applied
+   without a person. Uncheck **Apply scheduled runs automatically**, or
+   `PATCH /api/admin/targets/:id { "autoApply": false }`.
+2. **Unschedule** — no runs; **Run now** still works.
+   `PATCH /api/admin/targets/:id { "schedule": null }`.
+3. **Disable** — unscheduled and marked disabled; incidents stop counting it
+   as stale. Uncheck **Enabled**, or `{ "enabled": false }`. Nothing is lost,
+   and re-enabling restores the saved schedule.
+
+**Emergency write stops** change what a run may *do* rather than what runs:
+while one is active no connector write is attempted, and every apply is
+refused before the run enters `applying` — the run stays as previewed and can
+be applied unchanged later. Reads, previews, drift and evidence keep working,
+which is what the people investigating need. A manual account move is refused
+too (its placement is still recorded), a scheduled automatic-apply run records
+a visible skip, and a person's provisioning receipt is left `blocked`, not
+`failed`.
+
+| Scope | Console | API (`provision.manage`) |
+|---|---|---|
+| One target | **Target systems → the target → External writes → Stop writes** | `POST /api/admin/targets/:id/external-write-stop` / `external-write-resume` |
+| Every target in the tenant | **Target systems → Tenant-wide external writes → Stop writes** | `POST /api/admin/provision/external-write-stop` / `external-write-resume` |
+
+Placing one needs a `reason` and may carry an `expiresAt` up to 30 days out.
+Resuming early needs a reason and a **different administrator** from the one
+who placed it (`403 four-eyes-required`). Expiry is honoured at the apply
+boundary the moment it passes, and a once-a-minute sweep closes the stop.
+When both are active a refusal names the tenant stop (`409
+external-writes-paused`, `scope: "tenant"`), because it is the one to lift
+first. Every transition is audited (`provision.{tenant,target}.external_writes.pause`,
+`.resume`, `.expire`) and is a security event, so a webhook endpoint
+subscribed to **Emergency write stops** hears about it. Stopping the API
+stops everything; the tenant stop contains writes and leaves everything else
+running.
+
+Deleting a target (`DELETE /api/admin/targets/:id?confirm=true`) removes
+Syntra's record of the accounts it manages and never touches the accounts; it
+is not a rollback.
+
+#### A run that should not be applied
+
+1. Open it: **Target systems → the target → Runs → the run**, or `GET
+   /api/admin/targets/:id/runs/:runId` — actions in apply order, each with the
+   person, and `requiresConfirmation` where the guard demands it.
+2. **`previewed`**: leave it, or **Cancel** it
+   (`POST /api/admin/targets/:id/runs/:runId/cancel`). An unapplied run
+   applies nothing. On an automatic-apply target the next scheduled run
+   computes a fresh plan and applies it, so [stop the target](#stopping-a-target)
+   first if the fresh plan would be the same wrong plan.
+3. **`blocked`, held for confirmation**: read the reason. Confirming is
+   **Apply** with the confirmation box (`POST …/runs/:runId/apply` with
+   `{ "confirm": true }`). Do not confirm a run you have not read to the end.
+   A hold is never stepped over by a retry — only confirming or cancelling it
+   resolves it, and until then later scheduled and hand-started runs on the
+   target are skipped ([Runs that replace a waiting run](#runs-that-replace-a-waiting-run)).
+4. **`blocked`, refused outright**: nobody can apply it (`409
+   run-unconfirmable`). Fix the cause — the HR feed, the target's
+   reachability, a threshold that is not a percentage — and run again; the
+   new run supersedes it.
+
+#### Applying part of a run
+
+`POST /api/admin/targets/:id/runs/:runId/apply` with `{ "only": ["<actionId>",
+…], "confirm": true }` when a chosen action needs confirmation; the console
+has a box per action and **Apply N actions**. Applying part of a run **ends
+it**: the rest is not attempted, the run ends `partially_applied`, and the
+next run proposes again whatever is still wanted. Use it to let a leaver's
+disable through while holding a hundred questionable revocations.
+
+#### A run that was applied and was wrong
+
+Nothing an apply does is a delete, so every applied action has an inverse the
+next run proposes once the inputs are corrected — **correct the inputs, run,
+review, apply**:
+
+| Applied | The next run proposes |
+|---|---|
+| `disable_account` | `enable_account` (confirmation needed outside `reenableWithoutConfirmationDays`) |
+| `archive_account` (a container move) | `update_account` moving it back, under the archive threshold |
+| `revoke_entitlement` | `grant_entitlement`, unthresholded |
+| `grant_entitlement` | `revoke_entitlement`, thresholded |
+| `deactivate_syntra_user` | `reactivate_syntra_user` |
+| `update_account` | another `update_account` |
+| `create_account` | nothing removes it; it can be disabled |
+| `create_container` | nothing removes it |
+
+#### Reverting a mover
+
+A mover is a contract change (department, job title, cost centre, employer,
+location, manager, FTE) that changes which rules match a person. It arrives by
+an HR import, by **Change employment** on the person (`POST
+/api/admin/persons/:id/mover/preview`, then `/mover/apply`), or by editing a
+contract (`PATCH /api/admin/persons/:id/contracts/:sequence`).
+
+1. [Stop the target](#stopping-a-target), at least automatic apply.
+2. Find what was applied: the run's actions for the person, or `GET
+   /api/admin/audit?subject=<personId>`.
+3. **Correct the data at its source.** A wrong feed: fix it and re-run the
+   import (preview, then apply). A hand edit: edit it back. **Change
+   employment**: use it again with the previous values — the preview shows the
+   diff and the access it would keep; a stale preview is refused (`409
+   stale-preview`).
+4. **If the rule was wrong**, not the data: the target's **Business rules**;
+   `POST /api/admin/targets/:id/rules/impact` previews how many people a
+   condition matches before `PUT /api/admin/targets/:id/rules` saves it. A rule
+   matching nobody after a change is usually a malformed condition.
+5. **Run now** and read the plan: enables and grants for what the mover
+   removed, revocations for what it wrongly granted — and expect the
+   per-entitlement threshold to hold the run if a revocation is a large share
+   of one group.
+6. Apply, whole or in part.
+7. A person wrongly deactivated as a leaver: `POST
+   /api/admin/persons/:id/reactivate`, then run. Revoked sessions stay revoked;
+   the person signs in again.
+8. Verify on the person (`GET /api/admin/persons/:id/access`) and at the
+   target, then restore the schedule and automatic apply.
+
+#### A credential or target that stopped working
+
+Runs start and fail; `lastRunAt` stops moving (it is written by a finished
+preview); `provision_run_failed` appears at once and, after two days or twice
+the cadence, `target_never_completed`. Replace the credential
+([connector credentials](#connector-credentials)), then **Run now**. Actions
+left `pending_retry` are picked up by the next run **only if its plan still
+wants them**; actions left `in_flight` by a process that died are resolved by
+the next preview asking the target what actually happened.
+
+#### A canary adapter release that misbehaves
+
+A target moved to the canary channel, or pinned to a new adapter release,
+writes something unexpected or starts refusing actions.
+
+1. Stop writes if anything is still applying.
+2. On the target, **Adapter release → Rollback**, with a reason (`POST
+   /api/admin/targets/:id/adapter/rollback { "reason": "…" }`). The target is
+   pinned to the last certified release it ran, at once. Only the adapter
+   selection changes; `provision.target.adapter.rollback` names both versions.
+3. **Preview again.** A run previewed under the canary refuses to apply (`409
+   adapter-version-changed`).
+4. Resume writes once the new preview reads correctly.
+
+#### Verifying a target
+
+- `GET /api/admin/targets/:id` shows the `enabled`, `schedule` and
+  `autoApply` you intended, and `consecutiveSkippedRuns` is 0 after the next
+  scheduled run.
+- The latest run is `applied`, or `partially_applied` with every unapplied
+  action carrying a message you expected.
+- `GET /api/admin/targets/:id/drift` has no new open findings you cannot
+  explain; acknowledge the ones you can (`PATCH /api/admin/drift/:id`).
+- The target is gone from **Activity → Attention**.
+
+#### What cannot be undone
+
+- **Provisioning never deletes anything at a target.** The AD connector
+  refuses a delete before it binds; Entra's only removal is `DELETE
+  /users/{id}`, which the connector cannot express. Archiving is a container
+  move (AD) or `accountEnabled: false` (Entra); deletion after that is the
+  target's own business ([leavers](#leavers-archive-in-syntra-delete-in-the-domain)).
+  An unrecoverable write driven by a timer, from a service holding bind
+  credentials for every tenant's directory, is a bad trade.
+- **The one delete that exists** is a directory write-back delete of a Syntra
+  login (`DELETE /api/admin/users/:id`), gated on `directory.delete` and the
+  source's write-back delete switch, both off by default. It cannot be undone
+  from Syntra.
+- **Initial passwords** delivered on a create are not retrievable.
+- **Revoked sessions and tokens** stay revoked.
+- **The audit log** is append-only; only a restore removes entries, and it
+  removes everything after the backup.
+
+### Runbook: queue recovery
+
+Background work has a **row** that says what state it is in and a pg-boss
+**job** that moves it. This is for when the two disagree — a run that says
+`queued` with nothing behind it, a provisioning apply whose process died, a
+job that fails on the same payload again and again — after a
+`SyntraJobs*` alert, a run page stuck far longer than usual, or a node drain,
+OOM kill or database failover. Reading needs `audit.read`, repairing
+`tenant.manage`. The metrics carry no tenant label: sign in to each tenant's
+console (or ask its administrator) to see which work is affected. The
+findings and repairs are described under
+[Background work and job health](#background-work-and-job-health).
+
+| Finding | Safe repairs |
+|---|---|
+| `orphaned` | A queued run, export or target operation: **requeue** or **mark failed**. A reading run or a generating export: **mark failed**. A provisioning apply: **release** |
+| `stuck` | As for orphaned where no worker is running it; none while a live worker holds it |
+| `delayed` | None: the queue is behind ([below](#the-queue-is-behind)) |
+| `duplicated` | None needed: every worker claims its row conditionally, so the extra job does nothing. Find the double enqueue |
+| `poisoned` | None: fix the cause (the finding names its error class) and let the schedule or a person start it again |
+| `saturation_deferred` | None needed: it retries every 30 s. Raise the cap in **Lifecycle policy** if it persists |
+
+Nothing is reported orphaned while the queue cannot be read —
+`syntra_job_queue_readable` is 0 and the page says so.
+
+1. **Open Operations → Background work** in the affected tenant, or `GET
+   /api/admin/job-health`, and read the finding's sentence: what the row is
+   doing and why it is a finding.
+2. **Check the cause before repairing.** After a drain or a crash the repair is
+   all that is needed. A finding that comes back after a repair means
+   something is still wrong: the scheduler (`syntra_scheduler_running`), the
+   database, or — for `poisoned` — the payload.
+3. **Repair**, with a reason of at least ten characters (it goes into the
+   audit event and, for mark failed, onto the row): **Requeue** enqueues the
+   job the row is missing, only where no worker has started; **Mark failed**
+   ends a row nothing is working on (a waiting cancellation is honoured
+   instead); **Release** closes a dead provisioning apply as
+   `partially_applied`, leaving its `in_flight` actions for the next preview to
+   verify against the target. Nothing here re-runs a connector write.
+4. **Verify:** reload — the finding is gone, a second press answers *nothing
+   to do*, and the audit log has `job_health.requeue`, `.mark_failed` or
+   `.release_lease` with the reason and the before and after status.
+
+Deliberately not repairable here: **lifecycle operations** (retry them on the
+operation's page, where a retry after an ambiguous target outcome needs fresh
+verification evidence); **directory sync and HR import runs in `applying`**
+(no heartbeat, so apply the run again — it resumes — or cancel it); and
+**pg-boss's own rows**, which nothing here edits or deletes. A repair needs no
+back-out: an unneeded requeue claims nothing, a run marked failed or released
+is reviewable history that the next run re-proposes from, and released
+actions are verified before anything new is planned.
+
+#### The queue is behind
+
+`delayed` findings, or `SyntraJobQueueDeep`: the scheduler is running and not
+keeping up. Check the API's CPU and event-loop lag, the database's connection
+pool ([connection-pool sizing](#connection-pool-sizing)), and whether one
+tenant's scheduled work dominates. More API replicas are more workers.
+
+For the record: the findings (the page, or the JSON from `GET
+/api/admin/job-health`), each repair's audit event, and for a support case a
+**support bundle** (**Operations → Support bundle**), which carries job health
+and recent failures by error class with no personal data.
+
+### Runbook: scale validation
+
+A repeatable rehearsal of paging and restore at 10,000 people and 10,000
+lifecycle operations. **Only ever against an isolated, disposable database** —
+never the one behind a running deployment.
+
+1. Restore a current schema into a disposable database.
+2. Insert a dedicated fixture tenant, 10,000 synthetic people and 10,000
+   lifecycle operations, every row carrying an obvious `scale-` marker.
+3. `ANALYZE` after the bulk insert; plans before statistics are not evidence.
+4. Capture `EXPLAIN (ANALYZE, BUFFERS)` for people paging and open-operation
+   paging at page size 50, recording the database version, hardware, row
+   counts, cold or warm cache, and the query text with the plan.
+5. Back it up, restore to a second disposable database, and reconcile person,
+   lifecycle-operation and migration counts before teardown.
+
+Accept when person paging uses `Person_tenantId_familyName_givenName_idx`,
+open-operation paging uses `LifecycleOperation_open_queue_updatedAt_id_idx`,
+the restored copy's counts match, and no write command named the production
+database.
+
+The audit log's rehearsal runs inside the suite instead:
+`packages/core/src/audit/audit-search.test.ts` inserts 100,000 events into one
+tenant, runs `ANALYZE`, and asserts for the exact statement the service runs
+that no plan sequentially scans, each filter uses its index, and no page
+touches 500 or more blocks (`SYNTRA_PRINT_PLANS=1` prints the plans).
+Recorded on 23 September 2026 (PostgreSQL in Docker on a workstation, warm
+cache):
+
+| Page | Plan | Blocks | Time |
+| --- | --- | --- | --- |
+| Newest, no filter | Index scan `AuditEvent_tenantId_sequence_key` | 6 | 0.03 ms |
+| Keyset page at sequence 50,000 | same | 9 | 0.05 ms |
+| Common actor (2 %) | `AuditEvent_tenantId_actorUserId_sequence_idx` | 54 | 0.09 ms |
+| Rare actor (10 events) | same | 13 | 0.03 ms |
+| One target (50 events) | `AuditEvent_tenantId_targetId_sequence_idx` | 53 | 0.08 ms |
+| Failures (5 %) | `AuditEvent_tenantId_outcome_sequence_idx` | 43 | 0.07 ms |
+| Action prefix `auth.` (20 %) | sequence index, filtered | 16 | 0.05 ms |
+| Action prefix `export.download` (5 %) | sequence index, filtered | 53 | 0.14 ms |
+| Rare, oldest action (50 events) | `AuditEvent_tenantId_action_prefix_idx` + sort | 6 | 0.06 ms |
+| One day in the middle of the log | two one-row lookups on `AuditEvent_tenantId_occurredAt_idx`, then the sequence range | 14 | 0.08 ms |
+| Two subjects, either direction | bitmap OR of the actor and target indexes | 67 | 0.15 ms |
+
+This validates database paging and backup mechanics only — not connector
+throughput, network latency, an object-store restore, or audit history in the
+millions; and it times the search, not the full chain verification each audit
+page still carries ([Audit search](#audit-search)).
+
+### Runbook: tabletop exercises
+
+Four incidents rehearsed on paper by the people who would handle them: before
+a target's first production go-live, after changing the alert rules, the
+rota or these runbooks, and quarterly. You need a facilitator who has read
+the runbooks and holds the answers, the on-call operators, a tenant
+administrator, someone who speaks for HR (exercises 3 and 4), a console to
+look at — production read-only, or a lab: open the pages, find the buttons,
+do not press the ones that write — and ninety minutes for all four.
+
+1. The facilitator reads the opening line only.
+2. Participants say what they would look at first and what they expect to
+   see; the facilitator reveals the product's behaviour as they reach each
+   surface and corrects mistaken expectations.
+3. Participants walk the steps aloud; the facilitator times the
+   [first fifteen minutes](#the-first-fifteen-minutes).
+4. Score every place the product, the runbook or the team fell short. An
+   exercise is done when the scorecard is filled in, every "no" has an owner
+   and a date, and product gaps are filed.
+
+#### Exercise 1: expired Entra client secret
+
+**Opening line.** "Monday 08:10. Nobody has complained. Something is wrong with
+the Entra ID target."
+
+**What the product shows.** The scheduled run fails at the token endpoint with
+`the token endpoint answered HTTP 401 (AADSTS7000222)` and is `failed`;
+`provision_run_failed` appears in **Activity → Attention** and
+`SyntraProvisioningRunsFailing` fires within minutes. `lastRunAt` stops
+moving, and after two days (or twice the cadence) `target_never_completed`
+names the target. If the app registration was granted `Application.Read.All`,
+the credential inventory knew the expiry in advance, warned, and raises
+`credential_expired`; otherwise nothing knew it was coming. A replica holding
+a cached token may succeed for up to an hour past expiry, so the failure can
+look intermittent for one cycle. Nothing was applied; sync and every other
+target carry on. The target's readiness still shows the last **Test
+connection**, passing with an old date — runs do not write readiness.
+
+**Steps.** Follow the incident to the target and read the failed run. **Test
+connection** — the same AADSTS failure, now recorded. In Entra add a new
+client secret, keeping the old. Rotate on **Settings → Credentials** (stage,
+test, cut over, complete) or paste it into **Application client secret**,
+test, and save. Restart other API replicas if you need their cached tokens
+gone now. **Run now** and read the plan — a missed weekend may propose a
+weekend of changes; apply, or apply in part. Remove the old secret in Entra,
+and declare the new secret's expiry on **Settings → Credentials** if Syntra
+cannot read it.
+
+**Done when** the latest run is `applied` and `lastRunAt` is today; the
+target's incidents have cleared (resolve `provision_run_failed`, since it
+otherwise counts a week of failures); readiness is `passed` and current; the
+next expiry is known to the credential inventory.
+
+| Scorecard | Yes / No / Partial |
+|---|---|
+| Noticed before a user reported it? | |
+| Found the run's message without help? | |
+| Tested before saving? | |
+| Knew about cached tokens on other replicas? | |
+| Old secret removed only after the new one worked? | |
+| New expiry recorded where the inventory sees it? | |
+| Time from opening line to the run applied | |
+
+#### Exercise 2: Microsoft Graph outage
+
+**Opening line.** "14:00. Microsoft's status page shows a Graph degradation in
+your region. The Entra target runs hourly with automatic apply."
+
+**What the product shows.** Runs fail at the read (`failed`, Graph answering
+5xx or timing out), or read and then fail or stall on writes. Throttling
+(`429` with `Retry-After`, `503`) is honoured: a write waits, up to 20
+throttled attempts and 120 seconds per action, not counted against its
+attempts. A retryable failure that runs out ends the action `pending_retry`
+and the run `partially_applied`; the next run picks it up **only if its plan
+still wants it**, so an afternoon's outage does not replay the afternoon's
+decisions. A write whose answer was lost stays `in_flight` and the next run
+asks Graph what happened. If Graph answers with an **empty** user list rather
+than an error, the guard refuses the run outright — nobody can apply it. The
+person-population guard protects against an HR feed collapsing at the same
+time. Sign-in, sync and other targets are unaffected.
+
+**Steps.** Confirm the outage is external. Turn **automatic apply off** so the
+first, possibly large, run after recovery is read by a person — do not disable
+the target, which hides it from the staleness check. Confirm no held run
+during the outage. Tell HR and the service desk that joiners and leavers at
+this target will land late; an urgent leaver is exercise 4. After recovery,
+**Run now**, read it end to end, confirm thresholds if the numbers are the
+outage's backlog and not a broken feed, apply, and watch `pending_retry` and
+`in_flight` drain over the next runs. Turn automatic apply back on.
+
+**Done when** a post-recovery run is applied (or partially, with every
+remaining action explained), nothing `in_flight` or `pending_retry` predates
+the outage, every lifecycle operation that touched the target is `completed`
+in **Employee work**, and the record lists what landed late.
+
+| Scorecard | Yes / No / Partial |
+|---|---|
+| Distinguished a failed read, an empty read and throttled writes? | |
+| Proposed disabling the target? Corrected? | |
+| Proposed confirming a held run? | |
+| Knew `pending_retry` is re-planned, not replayed? | |
+| Told HR about late joiners and leavers? | |
+| Read the first post-recovery run before applying it? | |
+
+#### Exercise 3: a mistakenly broad mover rule
+
+**Opening line.** "At 09:30 an administrator edited a business rule on the AD
+target so that everyone in `Department = Sales` gets `Sales-Team`. They typed
+`Department is not Sales`. The target runs hourly with automatic apply."
+
+**What the product shows.** Before save, the rule editor's impact preview
+showed a count matching almost everybody. At the next run the plan grants the
+group to everyone outside Sales (grants are not thresholded) and revokes it
+from Sales, which trips the per-entitlement threshold: *would revoke
+"Sales-Team" from N of N holders (100.0%)*. The run is held for confirmation
+and automatic apply leaves it. If the group had few holders and the threshold
+was generous, the run applies, and detection is a complaint, drift, or the
+audit log. No alert fires. Nothing was deleted either way.
+
+**Steps.** Turn off automatic apply (or unschedule), so the next run does not
+compute the same plan and, if under threshold, apply it. Open the held run,
+read the reason, and do **not** confirm it — **Cancel** it: while it is held,
+later runs on the target are skipped. Find the rule change and its actor in
+the audit log, correct the condition, use the impact preview to watch the
+count fall, save. **Run now** and read the plan. If the wrong plan **was**
+applied, the corrected run proposes the inverse — grants back to Sales,
+revocations from everyone else — and trips the per-entitlement threshold
+again, legitimately: read the numbers, confirm, apply. Spot-check one person
+(`GET /api/admin/persons/:id/access` and the group in AD). Restore the
+schedule and automatic apply.
+
+**Done when** the impact preview matches the intended population, the latest
+run is applied with no unexpected revocations, spot-checked people hold
+exactly the intended entitlements, and open drift on the target is reviewed.
+
+| Scorecard | Yes / No / Partial |
+|---|---|
+| Stopped automatic apply before editing the rule? | |
+| Wanted to confirm the held run to "get it over with"? | |
+| Knew a held run blocks later runs until confirmed or cancelled? | |
+| Used the impact preview before saving the fix? | |
+| Could explain why the inverse run is also held? | |
+| Found the actor in the audit log? | |
+
+#### Exercise 4: an urgent leaver during an outage
+
+**Opening line.** "16:45. HR calls: an employee must lose all access now. The
+Entra target is in exercise 2's Graph outage, and the job scheduler has been
+restarting since a database failover at 16:20."
+
+**What the product shows.** `scheduler_unavailable` at the top of **Activity →
+Attention**; `syntra_jobs_pending` absent. **End employment** on the person
+(`POST /api/admin/persons/:id/offboarding` with the reason and the preview's
+`revision`) works **without the scheduler**: it marks the person inactive,
+creates an `offboard` lifecycle operation with `local-access` and `targets`
+steps, and for every linked Syntra login revokes sessions and refresh tokens
+and disables it — a directory-owned login needs its source's disable
+write-back on, or the result says to disable it in the directory. The target
+step cannot be queued and is marked failed (*Background jobs are
+unavailable. Target work remains in the employee queue.*), so the operation
+appears under **Employee work → Failed** and `SyntraLifecycleWorkFailed`
+fires. An administrator cannot end their own employment.
+
+**Steps.** Open the person (**Users → People → the person**), **End
+employment**, read the preview (which logins, which targets, each source's
+write-back state), give the reason, **End employment now**. Read the result
+line by line: every `failed` login can still sign in somewhere — disable it in
+its directory by hand now, and record it. Assign the operation to yourself
+with priority `critical` and a due time, so the overdue alert has a clock.
+**Disable the account at the target by hand** — Syntra cannot reach Entra and
+cannot queue the work; knowing who holds that access, and how long it takes,
+is the point of the exercise. Relying parties with back-channel logout are
+told when the sender runs, which needs the scheduler: check
+`syntra_logout_deliveries_pending` after recovery. When the scheduler is back,
+**Retry operation**; when Graph is back, the run proposes the disable and
+finds it already done. **Record observed state** on the operation with what
+you verified at the target, then **Acknowledge work**.
+
+**Done when** every login shows `disabled` in the operation's evidence or the
+record names where it was disabled by hand; the account at every target is
+disabled, verified by reading the target; the operation is `completed` or
+acknowledged with a written reason; the lifecycle alerts have cleared; and the
+record states the time from the call to "no access anywhere".
+
+| Scorecard | Yes / No / Partial |
+|---|---|
+| Time from the call to Syntra sessions revoked | |
+| Time from the call to the target account disabled by hand | |
+| Knew End employment works without the scheduler? | |
+| Read each login's result rather than the banner? | |
+| Had standing access to disable the account at the target directly? | |
+| Assigned the operation an owner and a due time? | |
+| Checked back-channel logout delivery after recovery? | |
 
 ## Further reading
 
 - [Install](install.md) — development and container installs, TLS.
 - [Configuration](configure.md) — every environment variable, directory
   sources, SSO and federation configuration.
-- [docs/lab/README.md](lab/README.md) — the update workflow in full, and a
-  complete worked lab build.
+- [The console, screen by screen](console-guide.md) — where each control in
+  this document lives.
+- [`deploy/helm/syntra/README.md`](../deploy/helm/syntra/README.md) — the Helm
+  chart.

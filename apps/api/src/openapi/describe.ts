@@ -28,7 +28,7 @@ export interface RouteDescription {
   params?: ZodTypeAny;
   /**
    * The schema of a successful response body, where contracts has one. Most
-   * routes do not yet — see docs/api/README.md — and are published as "a JSON
+   * routes do not yet — see docs/configure.md (The administration API) — and are published as "a JSON
    * object" rather than with a schema invented for the document.
    */
   response?: ZodTypeAny;
@@ -40,7 +40,7 @@ export interface RouteDescription {
    */
   produces?: string;
   /**
-   * Marks the operation deprecated — see the policy in docs/api/README.md.
+   * Marks the operation deprecated — see the policy in docs/configure.md (The administration API).
    *
    * Not a bare flag, because a deprecation is a promise with a date on it.
    * Setting this publishes `deprecated: true` in the document AND makes every

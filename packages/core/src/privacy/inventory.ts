@@ -6,7 +6,7 @@
  * data-subject erasure does to it. Three things are derived from it rather
  * than written separately, so they cannot drift from each other:
  *
- *  - `docs/privacy/data-inventory.md`, rendered by `renderDataInventory()`
+ *  - `packages/core/data-inventory.md`, rendered by `renderDataInventory()`
  *    (`pnpm privacy:inventory`; a test fails when the committed file is stale);
  *  - the data-subject SEARCH and ACCESS BUNDLE, which read every table whose
  *    entry declares `links` and leave out every field marked `#secret`;

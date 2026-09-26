@@ -105,7 +105,7 @@ describe('searchAuditEvents filters', () => {
 
 // ---- query plans at 100,000 events -----------------------------------------
 //
-// The rehearsal docs/runbooks/scale-validation.md describes, for the audit
+// The rehearsal docs/operate.md (Runbooks: scale validation) describes, for the audit
 // log, run by the suite rather than by hand: 100,000 events in one tenant,
 // `ANALYZE`, then `EXPLAIN (ANALYZE, BUFFERS)` of the exact statement
 // `searchAuditEvents` runs for each filter at page size 51 (50 plus the
