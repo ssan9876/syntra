@@ -529,7 +529,7 @@ invent the values.
 
 ## Finding machine credentials nobody uses
 
-Every API token records when it was last used. `Sessions → the account → API
+Every API token records when it was last used. `Users → the account → API
 tokens` shows it, and a token that has never been used says so.
 
 That column exists because a credential nobody can tell is unused is a
@@ -554,8 +554,8 @@ machine credential is minted without anybody wiring that up separately.
 
 ## Deactivate, never delete
 
-There is no Delete anywhere in the directory, and that is a design decision
-rather than an omission. Deleting a group revokes access from everybody in it
+Deactivation, not deletion, is how the directory takes access away, and that
+is a design decision rather than an omission. Deleting a group revokes access from everybody in it
 and takes the record of who had what with it; deleting a user destroys the
 trail of what they held; deleting an org unit does both and orphans any
 administrative role scoped to it. A deactivated row is still listed, still
@@ -594,6 +594,18 @@ And one deliberate exception to the rule itself:
   and it is built to be hard to reach — see [Tenant deletion](#tenant-deletion).
   Nothing inside a tenant that is staying gains a Delete from it.
 
+Deleting a single **account** or an **empty org unit** does exist, for a
+directory that genuinely has to forget something, and it is gated three ways:
+the `directory.delete` permission (separate from `directory.write`), the name
+typed back in the console, and — for an object a directory source owns — the
+source's *Deleting a user or org unit removes it from this directory*
+write-back switch, without which it is refused (`409 delete-not-enabled`)
+because the next sync would only create it again. The directory is written
+first; Syntra's row goes only if that succeeded. An org unit is refused while
+any account (active or not), child unit or assigned person is still in it.
+**The person and the audit trail survive an account's deletion.** Groups and
+people have no delete.
+
 An **application** is not a directory object, and can be deleted: it is
 configuration an administrator registered, and deleting it is the only way to
 free a SAML entity ID or OIDC client ID for re-registration. Retire it first
@@ -608,9 +620,13 @@ identifying fields in place and leaves every directory row standing — see
 [Data-subject requests](#data-subject-requests). The only rows it deletes
 are credential material and transient protocol state.
 
-Rows owned by a directory source cannot be deactivated or edited here at all.
-The next sync run reads them as present and puts them back, so the console
-says who owns them rather than offering a control that silently reverts.
+Rows owned by a directory source cannot be edited here at all, and cannot be
+deactivated here unless the source has write-back on with *Deactivating a user
+disables their account here*. Otherwise the next sync run reads them as
+present and puts them back, so the console says who owns them rather than
+offering a control that silently reverts. With that switch on, Deactivate
+disables the account in the directory first, then in Syntra (see
+[the lab, §2.7](lab/README.md#27-write-back-changing-active-directory-from-syntra)).
 
 Deactivation is also the one place policy changes are immediate rather than
 waiting for a session to expire — a user's status is re-read on every
@@ -1009,6 +1025,20 @@ evaluates the guard afresh against baselines that only an **applied** run moves
 a change still over a threshold is held again. A receipt only ever applies its
 own person's actions, from a plan the guard let through.
 
+### Schedules and automatic apply
+
+A target's **Schedule** (under *Schedule and enforcement* on the target page)
+is a cron expression evaluated in **UTC** — `0 * * * *` hourly,
+`*/15 * * * *` every fifteen minutes, `0 3 * * *` daily at 03:00 UTC. Blank
+means the target runs only when somebody starts a run, and the targets
+overview says *By hand only*. **Apply scheduled runs automatically**
+(`autoApply`) applies what a run plans without a person, except what the
+guard holds and the single actions described next; with no schedule it does
+nothing, and the form warns about that. **Run now** on the target page (it
+needs `provision.manage`, like `POST /api/admin/targets/:id/runs`) starts a
+run at once; it is held while the saved target is disabled, because the
+worker drops a disabled target's job without recording a run.
+
 ### Held actions and renames
 
 Some single actions need a person's confirmation even in a run nobody held: a
@@ -1398,12 +1428,19 @@ the whole suite. Other jobs:
   It also checks that the chart refuses to render without a Secret, that the
   backup script parses, and that the chart's copy of the alert rules matches
   `ops/prometheus-alerts.yml`.
+- `openapi document` regenerates `docs/api/openapi.json` with
+  `pnpm openapi:generate` and fails when the committed copy differs; the fix
+  it prints is to run the generator and commit the result.
 
-Both bring the infrastructure up with `infra/docker-compose.yml` rather than
-GitHub's `services:`. The OpenLDAP container needs its bootstrap LDIF and TLS
+The suite shards and the browser job bring the infrastructure up with
+`infra/docker-compose.yml` rather than GitHub's `services:` (the shards also
+start Vault from its `kms` profile). The OpenLDAP container needs its bootstrap LDIF and TLS
 settings and the Samba container needs a domain provisioned; both are already
 expressed in that file, and a second, drifting copy of it in YAML is how CI
-starts testing something the developers do not run.
+starts testing something the developers do not run. The browser job waits for
+a seeded OpenLDAP entry to answer over TCP before it starts the stack: the
+image restarts `slapd` after seeding, and a sync test that ran into the
+restart failed with `ECONNREFUSED` on 1389.
 
 **A known flake, fixed by capping the worker count.** Too many vitest workers
 against one PostgreSQL server made a handful of `resetDatabase()` hooks time

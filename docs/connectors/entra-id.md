@@ -47,6 +47,7 @@ Code: `packages/connectors/src/entra/`. Fake for tests:
 | nestedGroups | unsupported | — | Direct memberships only. |
 | dynamicGroups | unsupported | — | Listed as `manageable: false`; grants refused. |
 | deleteAccount | never | — | No code path issues `DELETE /users`. |
+| readCredentialExpiry | available (optional) | `Application.Read.All` | automated only | Reads the app registration's own `passwordCredentials` so the credential inventory can show the client secret's expiry. Without consent Graph answers 403 and the expiry stays declared or unknown; nothing else changes. |
 
 "Automated" means `packages/connectors/src/entra/connector.test.ts` covers
 it against the fake Graph. That proves protocol handling and nothing about
@@ -61,6 +62,11 @@ Application permissions, with admin consent, and no more:
 - `User.ReadWrite.All`
 - `GroupMember.ReadWrite.All`
 - `Group.Read.All`
+
+Optionally `Application.Read.All`, only so the credential inventory can
+discover the client secret's expiry (`readCredentialExpiry`; see
+[Credentials and security notifications](../configure.md#the-credential-inventory)).
+Provisioning never needs it.
 
 Graph does not publish effective application permissions, so the connection
 test reports every right as `unverified` with that reason. It does
@@ -177,7 +183,8 @@ provisioning run skips the container check entirely for this target: no
 account profile's **Container template** and **Fallback container** are
 ignored; the schema still requires them, and `/` is the conventional value.
 Manually moving an account on this target is refused with `409
-no-containers`, and so is mapping an org unit to a container on it.
+no-containers`, and so is mapping an org unit to a container on it; turning
+on **Mirror org units as OUs** is refused too (`422 mirror-unsupported`).
 
 ## Nested and dynamic groups
 

@@ -30,10 +30,10 @@ uploads.
 
 | Module | Status | Contents |
 |---|---|---|
-| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications with webhook endpoints for Automate, Govern and security events, an optional Prometheus endpoint, a backup tool that verifies itself by restoring — with systemd timers for it, on the release layout only; the container path has no backup mechanism of its own (see [Operating Syntra](docs/operate.md#backups)) — web console. Users, groups, org units and people can be created, edited and deactivated from the console — never deleted |
+| **Core** | built | Multi-tenancy, directory, persons and contracts, RBAC, audit log, secrets vault, scheduler, notifications with webhook endpoints for Automate, Govern and security events, an optional Prometheus endpoint, a backup tool that verifies itself by restoring — with systemd timers for it, on the release layout only; the container path has no backup mechanism of its own (see [Operating Syntra](docs/operate.md#backups)) — web console. Users, groups, org units and people can be created, edited and deactivated from the console; an account or an empty org unit can also be deleted, behind a permission of its own (`directory.delete`), and people are never deleted |
 | **Directory Sync** | built | **Inbound SCIM 2.0**: an identity provider pushes users and groups to `/scim/v2`, authenticating with a machine token, and what it pushes is owned by the source that pushed it — the push counterpart to the pull connectors, not a replacement for them. LDAP/OpenLDAP connector over LDAPS or StartTLS, attribute mapping and correlation, previewed diffs, a mass-deactivation guard, scheduled and on-demand runs, and console screens for the lot: a source editor with a connection test, a mapping editor, and a run review with per-change skip and partial apply |
 | **Access** | built | Application catalog and assignments, authentication policy, TOTP and WebAuthn second factors, recovery codes, self-service password reset, step-up MFA for the console, a session inventory an administrator or the person themselves can revoke from, and API tokens for machines — issued against a service account, bounded by the intersection of its roles and the token's scopes, and refused by the same `authorize()` as everybody else. **SAML 2.0 identity provider**: both bindings, SP-initiated and IdP-initiated, signed assertions, optional encryption, front-channel single logout, metadata by upload or URL. **OpenID Connect provider**: authorization code with PKCE, refresh-token rotation, discovery, JWKS with overlapping rotation, UserInfo, RP-initiated logout, working token revocation and introspection, back-channel logout to relying parties that ask for it, and a bounded client-credentials grant. **Upstream federation**: Syntra as a SAML service provider and as an OIDC relying party, with just-in-time provisioning and policy-driven routing. Every path reaches the same `authorize()`. See [what it does not do](docs/configure.md#what-the-federation-half-does-not-do) |
-| **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync. Org units drive placement: materialise a unit against a target and the accounts of everyone in it are created in that container, which Provision creates where an administrator asked for it by name and never to satisfy a template |
+| **Provision** | built | Source systems, business rules, evaluation and enforcement, target systems and entitlements, previewed runs in the same idiom as Directory Sync. Org units drive placement: materialise a unit against a target and the accounts of everyone in it are created in that container, which Provision creates where an administrator asked for it by name and never to satisfy a template — or turn on **Mirror org units as OUs** on an Active Directory target and every unit is placed at a DN derived from the org-unit tree, with renames and moves carried to the directory in runs a person confirms |
 | **Provision — Sources** | built | The HR feed. A delimited export read over SFTP on a schedule, with the server's host key pinned and no trust-on-first-use, mapped onto persons and contracts, and previewed as a reviewable diff with per-change skip and partial apply. Two guards stand between a bad export and the register: one measures what a run does against what its own source owns, the other whether the person register itself is collapsing. Absence means a leaver only for a source declared to carry a full snapshot — never for a delta, never for a row that was read but could not be mapped, and never at all on a run whose failures cannot be attributed to anybody, which is what a renamed column looks like |
 | **Automate** | built | Product catalog, self-service requests, approval workflows, resource delegation so a team lead manages a group without an administrative session, and an expiry sweep with a proportional guard |
 | **Govern** | built | Reconciliation, segregation of duties, recertification campaigns, a tamper-evident snapshot chain with optional signing and anchoring |
@@ -125,11 +125,13 @@ every environment variable involved.
 
 ## Deactivate, never delete
 
-There is no Delete anywhere in the directory, and that is a design decision
-rather than an omission: deactivating a user, group or org unit revokes real
-access — **grants nothing** — while keeping the trail of who had what and why
-it changed, so reactivating puts back exactly what was there. Full detail,
-including the two deliberate exceptions, in
+Deactivation is how the directory takes access away, and that is a design
+decision rather than an omission: deactivating a user, group or org unit
+revokes real access — **grants nothing** — while keeping the trail of who had
+what and why it changed, so reactivating puts back exactly what was there.
+Deleting an account or an empty org unit exists too, but only behind its own
+`directory.delete` permission and a typed confirmation, and never for a
+person. Full detail, including the two deliberate exceptions, in
 [Operate](docs/operate.md#deactivate-never-delete).
 
 ## Access, second factors and federation

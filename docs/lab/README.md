@@ -290,7 +290,7 @@ is not a trade worth making for a directory bind.
 
 ## 2.1 Reading from Active Directory
 
-**Directory sources → Connect a directory.**
+**Sources → Connect a directory.**
 
 ![Empty sources](images/01-sources-empty.jpg)
 
@@ -325,8 +325,8 @@ Untick to leave a change proposed; skip to record it as never to be applied.
 ![Sync applied](images/06-sync-applied.jpg)
 
 Accounts and hierarchy arrive marked read-only and source-owned — the console
-offers no edit or deactivate control for them, because the next run would
-overwrite it:
+offers no edit control for them, and no deactivate control until write-back is
+turned on (§2.7), because the next run would overwrite it:
 
 ![Org units](images/07-org-units-synced.jpg)
 ![Users](images/08-users-synced.jpg)
@@ -354,8 +354,11 @@ about the ones it cannot prove:
 
 Use `%baseDn%` for the container when the base DN already ends in `OU=Users` —
 the default template would produce `OU=Users,OU=Users,…`. The fallback
-container is **required**: Provision does not create organisational units in
-somebody else's domain.
+container is **required**: Provision never creates an organisational unit to
+satisfy a template. It creates OUs only for org units an administrator
+materialised on the target by name, or — with **Mirror org units as OUs** on —
+for the org-unit tree, under the run's guard (see
+[Org units as OUs](../operate.md#org-units-as-ous)).
 
 ![Account profile](images/10-account-profile.jpg)
 
@@ -395,8 +398,12 @@ Get-ADUser -SearchBase "OU=Users,OU=Syntra,DC=example,DC=local" `
 
 ## 2.3 SAML single sign-on
 
-**There is no SAML configuration screen in the console yet.** The API supports
-it and the identity provider works; registration is currently an API call.
+**Applications → Add from the catalog** registers a known service provider
+(Snipe-IT among them) with its endpoints, claims and launch address filled
+in, and the application's page has a **SAML** panel for everything else:
+metadata import, the entity ID and ACS URLs, request signing, *Allow sign-in
+started from Syntra*, the single logout URL and the launch address, plus claim
+mappings. The same settings are API calls, which is how this lab first did it:
 
 ```bash
 # The application must be type "saml" — a bookmark is refused
@@ -418,6 +425,15 @@ curl -b "$J" -X PUT -H 'Content-Type: application/json' -d '{
 certificate to check against — deliberately. Set it `false` only for a service
 provider that does not sign, and turn it back on once you have registered
 their signing certificate.
+
+`allowIdpInitiated: true` is what lets the portal tile post an assertion
+straight to the service provider. Leave it off (the default, and what the
+catalog creates) and the tile opens the application's **launch address**
+instead, which must be its SSO start page — Snipe-IT's is
+`https://app.example.com/login/saml` — so the application starts the sign-in
+itself. With it off and no launch address the tile answers
+`409 not-launchable`. See
+[Signing in to applications](../configure.md#signing-in-to-applications).
 
 Give the service provider:
 
@@ -494,13 +510,19 @@ single-use, so each attempt needs a freshly generated one.
 
 ## 2.4 Email
 
-Syntra sends mail for password resets, factor enrolment, approval requests and
-campaign invitations. `SMTP_URL` points at a development mail sink by default,
+Syntra sends mail for password resets, factor enrolment, approval requests,
+campaign invitations and new accounts' one-time sign-in links (see
+[New accounts' sign-in details](../configure.md#new-accounts-sign-in-details)). `SMTP_URL` points at a development mail sink by default,
 which accepts everything and delivers nothing.
 
 ```ini
 SMTP_URL=smtps://user:password@mail.example.com:465
 ```
+
+`MAIL_FROM` sets the From header. On Microsoft 365, `MAIL_TRANSPORT=graph`
+sends through Microsoft Graph as one mailbox instead, and `SMTP_URL` is then
+not needed — see
+[Sending through Microsoft 365](../configure.md#sending-through-microsoft-365).
 
 Two things to get right, and they are separate:
 
@@ -523,9 +545,11 @@ Provision  --archive_account-->  OU=Deactivated  --30 days-->  scheduled task de
                                            => next sync proposes deactivate_user
 ```
 
-**Syntra archives. The domain deletes.** Syntra has no delete operation of any
-kind — `write` in the AD connector rejects one before it binds, with a message
-that says so rather than answering "not found":
+**Syntra archives. The domain deletes.** Provision has no delete operation of
+any kind — `write` in the AD connector rejects one before it binds, with a
+message that says so rather than answering "not found" (deleting a single
+account by hand, through a directory source's write-back, is a separate
+opt-in; see §2.7):
 
 ```
 "delete_account" is not an operation this connector implements;
@@ -550,7 +574,7 @@ This is the whole mechanism, and getting it wrong is silent.
 
 Provision moves the object to the archive; the object thereby leaves the sync's
 search base; the next run reads it as absent and proposes `deactivate_user`
-(`packages/core/src/sync/diff.ts:151`). You review that like any other change
+(`packages/core/src/sync/diff.ts`, the loop over absent rows). You review that like any other change
 and apply it.
 
 Nest the archive **inside** `OU=Company` and none of it happens. The sync keeps
@@ -558,9 +582,10 @@ seeing the account, keeps it active, and you have an archive that archives
 nothing. Nothing errors.
 
 This is also the answer to "why can't I deactivate a synced user in the
-console?" The control is withheld because a matched-but-inactive record is read
+console?" (without write-back — §2.7 adds the control by disabling the account
+in AD first). The control is withheld because a matched-but-inactive record is read
 as *the account came back*, and the next run proposes reactivating it
-(`diff.ts:104`) — the button would appear to work and quietly undo itself. Move
+(`diff.ts`, the `reactivate_user` branch) — the button would appear to work and quietly undo itself. Move
 the object out of the search base and the deactivation arrives through the
 source, which is the only place it holds.
 
@@ -902,8 +927,8 @@ leaver from the console.
 
 ### Turn it on
 
-**Directory sources → (your source) → Write-back.** Three switches, all off
-until somebody turns them on, and off for every source that existed before the
+**Sources → (your source) → Write-back.** Four switches, all off until
+somebody turns them on, and off for every source that existed before the
 feature did:
 
 | Switch | What it allows | What the bind needs |
@@ -911,6 +936,7 @@ feature did:
 | Allow Syntra to write to this directory | the master switch; nothing below works without it | — |
 | Deactivating a user disables their account here | the Deactivate button on a directory-managed user | write `userAccountControl` on accounts in scope |
 | Self-service password change writes through | the portal changes the domain password | **nothing extra** |
+| Deleting a user or org unit removes it from this directory | Delete on a directory-managed account or empty org unit (also needs the `directory.delete` permission); the only switch whose effect Syntra cannot undo | delete rights on the objects in scope |
 
 That last row is the important one. Syntra changes a password by binding **as
 the user**, with the password they just typed, and performing the standard LDAP
@@ -1008,7 +1034,7 @@ deactivates them with the reason `Disabled in directory source`. To see it:
 # On the DC
 Disable-ADAccount -Identity someone
 
-# Then run a sync from Directory sources -> Run now, and check:
+# Then run a sync from Sources -> (your source) -> Run now, and check:
 #   the user shows Inactive, reason "Disabled in directory source, run <id>"
 #   their portal login is refused
 #   their Snipe-IT SSO no longer works
@@ -1046,8 +1072,8 @@ this exists to end.
 
 ## 2.8 Updating Syntra from the console
 
-Settings → **Updates** shows the running version, what is available, and a
-button. Getting there needs three one-time steps, and one thing to understand
+The console's **Updates** page (`deployment.manage`) shows the running
+version, what is available, and a button. Getting there needs three one-time steps, and one thing to understand
 first.
 
 ### Why this is not an ordinary update button
@@ -1109,8 +1135,11 @@ git tag -a v1.0.0 -m "First release."
 git push origin v1.0.0
 ```
 
-The tag message becomes the notes an operator reads before deciding. CI runs
-first: **a tag whose tests fail produces no release.**
+The tag message becomes the notes an operator reads before deciding. Tag a
+commit that is on `main`: the release workflow refuses any other. It reuses
+`main`'s own green CI run for that exact commit when there is one, and runs
+the whole suite when there is not — either way, **a tag whose tests fail
+produces no release.**
 
 ### What pressing Update does
 
@@ -1196,3 +1225,9 @@ Two other things worth knowing before the first run:
   exactly — the feature is adoptable one person at a time.
 - `maxContainerCreatesPerRun` defaults to **5**. It is an absolute count, not
   a percentage: containers have no population to be a share of.
+- Materialising units one at a time is the hand-typed route. **Mirror org
+  units as OUs** (the target's *Org units* section) places every active unit
+  at a DN derived from the tree instead, and a typed DN still wins over it —
+  so a target switched to mirroring after units were typed by hand needs
+  **Switch all to mirrored**. A run that moves an OU is always held for a
+  person. See [Org units as OUs](../operate.md#org-units-as-ous).

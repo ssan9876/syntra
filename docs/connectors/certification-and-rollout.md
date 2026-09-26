@@ -17,7 +17,7 @@ records its version, connector API version, channel (`stable` or `canary`),
 support state, rollout state, deprecation date, and its certification:
 status (`passed`, `partial`, `failed`, `not-run`), evidence, and the list of
 **capabilities** (connector writes) it was certified for:
-`create_container`, `create_account`, `update_account`, `rename_account`,
+`create_container`, `move_container`, `create_account`, `update_account`, `rename_account`,
 `enable_account`, `disable_account`, `archive_account`, `grant_entitlement`,
 `revoke_entitlement`.
 
@@ -29,7 +29,7 @@ Shipped releases (all 1.0.0, stable):
 
 | Type | Certification | Certified writes |
 | --- | --- | --- |
-| `activeDirectory` | passed | everything, including `create_container` |
+| `activeDirectory` | passed | everything, including `create_container` and `move_container` (an LDAP modifyDN that carries the OU's accounts with it, used by org-unit mirroring) |
 | `scim2` | passed | all account and entitlement writes; no containers |
 | `httpJson` | passed | all account and entitlement writes; no containers |
 | `entraId` | partial | all account and entitlement writes; no containers |

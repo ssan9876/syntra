@@ -155,6 +155,20 @@ A starting account profile:
 Do not add a `displayName` template: Snipe-IT derives `name` from first and
 last name and the document neither reads nor writes it.
 
+## Single sign-on to Snipe-IT
+
+Provisioning and sign-in are separate registrations. For SAML, add Snipe-IT
+from the application catalog (**Applications → Add from the catalog**) with
+its hostname. The entry registers the entity ID `https://<host>`, the ACS
+`https://<host>/saml/acs`, an email NameID, the `username`, `email`,
+`firstname` and `lastname` attributes, single logout at
+`https://<host>/saml/sls` in the **HTTP-Redirect** binding (the only one
+Snipe-IT's SLS answers), and the launch address `https://<host>/login/saml`.
+Sign-in started from Syntra stays off, so the portal tile opens that address
+and Snipe-IT starts the sign-in itself. Importing Snipe-IT's own SP metadata
+instead also picks up the binding. The username rule above is what makes the
+assertion match an account.
+
 ## Cloudflare and the User-Agent
 
 Instances fronted by Cloudflare (including many hosted ones) refuse

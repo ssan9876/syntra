@@ -31,8 +31,8 @@ supported, working configuration.
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `3000` | The port the API listens on. |
-| `SHADOW_DATABASE_URL` | — | The database `prisma migrate dev` builds and tears down to diff against. Needed only for `db:migrate:dev`, not for `db:migrate`. |
-| `SUPERUSER_DATABASE_URL` | — | Tests only. Owns the `CREATE DATABASE` the test harness performs for each worker's shard — simulates an attacker with direct database access, the threat the audit hash chain exists to detect. Never used by the application itself. |
+| `SHADOW_DATABASE_URL` | — | The database `prisma migrate dev` builds and tears down to diff against. Needed only for `pnpm --filter @syntra/db migrate:dev`, not for `pnpm db:migrate`. `syntra-update` passes it to the migration step when `shared/.env` sets it, and falls back to `DATABASE_URL`. |
+| `SUPERUSER_DATABASE_URL` | — | Owns the `CREATE DATABASE` the test harness performs for each worker's shard — simulates an attacker with direct database access, the threat the audit hash chain exists to detect. Never used by the API itself. On the release layout, `syntra-update` and `syntra-backup` take the **role** from it to run `pg_dump`, because a dump taken as `syntra_app` sees no rows under row-level security; without it they fall back to a role named after the database. |
 | `AUTH_RATE_LIMIT_MAX` | `10` | Authentication attempts per minute, per tenant per address. |
 | `AUTH_RATE_LIMIT_TENANT_MAX` | 10× `AUTH_RATE_LIMIT_MAX` | Attempts per minute, per tenant, across every address at once — the ceiling that does not move when an attacker rents more addresses. |
 | `RATE_LIMIT_STORE` | `postgres` | Where rate-limit counters live. `postgres` shares one counter per key across every API process, so the limits above apply to the deployment as a whole. `memory` keeps per-process counters, which is correct only with a single process; with N processes each limit is effectively N times larger. |
@@ -48,6 +48,10 @@ supported, working configuration.
 | `SAMBA_BIND_PASSWORD` | `Syntra!Passw0rd` | See above, matches the samba service's `DOMAINPASS`. |
 | `LOG_LEVEL` | `info` | Fastify's own logger level: `error`, `warn`, `info`, `debug`, `trace`, `silent`. Every level goes through the same redaction; `debug` does not relax it. See [Observability](operate.md#observability). |
 | `POLICY_COUNTRY_HEADER` | unset | The header naming the caller's country, for the policy engine's country conditions — Cloudflare sends `cf-ipcountry`; most other proxies need configuring by hand. Unset leaves every country condition unevaluable, which is right for a deployment with no proxy that sets one: guessing a header name would let an untrusted client claim its own country. |
+| `WEB_PORT` | `5173` | Development server only (`apps/web/vite.config.ts`). The port Vite listens on; it fails rather than moving to the next free port when this one is taken. |
+| `WEB_HOST` | `127.0.0.1` | Development server only. The address Vite binds — IPv4 loopback on purpose, so the browser suite's `*.localhost` mapping reaches it. |
+| `API_TARGET` | `http://127.0.0.1:3000` | Development server only. Where Vite proxies the API's paths; change it with `PORT` to run a second stack beside the first. |
+| `WEB_ALLOWED_HOSTS` | unset | Development server only. Extra hostnames Vite will answer for, comma-separated, or `true` for any. Unset allows `localhost` and IP addresses only; see [Install](install.md#reaching-an-instance-by-more-than-one-name). |
 | `WEB_ROOT` | unset | Where the built single-page application lives. Unset, the API serves itself alone — right for the test suite and `pnpm dev`, where Vite is the origin. Set it after `pnpm build` to serve the whole deployment from one process, one origin, one port; see [Install](install.md#running-the-built-application-as-one-process). |
 | `GOVERN_CHECKPOINT_KEY` | unset | 32 bytes, base64-encoded. Signs Govern's audit checkpoints. A deployment with none configured is honest about it: `checkpointTrust` returns `unsigned_no_signer_configured` and the console says so, rather than claiming protection that isn't there. |
 | `GOVERN_CHECKPOINT_KEY_ID` | `govern-checkpoint-1` | The id the checkpoint key above is known by. |
@@ -67,7 +71,11 @@ supported, working configuration.
 
 With `MAIL_TRANSPORT=graph` the API refuses to start unless all four `MAIL_GRAPH_*`
 variables are set, and names every missing one. The status page's mail check
-fetches a token and sends nothing.
+fetches a token and sends nothing. The container path passes all of them
+through from the environment; under Helm they are `mail.transport`,
+`mail.from` and `mail.graph.{tenantId,clientId,sender}` in values, with the
+client secret read from the Secret key named by
+`secretKeys.mailGraphClientSecret`.
 
 #### Sending through Microsoft 365
 
@@ -175,14 +183,16 @@ front is cheaper than discovering it later as a `409 saml-no-key`.
 ### SEED variables
 
 Read once, by `pnpm seed` (`packages/db/src/seed.ts`), which creates **demo
-data** — a tenant, an administrator and an ordinary portal user, for
-development and for the browser suite. It is not the production bootstrap
-above and must not be used as one.
+data** — the `acme` tenant on `acme.localhost`, an administrator (`admin`), an
+ordinary portal user (`jdoe`), a deactivated leaver (`sroe`) and an account
+with no person behind it (`svc-backup`), for development and for the browser
+suite. It is not the production bootstrap above and must not be used as one.
 
 | Variable | Meaning |
 |---|---|
 | `SEED_ADMIN_PASSWORD` | The demo `admin` account's password. Required — the seed refuses to run without it, and refuses anything under 12 characters. |
 | `SEED_USER_PASSWORD` | The demo `jdoe` account's password. Falls back to `SEED_ADMIN_PASSWORD` when unset. |
+| `SEED_DEMO` | Exactly `1` adds lifecycle scenarios (a hire half-provisioned, a failed target, a write waiting for read-back, an overdue departure) and portal categories, against two **disabled** demo targets. Off by default because the browser suite counts rows on a plain seed. |
 
 `SEED_ADMIN_PASSWORD` is required rather than defaulted for one reason: a seed
 with a built-in password creates a well-known administrator on every machine it
@@ -190,9 +200,12 @@ ever runs on, including the one somebody puts on a network "just to have a look"
 
 ### Updating from the console
 
-`RELEASE_REPO`, `RELEASE_TOKEN`, `RELEASE_ROOT` and `PG_CONTAINER` configure
-the in-console updater. See [Operating Syntra](operate.md#upgrades) for what
-they do and how upgrades work.
+`RELEASE_REPO`, `RELEASE_TOKEN`, `RELEASE_ROOT` (default `/opt/syntra`) and
+`PG_CONTAINER` configure the in-console updater. `PG_CONTAINER` names the
+PostgreSQL container the pre-migration dump is taken through; `syntra-update`
+falls back to `infra-postgres-1`, and `syntra-backup` refuses to run without
+it. See [Operating Syntra](operate.md#upgrades) for what they do and how
+upgrades work.
 
 ### Metrics
 
@@ -425,15 +438,16 @@ yourself. The same container serves StartTLS on that port and LDAPS on
 
 A source's `config` carries a `tlsMode` — `plain`, `starttls` or `ldaps`.
 StartTLS completes before the bind, so the bind password never crosses the
-wire in the clear; `plain` means it does, and the **Directory sources** page
-says so in as many words. Left out, the mode is read from the URL scheme, so
+wire in the clear; `plain` means it does, and the source's page (under
+**Sources** in the console) says so in as many words. Left out, the mode is read from the URL scheme, so
 a source saved before the field existed keeps the transport it had. Server
 certificates are verified unless a source sets `rejectUnauthorized: false`,
 which the same page flags. The mode and the scheme have to agree: an
 `ldaps://` URL with any other mode is refused rather than quietly
 reinterpreted.
 
-Sources are created and edited from **Directory sources** in the console.
+Sources are created and edited from **Sources** in the console (directory
+sources and HR feeds share that page).
 **New source** opens an editor for the connection, the search bases and
 filters, the anchor attribute, the schedule and the deactivation threshold;
 **Start from Active Directory / OpenLDAP** seeds the attribute mappings, the
@@ -492,10 +506,22 @@ A directory-managed account is labelled as such wherever it appears: **Users**
 names the source that owns it and says the fields are read-only, because a
 change made here is overwritten by the next run.
 
+**Write-back** is the exception, and it is off for every source until turned
+on: a master switch (*Allow Syntra to write to this directory*) and three
+writes under it — deactivating a user disables the account in the directory,
+self-service password changes write through, and *Deleting a user or org unit
+removes it from this directory*. The directory is written first and Syntra's
+row changes only if that succeeded. Deleting an account or an (empty) org unit
+also needs the `directory.delete` permission and the name typed back; for a
+directory-managed object it is refused (`409 delete-not-enabled`) unless the
+delete switch is on, because removing only Syntra's row would let the next run
+create it again. What each switch needs from the bind account is in
+[the lab, §2.7](lab/README.md#27-write-back-changing-active-directory-from-syntra).
+
 A run always previews before it applies. `POST /api/admin/sources/:id/run`
 reads the directory, correlates it against what Syntra already holds, and
 writes a reviewable diff — creates, updates, deactivations, and membership
-changes, grouped by type on the **Sync runs** review screen — without
+changes, grouped by type on the run's review screen (**Sources → Runs**) — without
 touching anything yet. Only an explicit `POST /api/admin/sync-runs/:id/apply`,
 from that same review screen, writes the changes.
 
@@ -903,6 +929,13 @@ Turning it off is a posture an administrator may choose per application, and
 it has to be chosen — importing metadata that publishes no signing
 certificate is refused rather than quietly writing the weaker setting.
 
+**Metadata import takes the single logout endpoint in the binding the service
+provider publishes.** The first `SingleLogoutService` in a binding Syntra can
+answer in (HTTP-Redirect or HTTP-POST) is stored with its binding, and the
+LogoutResponse goes back in that binding — Snipe-IT, for one, serves
+`/saml/sls` as HTTP-Redirect only and ignores a POST. A service provider that
+publishes only SOAP gets no SLO URL. Catalog entries carry the binding too.
+
 **Redirect URIs and assertion consumer service URLs are matched byte for
 byte.** There is no wildcard, no prefix and no normalization anywhere in the
 comparison, and the registration form refuses a URL that is not a plain
@@ -1248,15 +1281,16 @@ Two behaviours are worth knowing before you integrate:
 Everything else `oidc-provider` owns still cannot see a real client secret, and
 that is still correct.
 
-**A refused request signature is not in the audit log.** A service provider
-whose `AuthnRequest` fails signature verification gets a 400 or a 409 naming
-the setting and the application, and the server logs it — but there is no
-`recordEvent` for it, so it does not appear in the tamper-evident log or in the
-console's audit screen. A service provider that has stopped signing correctly
-is visible in the API logs and nowhere else.
+**A refused request signature is audited.** A service provider whose
+`AuthnRequest` or `LogoutRequest` fails signature verification, or arrives
+unsigned for an application that requires signatures and has no certificate,
+gets a 400 or a 409 naming the setting and the application, and the refusal is
+recorded as `saml.signature_refused` (in the **Sign-in security** webhook
+group), so a service provider that has stopped signing correctly shows up in
+the audit log as well as the API logs.
 
-**Signed metadata, back-channel logout, a consent screen and a scheduled sweep
-of expired artifacts are all out.** The identity-provider metadata document is
+**Signed metadata, SAML back-channel (SOAP) logout, a consent screen and a
+scheduled sweep of expired artifacts are all out.** The identity-provider metadata document is
 unsigned — it is served over TLS from the tenant's own host, which
 `assertProtocolHost` enforces. Assignment is the consent decision, so there is
 no per-launch consent screen. `sweepExpiredArtifacts` exists and expiry is
@@ -1387,11 +1421,13 @@ payload — and is never held for a daily digest.
 | Suspicious authentication | `auth.lockout`, `auth.lockout_cleared`, `mfa.removed` (mailed only when an administrator removed it), `oidc.decision_missing` | Sign-in security, Credentials | opt-in |
 | Credential expiry | `credential.expiring`, `credential.expired` | Credentials | owner always; administrators opt-in, or when there is no owner |
 
-**Break-glass use.** Syntra has no break-glass account type. The closest
-controls are administrative elevation (`auth.elevate`, Sign-in security) and
-the emergency write stops above; an organisation that keeps a break-glass
-administrator should subscribe an endpoint to Sign-in security and alert on
-that account's `auth.elevate`.
+**Break-glass use.** Designated emergency accounts are described under
+[Break-glass (emergency access)](#break-glass-emergency-access). Every step —
+designation, activation requested, activated, ended, reviewed — is a
+`break_glass.*` event in the **Privileged access** webhook group, and every
+`tenant.manage` holder is mailed when an activation is requested and when it
+takes effect, whatever this policy says. Subscribe an endpoint to Privileged
+access and alert on `break_glass.activation_requested`.
 
 Changing the policy is audited as `tenant.security_notifications_updated` in
 the Configuration changes group.
@@ -1418,6 +1454,15 @@ account**, or `"kind": "service"` on `POST /api/admin/users`). It needs
 before and after. An account linked to a person cannot be one, and a service
 account cannot be linked to a person: both are refused with `409`.
 
+**An integration's login that was given a person by mistake** is unlinked
+first: **Unlink** beside the person on the account's page, or
+`POST /api/admin/persons/:id/unlink-user` with `{"userId": "…"}`. It needs
+`identity.write`, is audited as `person.unlinkUser`, and answers
+`409 not-linked` when the account is not linked to that person (a stale page).
+The account keeps its password, tokens and status; what changes is that the
+person's leaver no longer disables it and it no longer reaches applications
+through the person's org unit. Then mark it as a service account.
+
 Exactly two things differ, both about the password, because nobody signs in as
 an integration to change one:
 
@@ -1437,7 +1482,7 @@ sign-in, which still meets scheduled password expiry if the tenant has it on.
 
 ### Issuing one
 
-**Sessions → the account → API tokens**, in the console, or
+**Users → the account → API tokens**, in the console, or
 `POST /api/admin/users/:id/tokens`. It needs `token.manage`, which is separate
 from `directory.write` on purpose: issuing a credential that *acts as* an
 account is a different authority from editing that account's display name.
