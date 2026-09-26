@@ -15,7 +15,7 @@ const json = (body: unknown) =>
 const runItem = (over: Record<string, unknown> = {}) => ({
   runId: 'run-1',
   targetSystemId: 'target-1',
-  targetName: 'ssander.xyz entra',
+  targetName: 'contoso.com entra',
   status: 'blocked',
   requiresConfirmation: true,
   blockedReason: 'would create 1 of 2 accounts (50.0%), above the 20% threshold',
@@ -55,7 +55,7 @@ describe('AttentionBanner', () => {
     const banner = await screen.findByRole('status', { name: 'Work that needs your attention' });
     expect(banner).toHaveAttribute('aria-live', 'polite');
     expect(within(banner).getByText('2 items need your attention')).toBeInTheDocument();
-    expect(banner).toHaveTextContent('A provisioning run on ssander.xyz entra is held for review — would create 1 of 2 accounts (50.0%), above the 20% threshold');
+    expect(banner).toHaveTextContent('A provisioning run on contoso.com entra is held for review — would create 1 of 2 accounts (50.0%), above the 20% threshold');
     expect(banner).toHaveTextContent('1 lifecycle operation is waiting for the target account to be verified');
     expect(within(banner).getByRole('link', { name: 'Review the run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
     expect(within(banner).getByRole('link', { name: /Activity → Attention/ })).toHaveAttribute('href', '/admin/activity?tab=attention');
@@ -94,7 +94,7 @@ describe('Activity → Attention', () => {
     mockApi(summary());
     render(<MemoryRouter><IncidentsTab /></MemoryRouter>);
     expect(await screen.findByText('Waiting for a decision')).toBeInTheDocument();
-    expect(screen.getByText(/A provisioning run on ssander.xyz entra is held for review/)).toBeInTheDocument();
+    expect(screen.getByText(/A provisioning run on contoso.com entra is held for review/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Review the run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
     expect(await screen.findByText(/nothing is broken/i)).toBeInTheDocument();
   });

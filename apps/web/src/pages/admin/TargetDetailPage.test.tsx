@@ -1084,18 +1084,18 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
   const PREVIEW = {
     mirrorOrgUnits: false,
     placesAccountsInContainers: true,
-    baseDn: 'DC=ssander,DC=local',
-    rootDn: 'OU=Syntra,DC=ssander,DC=local',
+    baseDn: 'DC=contoso,DC=local',
+    rootDn: 'OU=Syntra,DC=contoso,DC=local',
     rootProblem: null,
     units: [
       {
         id: 'u-it', name: 'IT', parentId: 'u-local', status: 'active', depth: 1,
-        derivedDn: 'OU=IT,OU=ssander.local,OU=Syntra,DC=ssander,DC=local', row: null,
+        derivedDn: 'OU=IT,OU=contoso.local,OU=Syntra,DC=contoso,DC=local', row: null,
         effectiveDn: null, placement: 'unplaced', problem: null, note: null,
       },
       {
-        id: 'u-local', name: 'ssander.local', parentId: null, status: 'active', depth: 0,
-        derivedDn: 'OU=ssander.local,OU=Syntra,DC=ssander,DC=local', row: null,
+        id: 'u-local', name: 'contoso.local', parentId: null, status: 'active', depth: 0,
+        derivedDn: 'OU=contoso.local,OU=Syntra,DC=contoso,DC=local', row: null,
         effectiveDn: null, placement: 'unplaced', problem: null, note: null,
       },
     ],
@@ -1116,14 +1116,14 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
     const preview = await screen.findByTestId('org-unit-mirror-preview');
     const rows = within(preview).getAllByRole('listitem');
     expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual(['mirror-unit-u-local', 'mirror-unit-u-it']);
-    expect(rows[1]).toHaveTextContent('OU=IT,OU=ssander.local,OU=Syntra,DC=ssander,DC=local');
+    expect(rows[1]).toHaveTextContent('OU=IT,OU=contoso.local,OU=Syntra,DC=contoso,DC=local');
   });
 
   it('saves the setting and the root with the rest of the target', async () => {
     const fetchMock = mockTarget({ type: 'activeDirectory', placesAccountsInContainers: true });
     renderExisting();
     await userEvent.click(await screen.findByRole('checkbox', { name: /mirror org units as ous/i }));
-    await userEvent.type(screen.getByLabelText(/org-unit root/i), 'OU=Syntra,DC=ssander,DC=local');
+    await userEvent.type(screen.getByLabelText(/org-unit root/i), 'OU=Syntra,DC=contoso,DC=local');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
@@ -1131,7 +1131,7 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
     const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
     expect(JSON.parse(String(patch[1]!.body))).toMatchObject({
       mirrorOrgUnits: true,
-      orgUnitRootDn: 'OU=Syntra,DC=ssander,DC=local',
+      orgUnitRootDn: 'OU=Syntra,DC=contoso,DC=local',
     });
   });
 
@@ -1152,7 +1152,7 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
 describe('TargetDetailPage: units that still use a DN typed by hand', () => {
   // The live case: every unit was materialised by hand, mirroring was turned
   // on, and nothing moved -- a typed DN always wins -- with no hint why.
-  const ROOT = 'OU=Syntra,DC=ssander,DC=local';
+  const ROOT = 'OU=Syntra,DC=contoso,DC=local';
   const manualUnit = (id: string, name: string, parentId: string | null, depth: number, typed: string, derived: string) => ({
     id, name, parentId, status: 'active', depth,
     derivedDn: derived,
@@ -1161,11 +1161,11 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     note: `materialised by hand; mirroring would place it at ${derived}`,
   });
   const HAND_TYPED = [
-    manualUnit('u-local', 'ssander.local', null, 0, `OU=ssander.local,${ROOT}`, `OU=ssander.local,${ROOT}`),
-    manualUnit('u-it', 'IT', 'u-local', 1, `OU=IT,${ROOT}`, `OU=IT,OU=ssander.local,${ROOT}`),
+    manualUnit('u-local', 'contoso.local', null, 0, `OU=contoso.local,${ROOT}`, `OU=contoso.local,${ROOT}`),
+    manualUnit('u-it', 'IT', 'u-local', 1, `OU=IT,${ROOT}`, `OU=IT,OU=contoso.local,${ROOT}`),
   ];
   const preview = (mirrorOrgUnits: boolean, units: unknown[]) => ({
-    mirrorOrgUnits, placesAccountsInContainers: true, baseDn: 'DC=ssander,DC=local', rootDn: ROOT, rootProblem: null, units,
+    mirrorOrgUnits, placesAccountsInContainers: true, baseDn: 'DC=contoso,DC=local', rootDn: ROOT, rootProblem: null, units,
   });
   const mirroredAfterSwitch = HAND_TYPED.map((unit) => ({
     ...unit, row: { ...unit.row, source: 'mirrored', dn: unit.derivedDn }, effectiveDn: unit.derivedDn, placement: 'mirrored', note: null,
@@ -1181,15 +1181,15 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
         return Promise.resolve(json({
           targetSystemId: 't1',
           switched: [
-            { orgUnitId: 'u-local', unitName: 'ssander.local', from: `OU=ssander.local,${ROOT}`, dn: `OU=ssander.local,${ROOT}`, pendingMoveFrom: null },
-            { orgUnitId: 'u-it', unitName: 'IT', from: `OU=IT,${ROOT}`, dn: `OU=IT,OU=ssander.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` },
+            { orgUnitId: 'u-local', unitName: 'contoso.local', from: `OU=contoso.local,${ROOT}`, dn: `OU=contoso.local,${ROOT}`, pendingMoveFrom: null },
+            { orgUnitId: 'u-it', unitName: 'IT', from: `OU=IT,${ROOT}`, dn: `OU=IT,OU=contoso.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` },
           ],
           skipped: [],
         }));
       }
       if (url.includes('/containers/t1/switch-to-mirrored') && init?.method === 'POST') {
         switched = true;
-        return Promise.resolve(json({ targetSystemId: 't1', dn: `OU=IT,OU=ssander.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` }));
+        return Promise.resolve(json({ targetSystemId: 't1', dn: `OU=IT,OU=contoso.local,${ROOT}`, pendingMoveFrom: `OU=IT,${ROOT}` }));
       }
       if (url.includes('/org-unit-mirror')) {
         return Promise.resolve(json(preview(mirrorOrgUnits, switched ? mirroredAfterSwitch : HAND_TYPED)));
@@ -1210,7 +1210,7 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     expect(warning).toHaveTextContent(/a container move always holds the run for a person to confirm/);
     const itRow = screen.getByTestId('hand-typed-u-it');
     expect(itRow).toHaveTextContent(`Typed: OU=IT,${ROOT}`);
-    expect(itRow).toHaveTextContent(`Mirrored: OU=IT,OU=ssander.local,${ROOT}`);
+    expect(itRow).toHaveTextContent(`Mirrored: OU=IT,OU=contoso.local,${ROOT}`);
     // Parents first, as they will be switched.
     const items = within(warning).getAllByRole('listitem').map((li) => li.getAttribute('data-testid'));
     expect(items).toEqual(['hand-typed-u-local', 'hand-typed-u-it']);

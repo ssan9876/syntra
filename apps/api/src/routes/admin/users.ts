@@ -320,7 +320,9 @@ export async function registerAdminUserRoutes(
           PERMISSIONS.IDENTITY_SENSITIVE_READ,
         );
         const users = await tx.user.findMany({
-          where: { personId: null, status: 'active' },
+          // Service accounts belong to no person by definition; counting them
+          // here reported every integration login as a backlog to clear.
+          where: { personId: null, status: 'active', kind: 'person' },
           orderBy: { login: 'asc' },
           select: { id: true, login: true, displayName: true, email: true },
         });

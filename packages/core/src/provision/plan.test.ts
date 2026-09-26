@@ -2238,7 +2238,7 @@ describe('planActions — create_container', () => {
 
 describe('planActions — a mirrored org-unit tree', () => {
   const ROOT = 'OU=Syntra,OU=Users,DC=acme,DC=test';
-  const LOCAL = `OU=ssander.local,${ROOT}`;
+  const LOCAL = `OU=contoso.local,${ROOT}`;
   const IT = `OU=IT,${LOCAL}`;
 
   it('creates a two-level missing tree parent first, whatever order it arrived in', () => {

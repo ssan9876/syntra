@@ -1678,6 +1678,23 @@ describe('GET /api/admin/users/unlinked', () => {
     ).toBeNull();
   });
 
+  it('does not list a service account, which belongs to no person by design', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    await post('/api/admin/users', cookie, {
+      login: 'svc-sync',
+      email: 'sync@acme.test',
+      displayName: 'Sync',
+      personId: null,
+      kind: 'service',
+    });
+
+    const res = await get('/api/admin/users/unlinked', cookie);
+
+    const logins = (res.json().accounts as { login: string }[]).map((a) => a.login);
+    expect(logins).not.toContain('svc-sync');
+  });
+
   it('does not list an account that already has a person', async () => {
     await seedAdmin(BOTH);
     const cookie = await authCookie('admin');

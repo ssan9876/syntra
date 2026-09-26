@@ -921,7 +921,7 @@ describe('evaluateProvisionGuard — moving a container', () => {
     accountId: null,
     entitlementId: null,
     before: { dn: 'OU=IT,OU=Syntra,DC=acme,DC=test' },
-    after: { dn: 'OU=IT,OU=ssander.local,OU=Syntra,DC=acme,DC=test', fromDn: 'OU=IT,OU=Syntra,DC=acme,DC=test' },
+    after: { dn: 'OU=IT,OU=contoso.local,OU=Syntra,DC=acme,DC=test', fromDn: 'OU=IT,OU=Syntra,DC=acme,DC=test' },
     attributedRuleIds: [],
     attributedGrantIds: [],
     requiresConfirmation: false,

@@ -13020,7 +13020,7 @@
           "Incidents"
         ],
         "summary": "List current operational incidents",
-        "description": "Derived on each request from the tenant's failing work and from background-job health; there is nothing to acknowledge or store.\n\nRequires `audit.read`.",
+        "description": "Derived on each request from the tenant's failing work. Each incident carries up to ten `items` -- the run, delivery, target or credential behind it, with its stored error scrubbed of credentials, addresses and DNs -- whether it is `resolvable`, and its current `acknowledged` state (null once something newer has happened).\n\nRequires `audit.read`.",
         "x-syntra-permission": [
           "audit.read"
         ],
@@ -13050,6 +13050,116 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/incidents/{kind}/acknowledge": {
+      "post": {
+        "operationId": "postIncidentsByKindAcknowledge",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Acknowledge an incident",
+        "description": "Marks the incident kind as being handled, with an optional `note` (up to 500 characters). Hides nothing: the incident stays listed, and the acknowledgement lapses when something newer happens. Needs `audit.read`. Audited as `incident.acknowledged`.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/incidents/{kind}/resolve": {
+      "post": {
+        "operationId": "postIncidentsByKindResolve",
+        "tags": [
+          "Incidents"
+        ],
+        "summary": "Resolve an event incident",
+        "description": "For event kinds only (failed provisioning or sync runs, undelivered webhooks or mail, failed delegated tasks): what happened up to now is dealt with, and only newer events are counted. A condition kind answers `409 incident-not-resolvable`. Needs the management permission of the area (`provision.manage`, `sync.manage`, `tenant.manage` or `automate.manage`). Audited as `incident.resolved`.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

@@ -120,7 +120,7 @@ export function rebaseDn(
  *
  * **Then missing ancestors, for mirrored rows only.** A mirrored tree's
  * intermediate OUs are part of what the target was told to mirror, so
- * `OU=IT,OU=ssander.local,OU=Syntra,DC=...` is creatable when neither parent
+ * `OU=IT,OU=contoso.local,OU=Syntra,DC=...` is creatable when neither parent
  * exists yet. The walk stops at the target's base DN, never creates it or
  * anything above it, and never creates an ancestor whose RDN is not an `OU=`
  * -- a `CN=` container is not something an organizationalUnit create can

@@ -762,7 +762,7 @@ function rank(type: ProvisionActionType): number {
  * parent needs the parent created before the move, and a child created under
  * a unit renamed in the same run needs the rename before the create. Ordering
  * by the depth of where each lands satisfies both, and a two-level missing
- * tree (`OU=IT,OU=ssander.local,OU=Syntra`) comes out root first.
+ * tree (`OU=IT,OU=contoso.local,OU=Syntra`) comes out root first.
  */
 function containerDepth(action: PlannedAction): number {
   if (action.actionType !== 'create_container' && action.actionType !== 'move_container') {

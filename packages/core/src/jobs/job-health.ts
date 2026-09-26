@@ -1,3 +1,4 @@
+import { scrubText } from '@syntra/connectors';
 import { prisma, withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { EXPORT_JOB } from '../exports/export-service.js';
@@ -218,6 +219,18 @@ export interface JobHealthFinding {
   ageSeconds: number;
   /** One operator-readable sentence. Never a stored error message. */
   detail: string;
+  /**
+   * For a poisoned payload: its last error, put through `scrubText` -- which
+   * removes credentials, addresses, DNs and opaque tokens and bounds the
+   * length. The class alone read "last failure: unknown" whenever the message
+   * matched no known shape, which told the operator nothing at all.
+   */
+  error: string | null;
+  /**
+   * What the job is about, in words: "Provisioning run · Local AD". Filled by
+   * `inspectJobHealth`, which can read names; null from the pure classifier.
+   */
+  subjectLabel: string | null;
   /** For a poisoned payload: the class of its last failure. */
   errorClass: ErrorClass | null;
   /** Provisioning: actions whose outcome is unknown and awaits verification. */
@@ -372,7 +385,7 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
     status: string | null,
     since: Date,
     detail: string,
-    extra: Partial<Pick<JobHealthFinding, 'errorClass' | 'inFlightActions' | 'repairs'>> = {},
+    extra: Partial<Pick<JobHealthFinding, 'errorClass' | 'inFlightActions' | 'repairs' | 'error'>> = {},
   ) => {
     findings.push({
       id: `${kind}:${subjectId}:${finding}`,
@@ -384,6 +397,8 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
       since: iso(since),
       ageSeconds: ageSeconds(now, since),
       detail,
+      error: extra.error ?? null,
+      subjectLabel: null,
       errorClass: extra.errorClass ?? null,
       inFlightActions: extra.inFlightActions ?? null,
       repairs: extra.repairs ?? [],
@@ -605,9 +620,12 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
     for (const entry of attemptsBySubject.values()) {
       if (entry.attempts < T.poisonAttempts) continue;
       const errorClass = classifyError(entry.lastError);
+      const error = entry.lastError ? scrubText(entry.lastError, 300) : null;
       add('poisoned', entry.kind, entry.id, null, entry.since,
-        `The same job failed ${entry.attempts} times in the last day (last failure: ${errorClass.replace('_', ' ')}). Retrying it unchanged will fail again; fix the cause first.`,
-        { errorClass });
+        errorClass === 'unknown'
+          ? `Failed ${entry.attempts} times in the last day. Retrying it unchanged will fail again; fix the cause first.`
+          : `Failed ${entry.attempts} times in the last day (${errorClass.replace('_', ' ')}). Retrying it unchanged will fail again; fix the cause first.`,
+        { errorClass, error });
     }
   }
 
@@ -637,7 +655,7 @@ export async function inspectJobHealth(tenantId: string, options: JobHealthOptio
   // are classified.
   const own = queue === null ? null : queue.filter((group) => group.tenantId === tenantId);
   const facts = await withTenant(tenantId, (tx) => readFacts(tx, now));
-  const findings = classifyJobHealth(facts, own, now);
+  const findings = await withTenant(tenantId, (tx) => labelFindings(tx, classifyJobHealth(facts, own, now)));
   return {
     generatedAt: iso(now),
     queueReadable: own !== null,
@@ -645,6 +663,60 @@ export async function inspectJobHealth(tenantId: string, options: JobHealthOptio
     counts: tally(findings),
     findings,
   };
+}
+
+const QUEUE_LABEL: Record<string, string> = {
+  [SYNC_JOB]: 'Directory sync',
+  [PERSON_IMPORT_JOB]: 'HR import',
+  [PROVISION_JOB]: 'Provisioning run',
+  [PERSON_PROVISION_JOB]: 'Target operation',
+  [EXPORT_JOB]: 'Export',
+};
+
+/**
+ * Names what each finding is about. A scheduled job's subject is
+ * `queue/<target or source id>`; the queue becomes its label and the id the
+ * target's or source's name, so "Scheduled job" reads "Provisioning run ·
+ * Local AD". Run rows are named by the target or source they belong to.
+ */
+async function labelFindings(tx: TenantClient, findings: JobHealthFinding[]): Promise<JobHealthFinding[]> {
+  if (findings.length === 0) return findings;
+  const [targets, sources] = await Promise.all([
+    tx.targetSystem.findMany({ select: { id: true, name: true } }),
+    tx.directorySource.findMany({ select: { id: true, name: true } }),
+  ]);
+  const names = new Map([...targets, ...sources].map((row) => [row.id, row.name]));
+  const runTargets = new Map(
+    (
+      await tx.provisionRun.findMany({
+        where: { id: { in: findings.filter((f) => f.kind === 'provision_run').map((f) => f.subjectId) } },
+        select: { id: true, targetSystemId: true },
+      })
+    ).map((run) => [run.id, run.targetSystemId]),
+  );
+  const syncSources = new Map(
+    (
+      await tx.syncRun.findMany({
+        where: { id: { in: findings.filter((f) => f.kind === 'sync_run').map((f) => f.subjectId) } },
+        select: { id: true, sourceId: true },
+      })
+    ).map((run) => [run.id, run.sourceId]),
+  );
+  return findings.map((finding) => {
+    let label: string | null = null;
+    if (finding.kind === 'scheduled_job') {
+      const [queue, scope] = finding.subjectId.split('/');
+      const what = QUEUE_LABEL[queue ?? ''] ?? queue ?? 'Scheduled job';
+      label = scope ? `${what} · ${names.get(scope) ?? 'removed system'}` : what;
+    } else if (finding.kind === 'provision_run') {
+      const target = runTargets.get(finding.subjectId);
+      label = target ? (names.get(target) ?? null) : null;
+    } else if (finding.kind === 'sync_run') {
+      const source = syncSources.get(finding.subjectId);
+      label = source ? (names.get(source) ?? null) : null;
+    }
+    return { ...finding, subjectLabel: label };
+  });
 }
 
 // ---- repair ------------------------------------------------------------------

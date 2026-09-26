@@ -698,7 +698,7 @@ export type SwitchToMirroredOutcome =
  * Rewrites the row to the derived DN with `source = 'mirrored'` and, when the
  * target had confirmed the typed DN, keeps that in `previousDn` -- so the next
  * run MOVES the existing OU and the accounts in it to their place in the tree
- * (the flat `OU=IT,OU=Syntra` becoming `OU=IT,OU=ssander.local,OU=Syntra`),
+ * (the flat `OU=IT,OU=Syntra` becoming `OU=IT,OU=contoso.local,OU=Syntra`),
  * under the guard, confirmed by a person. Nothing is written to the directory
  * here.
  */

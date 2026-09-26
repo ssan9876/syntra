@@ -964,6 +964,42 @@ and each section is present only when the caller holds the permission for what
 it lists (`provision.read` for runs, held actions and lifecycle work; `tenant.manage`,
 `rbac.manage` or `token.manage` for change requests).
 
+## What is broken: incidents
+
+Below the work held for review, **Activity → Attention** lists what has
+stopped working: webhooks and mail that gave up, targets skipping or never
+finishing their runs, provisioning and sync runs that failed this week,
+failing delegated tasks and expired credentials. The same list feeds
+**Needs you** on the Overview.
+
+Each incident lists the failures behind it, newest first, up to ten: the
+target, source, endpoint or credential by name, when, and the error it
+recorded. Errors are put through the same scrubbing as the logs, so a stored
+message never shows a credential, an email address, a DN or a long opaque
+token. Each item links to the run or record it came from.
+
+Two answers can be given to an incident, and both are in the audit log
+(`incident.acknowledged`, `incident.resolved`):
+
+- **Acknowledge** (`audit.read`) marks it as being handled, with an optional
+  note. It hides nothing: the incident stays listed with who has it, and the
+  acknowledgement lapses as soon as something newer fails.
+- **Resolve** is offered only for *events* -- failed runs, undelivered
+  webhooks or mail, failed delegated tasks -- and needs the management
+  permission of the area (`provision.manage`, `sync.manage`, `tenant.manage`
+  or `automate.manage`). It is a watermark: what happened up to now is dealt
+  with, and the next failure brings the incident straight back. A *condition*
+  (a target skipping its runs, an expired credential) cannot be resolved; it
+  disappears when the cause is fixed.
+
+The API is `GET /api/admin/incidents`, `POST /api/admin/incidents/:kind/acknowledge`
+and `POST /api/admin/incidents/:kind/resolve`, each taking an optional
+`{ "note": "…" }`.
+
+**Operations → Background work** names the job behind each finding (for
+example *Provisioning run · Local AD*) and shows its last error, scrubbed the
+same way, instead of only its class.
+
 ### Safety thresholds
 
 A run is held for confirmation when it would change more than a set share of
@@ -1134,7 +1170,7 @@ plans against them, under the guard:
 
 - **Missing OUs are created parent first**, including missing parents that
   are not units of their own — the root, say — so
-  `OU=IT,OU=ssander.local,OU=Syntra,DC=…` works when none of the three exist.
+  `OU=IT,OU=contoso.local,OU=Syntra,DC=…` works when none of the three exist.
   Missing parents are created only for mirrored containers, only as `OU=`
   containers, and never at or above the base DN. A typed DN gets no
   invented parents: a typo in one still fails `not_found`.
@@ -1154,7 +1190,7 @@ plans against them, under the guard:
 **Switch to mirrored** on a unit's typed container hands it to the mirror:
 the row takes the derived DN, and when the target had confirmed the typed DN
 the next run proposes moving that OU — the flat `OU=IT,OU=Syntra,…` becoming
-`OU=IT,OU=ssander.local,OU=Syntra,…` — and a person confirms it. Audited as
+`OU=IT,OU=contoso.local,OU=Syntra,…` — and a person confirms it. Audited as
 `orgUnit.container.switch_to_mirrored`.
 
 **Turned mirroring on and nothing moved?** Units materialised by hand before

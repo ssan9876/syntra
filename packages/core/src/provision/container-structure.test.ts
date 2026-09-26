@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { dnDepth, planContainerStructure, rebaseDn } from './container-structure.js';
 
-const BASE = 'DC=ssander,DC=local';
+const BASE = 'DC=contoso,DC=local';
 const ROOT = `OU=Syntra,${BASE}`;
-const LOCAL = `OU=ssander.local,${ROOT}`;
+const LOCAL = `OU=contoso.local,${ROOT}`;
 const IT = `OU=IT,${LOCAL}`;
 
 describe('dnDepth and rebaseDn', () => {
@@ -24,8 +24,8 @@ describe('dnDepth and rebaseDn', () => {
 
 describe('planContainerStructure', () => {
   it('creates a two-level missing mirrored tree, including the missing root', () => {
-    // Neither `OU=Syntra` nor `OU=ssander.local` exists. The unit rows ask
-    // for `ssander.local` and `IT`; the root has no row and is an
+    // Neither `OU=Syntra` nor `OU=contoso.local` exists. The unit rows ask
+    // for `contoso.local` and `IT`; the root has no row and is an
     // intermediate.
     const structure = planContainerStructure({
       rows: [

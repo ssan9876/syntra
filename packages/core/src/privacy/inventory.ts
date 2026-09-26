@@ -2130,6 +2130,22 @@ const RAW = {
     erasure: 'pseudonymize',
     why: "The recipient address and the template variables are replaced, and an unsent message is stopped.",
   }),
+  IncidentState: table('configuration', {
+    id: 'identity',
+    tenantId: 'none',
+    kind: 'none',
+    acknowledgedAt: 'operational',
+    acknowledgedById: 'identity',
+    acknowledgeNote: 'operational',
+    resolvedAt: 'operational',
+    resolvedById: 'identity',
+    resolveNote: 'operational',
+    updatedAt: 'operational',
+  }, {
+    links: {user: ['acknowledgedById', 'resolvedById']},
+    erasure: 'retain',
+    why: "Which administrator acknowledged or resolved an incident on the attention list, and their note. Kept as operational evidence, like the audit event it mirrors.",
+  }),
   WebhookEndpoint: table('configuration', {
     id: 'none',
     tenantId: 'none',

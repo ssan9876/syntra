@@ -169,7 +169,7 @@ async function conflictedAccount(
  *
  * The object's key is read through `observedCorrelationKey`, not as
  * `sAMAccountName`: on Entra ID it is the local part of a UPN in the domain
- * Syntra would create it in (`ssander@contoso.com` is `ssander`), and a UPN
+ * Syntra would create it in (`jdoe@contoso.com` is `jdoe`), and a UPN
  * in any other domain never matches.
  */
 async function findCandidate(
