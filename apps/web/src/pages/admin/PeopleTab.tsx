@@ -214,10 +214,7 @@ export function PeopleTab() {
                     Reset filters
                   </button>
                 }
-              >
-                Names, employee references and work email addresses are
-                searched.
-              </Empty>
+              />
             </div>
           )}
 

@@ -664,11 +664,13 @@ describe('deleting a source', () => {
     mockFetch();
     renderEdit();
 
-    const panel = await screen.findByText(/this source owns/i);
-    expect(panel).toHaveTextContent('12 users');
-    expect(panel).toHaveTextContent('3 groups');
-    expect(panel).toHaveTextContent('2 organizational units');
-    expect(panel).toHaveTextContent(/deactivates every one of those/i);
+    const title = await screen.findByText(/this source owns/i);
+    expect(title).toHaveTextContent('12 users');
+    expect(title).toHaveTextContent('3 groups');
+    expect(title).toHaveTextContent('2 organizational units');
+    expect(title.closest('[role="alert"]')).toHaveTextContent(
+      /deactivates every one of those/i,
+    );
   });
 
   it('keeps the button inert until the numbers are acknowledged', async () => {

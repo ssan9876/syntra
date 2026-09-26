@@ -160,11 +160,11 @@ function HandTypedWarning({
 
   const outcome = result !== null && (
     <Alert tone={result.skipped.length > 0 ? 'warning' : 'success'} title={switchedTitle(result)}>
-      <p className="text-sm">
-        {result.switched.some((s) => s.pendingMoveFrom !== null)
-          ? `Nothing has moved in the directory yet. The next run proposes moving ${movesText(result)}, with every account inside, and holds for a person to confirm before anything moves.`
-          : 'Nothing is written to the directory here; the next run places these units at their mirrored OUs.'}
-      </p>
+      {result.switched.some((s) => s.pendingMoveFrom !== null) && (
+        <p className="text-sm">
+          {`Nothing has moved in the directory yet. The next run proposes moving ${movesText(result)}, with every account inside, and holds for a person to confirm before anything moves.`}
+        </p>
+      )}
       {result.skipped.length > 0 && (
         <ul className="mt-2 list-disc pl-5 text-sm" data-testid="switch-all-skipped">
           {result.skipped.map((s) => (
@@ -332,14 +332,15 @@ export function OrgUnitMirrorPreview({
           {preview.rootProblem}
         </Alert>
       ) : (
-        <p className="text-sm text-muted">
-          Hangs under <code className="font-mono">{preview.rootDn}</code>.
-        </p>
+        <dl className="flex gap-2 text-sm">
+          <dt className="text-muted">Root</dt>
+          <dd>
+            <code className="font-mono">{preview.rootDn}</code>
+          </dd>
+        </dl>
       )}
       {units.length === 0 ? (
-        <Empty title="No org units yet">
-          Create org units in Syntra and they appear here with the OU each would become.
-        </Empty>
+        <Empty title="No org units yet" />
       ) : (
         <ul className="divide-y divide-border-subtle rounded-control border border-border-subtle">
           {units.map((unit) => (

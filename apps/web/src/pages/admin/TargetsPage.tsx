@@ -153,27 +153,18 @@ function health(
   }
   if (!target.enabled) return { state: 'inactive', label: 'Disabled' };
 
-  const stale =
-    'A run records this timestamp only when its preview finishes. A run that ' +
-    'starts and then fails — a rotated bind credential, a controller that is ' +
-    'not answering — leaves it exactly where it was.';
-
   if (target.schedule === null) {
     // Nothing is late when nothing is scheduled, so this states the fact and
     // makes no claim about health either way.
     return target.lastRunAt === null
-      ? { state: 'setup', label: 'Never run', title: 'This target runs by hand only.' }
-      : {
-          label: `Ran ${since(target.lastRunAt, now)}`,
-          title: 'This target runs by hand only.',
-        };
+      ? { state: 'setup', label: 'Never run' }
+      : { label: `Ran ${since(target.lastRunAt, now)}` };
   }
 
   if (target.lastRunAt === null) {
     return {
       state: 'blocked',
       label: 'No run has ever completed',
-      title: stale,
     };
   }
 
@@ -183,16 +174,12 @@ function health(
     return {
       state: 'blocked',
       label: `No completed run for ${duration(age)}`,
-      title: stale,
     };
   }
 
   return {
     state: 'healthy',
     label: `Ran ${since(target.lastRunAt, now)}`,
-    title:
-      'A run completed within this target’s own schedule. This says a run ' +
-      'finished, not that everything it proposed was applied.',
   };
 }
 
@@ -257,10 +244,7 @@ export function TargetsPage() {
                     Connect a target
                   </Link>
                 }
-              >
-                A target is where Provision writes accounts and entitlements.
-                Directory sources read; targets are written to.
-              </Empty>
+              />
             </div>
           )}
 
@@ -324,13 +308,12 @@ export function TargetsPage() {
                         </Status>
                       </td>
                       <td className="max-sm:hidden">
-                        {/* A link to where the schedule is set, and a title
-                            saying so: "By hand only" read as a verdict
-                            somebody had to go and find the cure for. */}
+                        {/* A link to where the schedule is set: "By hand
+                            only" read as a verdict somebody had to go and
+                            find the cure for. */}
                         {target.schedule ?? (
                           <Link
                             to={`/admin/targets/${target.id}`}
-                            title="No schedule is set. Open the target and enter a cron expression under Schedule and enforcement to run it automatically."
                             className="text-muted underline-offset-2 hover:text-ink hover:underline"
                           >
                             By hand only

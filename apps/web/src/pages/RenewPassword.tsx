@@ -94,8 +94,7 @@ export function RenewPassword() {
         <div className="w-full max-w-sm">
           <Wordmark className="mb-8" />
           <Alert tone="warning" title="That sign-in has expired">
-            Password renewals have to be finished within a few minutes of
-            signing in.
+            Sign in again to continue.
           </Alert>
           <div className="mt-4 text-center">
             <Button variant="secondary" onClick={() => navigate('/login', { replace: true })}>
@@ -113,7 +112,6 @@ export function RenewPassword() {
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
           <h1 className="text-lg font-semibold text-ink">{t('renew.title')}</h1>
-          <p className="mt-2 text-sm text-muted">{t('renew.lead_full')}</p>
 
           <form onSubmit={submit} noValidate className="mt-6 space-y-4">
             <Field

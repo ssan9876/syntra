@@ -27,7 +27,7 @@ describe('TenantWriteStopPanel', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(String(fetch.mock.calls[1]?.[0])).toBe('/api/admin/provision/external-write-stop');
     expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({ reason: 'Bad HR feed', expiresAt: null });
-    expect(await screen.findByText('All provisioning writes are stopped for every target in this tenant')).toBeVisible();
+    expect(await screen.findByText('Provisioning writes stopped for every target')).toBeVisible();
   });
 
   it('shows an active stop conspicuously and requires a reviewed resume', async () => {
@@ -36,7 +36,7 @@ describe('TenantWriteStopPanel', () => {
       pauseReason: 'Suspected compromised administrator', pauseExpiresAt: null,
     }));
     render(<TenantWriteStopPanel />);
-    expect(await screen.findByText('All provisioning writes are stopped for every target in this tenant')).toBeVisible();
+    expect(await screen.findByText('Provisioning writes stopped for every target')).toBeVisible();
     expect(screen.getByText(/Suspected compromised administrator/)).toBeVisible();
     expect(screen.getByText(/no automatic expiry/)).toBeVisible();
     expect(screen.getByText('Paused')).toBeVisible();

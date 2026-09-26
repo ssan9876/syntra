@@ -70,10 +70,7 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
       {loading && <SkeletonRows rows={4} cols={4} />}
 
       {candidates !== null && candidates.length === 0 && !loading && (
-        <Empty title="No pattern strong enough to suggest">
-          Nothing in this snapshot is held by enough of one department, job title,
-          location or employer to be worth calling a rule.
-        </Empty>
+        <Empty title="No pattern strong enough to suggest" />
       )}
 
       {candidates !== null && candidates.length > 0 && !loading && (

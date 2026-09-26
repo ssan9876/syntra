@@ -83,7 +83,7 @@ beforeEach(() => {
 });
 
 describe('TasksPage', () => {
-  it('says what the page is for when nothing has been delegated', async () => {
+  it('says nothing has been delegated when the list is empty', async () => {
     mockApi({ tasks: [] });
     renderPage();
     expect(await screen.findByText(/nothing has been delegated to you/i)).toBeInTheDocument();

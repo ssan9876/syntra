@@ -57,9 +57,13 @@ export function BreakGlass() {
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
           <h1 className="text-lg font-semibold text-ink">Emergency console access</h1>
           {pending ? (
-            <Alert tone="warning" title="Requested">
-              Every administrator has been told. It takes effect at {new Date(pending.activatesAt).toLocaleString()} unless
-              somebody cancels it, and lasts {pending.durationMinutes} minutes. Then sign in and open the console as usual.
+            <Alert tone="warning" title="Requested. Every administrator has been told.">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dt className="text-muted">Takes effect</dt>
+                <dd>{new Date(pending.activatesAt).toLocaleString()}</dd>
+                <dt className="text-muted">Lasts</dt>
+                <dd>{pending.durationMinutes} minutes</dd>
+              </dl>
             </Alert>
           ) : (
             <form onSubmit={submit} noValidate className="mt-6 space-y-4">

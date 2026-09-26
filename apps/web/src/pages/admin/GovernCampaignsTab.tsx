@@ -127,10 +127,7 @@ export function GovernCampaignsTab() {
               New campaign
             </Link>
           }
-        >
-          A campaign is built against a snapshot. Take one first, then scope the review to the
-          systems and people it should cover.
-        </Empty>
+        />
       )}
 
       {campaigns.length > 0 && (

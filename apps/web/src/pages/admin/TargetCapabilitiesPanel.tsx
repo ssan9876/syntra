@@ -163,9 +163,8 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
             : ''}
         </p>
         {!data.capabilities.available && (
-          <p className="flex flex-wrap items-center gap-2 text-sm text-danger">
-            <StateBadge state="blocked">Unavailable</StateBadge>
-            Nothing here will be applied.
+          <p>
+            <StateBadge state="blocked">Unavailable — nothing is applied</StateBadge>
           </p>
         )}
         <ul className="grid gap-2 sm:grid-cols-2">
@@ -181,11 +180,11 @@ export function CapabilitiesPanel({ targetId }: { targetId: string }) {
 
         {data.matrix && (
           <>
-            <p className="text-sm text-muted">
-              {needsEvidence > 0
-                ? `${needsEvidence} of these are verified against the fake Graph only and still require evidence from a disposable tenant (pnpm entra:validate --write) before they count as proven.`
-                : 'Every advertised capability has recorded tenant evidence.'}
-            </p>
+            {needsEvidence > 0 && (
+              <p className="text-sm text-warning">
+                {`${needsEvidence} of these are verified against the fake Graph only`}
+              </p>
+            )}
             <Table tight label="Capability matrix">
               <thead>
                 <tr>

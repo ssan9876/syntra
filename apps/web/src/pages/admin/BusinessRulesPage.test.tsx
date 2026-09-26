@@ -93,7 +93,7 @@ describe('BusinessRulesPage', () => {
     await screen.findByText(/adding a rule can also remove access/);
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText(/This rule matches/);
+    await screen.findByText('Persons matched');
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
   });
 
@@ -118,7 +118,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Other target' }));
     await screen.findByText('Finance');
     await act(async () => finish(json(IMPACT)));
-    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Persons matched')).toBeNull();
     expect(screen.getByLabelText('Name')).toHaveValue('');
   });
 
@@ -132,7 +132,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
     await act(async () => finish[0]!(json(IMPACT)));
     expect(screen.getByRole('button', { name: 'Preview impact' })).toBeDisabled();
-    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Persons matched')).toBeNull();
     await act(async () => finish[1]!(json({ ...IMPACT, wouldRevoke: 9 })));
     expect(await screen.findByText('9 holdings would be taken away')).toBeVisible();
   });
@@ -142,10 +142,10 @@ describe('BusinessRulesPage', () => {
     renderPage();
     await screen.findByText('Finance');
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    expect(await screen.findByText(/This rule matches/)).toBeVisible();
+    expect(await screen.findByText('Persons matched')).toBeVisible();
     if (label === 'Enabled' || label === 'Finance') await userEvent.click(screen.getByLabelText(label));
     else await userEvent.type(screen.getByLabelText(label), 'x');
-    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Persons matched')).toBeNull();
   });
 
   it.each([false, true])('ignores an in-flight impact after editing (failure=%s)', async (fails) => {
@@ -158,7 +158,7 @@ describe('BusinessRulesPage', () => {
     await act(async () => finish(fails
       ? json({ title: 'Old draft failed', status: 500 }, 500)
       : json(IMPACT)));
-    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Persons matched')).toBeNull();
     expect(screen.queryByText('Old draft failed')).toBeNull();
     expect(screen.getByRole('button', { name: 'Preview impact' })).toBeEnabled();
   });
@@ -169,7 +169,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText(/This rule matches/);
+    await screen.findByText('Persons matched');
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
     await userEvent.click(screen.getByLabelText('Finance'));
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
@@ -246,7 +246,7 @@ describe('BusinessRulesPage', () => {
     await screen.findByText('Finance');
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
 
-    expect(await screen.findByText(/This rule matches/)).toBeVisible();
+    expect(await screen.findByText('Persons matched')).toBeVisible();
     expect(screen.queryByText(/would be taken away/)).toBeNull();
   });
 
@@ -261,7 +261,7 @@ describe('BusinessRulesPage', () => {
     expect(await screen.findByText(/missing —/)).toBeVisible();
   });
 
-  it('says what to do about an empty catalog, and offers the control that does it', async () => {
+  it('says the catalog is empty, and offers the control that fills it', async () => {
     // The empty case again: a target created a minute ago has no catalog, and
     // until this page grew a refresh button it told people to do something the
     // console could not do.
@@ -291,13 +291,12 @@ describe('BusinessRulesPage', () => {
     expect(screen.queryByText(/never removes access/)).toBeNull();
   });
 
-  it('still says a rule only adds on an additive target', async () => {
+  it('shows no removal warning on an additive target', async () => {
     mockFetch({ enforcementMode: 'additive' });
     renderPage();
 
-    expect(
-      await screen.findByText(/adding a rule never removes access/),
-    ).toBeVisible();
+    await screen.findByText('Finance');
+    expect(screen.queryByText(/can also remove access/)).toBeNull();
   });
 
   it('will not delete a rule without saying what the delete revokes', async () => {
@@ -481,11 +480,11 @@ describe('BusinessRulesPage', () => {
     expect(screen.getByText('Preview required before saving')).toBeVisible();
 
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText(/This rule matches/);
+    await screen.findByText('Persons matched');
     expect(screen.getByText('Matches this draft')).toBeVisible();
 
     await userEvent.type(screen.getByLabelText('Value'), 'x');
-    expect(screen.queryByText(/This rule matches/)).toBeNull();
+    expect(screen.queryByText('Persons matched')).toBeNull();
     expect(screen.getByText('Out of date — run again')).toBeVisible();
     expect(screen.getByText('Preview is out of date')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
