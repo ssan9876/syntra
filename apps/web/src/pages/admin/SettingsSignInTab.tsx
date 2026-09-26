@@ -333,7 +333,7 @@ export function SettingsSignInTab() {
               // domain is set, and nobody could deduce it from the checkbox.
               data.webauthnAvailable
                 ? undefined
-                : 'No primary domain is set, so only an authenticator app can satisfy this. A security key needs a domain to pin its relying party to.'
+                : 'No primary domain: only an authenticator app can satisfy this.'
             }
           />
 
@@ -365,7 +365,7 @@ export function SettingsSignInTab() {
               // not a description of the checkbox.
               data.webauthnAvailable
                 ? undefined
-                : 'No primary domain is set, so no security key can be registered and this cannot be turned on.'
+                : 'No primary domain: security keys cannot be registered.'
             }
           />
 
@@ -376,10 +376,7 @@ export function SettingsSignInTab() {
             // affected is also the one proven able to get back in.
             <div className="sm:col-span-2">
               <Alert tone="warning" title="Console sessions started without a key end">
-                Every administrator who elevated with an authenticator code,
-                an emailed code or a recovery code is signed out of the console
-                at their next click, and nobody can register a key while
-                elevating. Save from a session you started with your own key.
+                Save from a session you started with your own key.
               </Alert>
             </div>
           )}
@@ -387,9 +384,7 @@ export function SettingsSignInTab() {
           {adminMfaRequired && !selfEnrolmentEnabled && (
             <div className="sm:col-span-2">
               <Alert tone="warning" title="Nobody can enrol their way in">
-                Together, these two refuse every administrator who does not
-                already hold a factor. Make sure yours is set up, and everyone
-                else&apos;s.
+                Administrators without a factor are refused.
               </Alert>
             </div>
           )}
@@ -450,8 +445,7 @@ export function SettingsSignInTab() {
             // already issued. Raising a value does not extend them.
             <div className="sm:col-span-2">
               <Alert tone="warning" title="Shorter limits apply to everyone signed in now">
-                Sessions already older or idler than the new limit end at their
-                next request.
+                Sessions past the new limit end at their next request.
               </Alert>
             </div>
           )}
@@ -504,10 +498,7 @@ export function SettingsSignInTab() {
               />
               <div className="sm:col-span-2">
                 <Alert tone="warning" title="Everyone with a local password is affected">
-                  Accounts whose password lives in an upstream provider are left
-                  alone — Syntra does not own those and a change form here would
-                  do nothing. Everyone else is asked to choose a new password the
-                  first time they sign in after their current one lapses.
+                  Upstream-managed passwords are not affected.
                 </Alert>
               </div>
             </>
@@ -561,9 +552,7 @@ export function SettingsSignInTab() {
               {Number(duration) === 0 && (
                 <div className="sm:col-span-2">
                   <Alert tone="warning" title="These locks do not lift themselves">
-                    Every locked account waits for an administrator. Someone has
-                    to be reachable to unlock them, including out of hours and
-                    including the last administrator who can.
+                    An administrator has to be reachable to unlock them.
                   </Alert>
                 </div>
               )}
@@ -589,7 +578,7 @@ export function SettingsSignInTab() {
             // moved.
             warning={
               data.webauthnAvailable && domainChanged
-                ? 'Security keys are bound to the current domain. Moving it makes every registered key unusable until its holder enrols again.'
+                ? 'Moving it makes every registered security key unusable.'
                 : undefined
             }
             error={errors.primaryDomain}
@@ -605,7 +594,7 @@ export function SettingsSignInTab() {
             placeholder={'192.168.1.10\nsyntra.example.com'}
             warning={
               data.webauthnAvailable && hostnames(extraDomains).length > 0
-                ? 'Security keys work on the primary domain only. A browser arriving by one of these names will not offer them.'
+                ? 'Security keys work on the primary domain only.'
                 : undefined
             }
             error={errors.additionalDomains}
@@ -629,9 +618,7 @@ export function SettingsSignInTab() {
           <Alert tone="warning" title="This will invalidate registered security keys">
             <p>
               {atRisk} {atRisk === 1 ? 'key is' : 'keys are'} registered against{' '}
-              <code>{data.primaryDomain ?? 'no domain'}</code>. Moving the domain
-              does not migrate them — whoever holds them will have to enrol
-              again, and will not be told until their key stops working.
+              <code>{data.primaryDomain ?? 'no domain'}</code>. Holders must enrol again.
             </p>
             <Button
               type="button"

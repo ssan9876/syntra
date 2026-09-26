@@ -112,10 +112,7 @@ export function RunsTab() {
                     Go to sources
                   </Link>
                 }
-              >
-                Runs appear here once a source has been read, on its schedule or by
-                hand.
-              </Empty>
+              />
             </div>
           )}
 

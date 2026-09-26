@@ -61,11 +61,7 @@ export function CatalogTab() {
                     New product
                   </Link>
                 }
-              >
-                A product is one thing somebody may ask for. Until one is
-                published and given an audience, the catalog is empty for
-                everybody.
-              </Empty>
+              />
             </div>
           )}
           {data && (data.products ?? []).length > 0 && (

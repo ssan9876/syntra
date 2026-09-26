@@ -307,7 +307,7 @@ describe('TargetDetailPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     expect(
-      await screen.findByText(/The target was created, but its deprovisioning/),
+      await screen.findByText(/Target created; ladder and thresholds not saved/),
     ).toBeVisible();
     // 77, not the 20 the stored target carries.
     expect(screen.getByLabelText('Accounts created')).toHaveValue('77');
@@ -366,7 +366,7 @@ describe('TargetDetailPage', () => {
     await userEvent.type(threshold, '77');
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 
-    await screen.findByText(/The target was created, but its deprovisioning/);
+    await screen.findByText(/Target created; ladder and thresholds not saved/);
     expect(screen.getByRole('button', { name: 'Save' })).toBeVisible();
     expect(
       screen.queryByRole('button', { name: /create target/i }),
@@ -774,10 +774,10 @@ describe('TargetDetailPage', () => {
       renderExisting();
 
       expect(
-        await screen.findByText('This target has no account profile, so it cannot create accounts.'),
+        await screen.findByText('No account profile: accounts cannot be created.'),
       ).toBeVisible();
       expect(
-        screen.getByText('No business rule grants an account on this target, so no one will be provisioned.'),
+        screen.getByText('No rule grants an account: nobody is provisioned.'),
       ).toBeVisible();
     });
 
@@ -809,8 +809,8 @@ describe('TargetDetailPage', () => {
 
       expect(await screen.findByDisplayValue('Samba AD')).toBeVisible();
       await waitFor(() => expect(screen.getByRole('link', { name: 'Account profile' })).toBeVisible());
-      expect(screen.queryByText(/has no account profile/)).toBeNull();
-      expect(screen.queryByText(/No business rule grants an account/)).toBeNull();
+      expect(screen.queryByText(/No account profile/)).toBeNull();
+      expect(screen.queryByText(/No rule grants an account/)).toBeNull();
     });
   });
 
@@ -914,11 +914,10 @@ describe('TargetDetailPage', () => {
     renderExisting();
 
     await screen.findByDisplayValue('Samba AD');
-    const schedule = screen.getByLabelText('Schedule');
+    // The zone is the scheduler's, not the browser's: pg-boss's default.
+    const schedule = screen.getByLabelText('Schedule (cron, UTC)');
     expect(schedule).toHaveValue('');
     expect(schedule).toHaveAttribute('placeholder', 'Blank — runs only when started by hand');
-    // The zone is the scheduler's, not the browser's: pg-boss's default.
-    expect(screen.getByText(/A cron expression, evaluated in UTC/)).toBeVisible();
   });
 
   it('warns that automatic apply does nothing while there is no schedule, and only then', async () => {
@@ -926,11 +925,11 @@ describe('TargetDetailPage', () => {
     renderExisting();
 
     await screen.findByDisplayValue('Samba AD');
-    const warning = /no schedule, so no scheduled run will happen/;
+    const warning = /No schedule, so no scheduled run will happen/;
     expect(screen.getByText(warning)).toBeVisible();
     expect(screen.getByRole('checkbox', { name: /Apply scheduled runs automatically/ })).toHaveAccessibleDescription(warning);
 
-    await userEvent.type(screen.getByLabelText('Schedule'), '0 3 * * *');
+    await userEvent.type(screen.getByLabelText('Schedule (cron, UTC)'), '0 3 * * *');
     expect(screen.queryByText(warning)).toBeNull();
   });
 
@@ -995,7 +994,7 @@ describe('TargetDetailPage', () => {
     await screen.findByDisplayValue('Samba AD');
     const button = screen.getByRole('button', { name: 'Run now' });
     expect(button).toBeDisabled();
-    expect(button).toHaveAttribute('title', expect.stringMatching(/disabled, so a run would not start/));
+    expect(button).toHaveAttribute('title', 'Target is disabled');
   });
 
   it('offers Run now only to somebody the API would let start one', async () => {
@@ -1041,29 +1040,22 @@ describe('TargetDetailPage: Apply renames automatically', () => {
       return Promise.resolve(json(target(overrides)));
     });
 
-  it('is off by default, says what a rename changes, and warns louder on Active Directory', async () => {
+  it('is off by default and warns on Active Directory', async () => {
     mockTarget({ type: 'activeDirectory' });
     renderExisting();
     const box = await screen.findByRole('checkbox', { name: /apply renames automatically/i });
     expect(box).not.toBeChecked();
     expect(box).toBeEnabled();
     const section = screen.getByTestId('auto-confirm-renames');
-    expect(section).toHaveTextContent(/changes the name the person signs in with/);
-    expect(section).toHaveTextContent(/Off by default/);
-    expect(section).toHaveTextContent(
-      /sAMAccountName\. That breaks cached logons, profile paths and anything else that stored the old name/,
-    );
+    expect(section).toHaveTextContent(/sAMAccountName: breaks cached logons and profile paths/);
   });
 
-  it('gives an Entra target the help without the Active Directory warning', async () => {
+  it('gives an Entra target no Active Directory warning', async () => {
     mockTarget({ type: 'entraId', config: { tenantId: 'x', clientId: 'y' } });
     renderExisting();
     await screen.findByDisplayValue('Samba AD');
     await waitFor(() =>
       expect(screen.getByTestId('auto-confirm-renames')).not.toHaveTextContent(/sAMAccountName/),
-    );
-    expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(
-      /changes the name the person signs in with/,
     );
   });
 
@@ -1085,7 +1077,7 @@ describe('TargetDetailPage: Apply renames automatically', () => {
     await waitFor(() =>
       expect(screen.getByRole('checkbox', { name: /apply renames automatically/i })).toBeDisabled(),
     );
-    expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(/cannot rename accounts/);
+    expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(/cannot rename accounts/i);
   });
 });
 
@@ -1117,12 +1109,11 @@ describe('TargetDetailPage: Mirror org units as OUs', () => {
       return Promise.resolve(json(target(overrides)));
     });
 
-  it('explains the setting and previews the tree -> DN mapping, parent first', async () => {
+  it('previews the tree -> DN mapping, parent first', async () => {
     mockTarget({ type: 'activeDirectory', placesAccountsInContainers: true });
     renderExisting();
     const box = await screen.findByRole('checkbox', { name: /mirror org units as ous/i });
     expect(box).not.toBeChecked();
-    expect(screen.getByTestId('mirror-org-units')).toHaveTextContent(/Turning this on writes nothing by itself/);
     const preview = await screen.findByTestId('org-unit-mirror-preview');
     const rows = within(preview).getAllByRole('listitem');
     expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual(['mirror-unit-u-local', 'mirror-unit-u-it']);
@@ -1279,7 +1270,7 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     expect(screen.getByText(/Save the org-unit settings first/)).toBeInTheDocument();
   });
 
-  it('leads with the mirroring checkbox and calls a typed DN an override', async () => {
+  it('leads with the mirroring checkbox', async () => {
     mockMirroring();
     renderExisting();
     const section = await screen.findByTestId('mirror-org-units');
@@ -1287,9 +1278,5 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     const root = within(section).getByLabelText(/org-unit root/i);
     // The checkbox precedes everything else in the section.
     expect(box.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(section).toHaveTextContent(/The recommended way to place org units on this target/);
-    expect(screen.getByTestId('mirror-override-note')).toHaveTextContent(
-      /A DN typed by hand on an org unit .* is an override: it takes precedence over the mirror/,
-    );
   });
 });

@@ -213,13 +213,12 @@ export function EnrolFactor() {
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
           <h1 className="text-lg font-semibold text-ink">{t('enrol.title')}</h1>
-          <p className="mt-1 text-muted">{t('enrol.lead')}</p>
 
           {mode === 'totp' && (
             <div className="mt-6 space-y-4">
               {!enrolment && (
                 <>
-                  <p className="text-muted">{t('enrol.totp_lead')}</p>
+                  <h2 className="font-medium text-ink">{t('enrol.totp')}</h2>
                   <Button variant="primary" loading={busy} className="w-full" onClick={beginTotp}>
                     {t('enrol.start')}
                   </Button>
@@ -258,7 +257,7 @@ export function EnrolFactor() {
 
           {mode === 'webauthn' && (
             <div className="mt-6 space-y-4">
-              <p className="text-muted">{t('enrol.webauthn_lead')}</p>
+              <h2 className="font-medium text-ink">{t('enrol.webauthn')}</h2>
               <Field label={t('enrol.name_key')} value={label} onChange={setLabel} />
               <Button variant="primary" loading={busy} className="w-full" onClick={addKey}>
                 {t('common.continue')}
@@ -288,11 +287,6 @@ export function EnrolFactor() {
             </div>
           )}
         </div>
-
-        <p className="mt-6 text-center text-sm text-muted">
-          Recovery codes are not offered here. Generate a set from the Security
-          page once you are signed in.
-        </p>
       </div>
     </main>
   );

@@ -148,7 +148,7 @@ describe('reviewing an import run', () => {
     });
     renderPage();
 
-    expect(await screen.findByText(/3 rows were read but could not be mapped/i)).toBeVisible();
+    expect(await screen.findByText(/3 rows could not be mapped/i)).toBeVisible();
     expect(screen.getByText(/not treated as leavers/i)).toBeVisible();
   });
 

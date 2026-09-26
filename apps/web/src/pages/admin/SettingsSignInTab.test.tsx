@@ -440,7 +440,7 @@ describe('SettingsSignInTab and account lockout', () => {
     expect(
       await screen.findByText(/do not lift themselves/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/has to be reachable to unlock them/i)).toBeInTheDocument();
+    expect(screen.getByText(/reachable to unlock them/i)).toBeInTheDocument();
     await user.clear(screen.getByLabelText(/lock lasts/i));
     await user.type(screen.getByLabelText(/lock lasts/i), '30');
     await waitFor(() =>

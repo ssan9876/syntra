@@ -186,7 +186,7 @@ export function PersonDetailPage() {
                 active={false}
                 basePath={`/api/admin/persons/${data.id}`}
                 label="person"
-                consequences="This makes the person active again. It does not restore revoked sessions or automatically re-enable every target account."
+                consequences="Revoked sessions and target accounts are not restored."
                 onChanged={reload}
               />
             )}
@@ -429,10 +429,7 @@ export function PersonDetailPage() {
         >
           {data.contracts.length === 0 ? (
             <div className="p-6">
-              <Empty title="No contracts recorded">
-                A contract records what someone does: their role, department,
-                and the dates it runs between.
-              </Empty>
+              <Empty title="No contracts recorded" />
             </div>
           ) : (
             <Table>
@@ -604,10 +601,7 @@ export function PersonDetailPage() {
         >
           {data.users.length === 0 ? (
             <div className="p-6">
-              <Empty title="No accounts linked">
-                This person exists in the directory but cannot sign in. Link an
-                account to give them access.
-              </Empty>
+              <Empty title="No accounts linked" />
             </div>
           ) : (
             <ul>

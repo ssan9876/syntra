@@ -133,7 +133,7 @@ export function BreakGlassTab() {
 
     {credential ? <Alert tone="warning" title={`Sealed credential for ${credential.login}`}>
       <p className="font-mono break-all">{credential.value}</p>
-      <p className="mt-2 text-sm">Shown once and stored only as a digest. Print it, seal it, and keep it offline — ideally split between two custodians. Anyone holding it can request emergency access.</p>
+      <p className="mt-2 text-sm">Shown once — print it, seal it, keep it offline.</p>
       <Button variant="secondary" onClick={() => setCredential(null)}>It is stored offline</Button>
     </Alert> : null}
 

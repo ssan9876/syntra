@@ -204,23 +204,6 @@ describe('AccountsTab', () => {
     expect(row).toHaveTextContent('Directory source');
   });
 
-  it('says nothing about directories when every account is local', async () => {
-    mockBoth(users);
-    renderPage();
-
-    await screen.findByText('J Doe');
-    expect(screen.queryByText(/managed elsewhere/i)).toBeNull();
-  });
-
-  it('explains once, above the table, where a synced field is changed', async () => {
-    mockBoth([...users, synced]);
-    renderPage();
-
-    expect(
-      await screen.findByText(/some of these accounts are managed elsewhere/i),
-    ).toBeInTheDocument();
-  });
-
   it('surfaces a permission failure as a message, not a blank page', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       json(

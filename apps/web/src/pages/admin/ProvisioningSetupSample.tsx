@@ -31,7 +31,7 @@ function SampleDetail({ person, onInspect }: { person: ComboOption; onInspect(sa
           <td className="tabular-nums">{contract.endDate ? contract.endDate.slice(0, 10) : 'Open-ended'}</td>
         </tr>)}</tbody>
       </Table>
-    ) : <Alert tone="warning">No employment contract saved. Lifecycle dates cannot be checked for {person.label}.</Alert>}
+    ) : <Alert tone="warning">No contract saved for {person.label}.</Alert>}
     <div className="flex flex-wrap gap-4 text-sm">
       <Link className="link" to={`/admin/people/${person.value}`}>Review employee and contracts</Link>
       <Link className="link" to={`/admin/people/${person.value}/access`}>Inspect recorded access</Link>
