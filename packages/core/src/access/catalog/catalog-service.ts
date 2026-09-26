@@ -204,7 +204,7 @@ export async function createFromCatalog(
       encryptAssertions: false,
       encryptionCertificate: null,
       sloUrl: entry.saml.sloUrl ? render(entry.saml.sloUrl) : null,
-      sloBinding: 'HTTP-POST',
+      sloBinding: entry.saml.sloBinding ?? 'HTTP-POST',
       // Never true from a catalog entry. IdP-initiated sign-in is a posture
       // an administrator adopts for a named application, not one that arrives
       // with a template they picked off a list.

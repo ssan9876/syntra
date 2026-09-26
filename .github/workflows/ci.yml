@@ -423,6 +423,19 @@ jobs:
           done
           echo "PostgreSQL never became ready"; exit 1
 
+      # The image seeds infra/ldap/seed.ldif on a first start and then restarts
+      # slapd, so "the port answers" is not "the directory is ready": the
+      # browser sync test once connected in that gap and failed with
+      # ECONNREFUSED on 1389. Waiting for a seeded entry over TCP is waiting
+      # for the server the tests will actually talk to.
+      - name: Wait for OpenLDAP
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec infra-openldap-1 ldapsearch -x -H ldap://localhost:389               -D cn=admin,dc=acme,dc=test -w adminpassword               -b ou=Shared,dc=acme,dc=test -s base dn > /dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "OpenLDAP never became ready"; docker compose -f infra/docker-compose.yml logs openldap; exit 1
+
       - run: pnpm db:generate
       - run: pnpm db:migrate
 

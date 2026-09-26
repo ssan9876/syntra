@@ -60,6 +60,8 @@ export interface CatalogSaml {
   /** Which mapped claim supplies the NameID. Null uses the user's email. */
   nameIdClaim?: string | null;
   sloUrl?: string;
+  /** The binding `sloUrl` is served in. HTTP-POST when absent. */
+  sloBinding?: 'HTTP-POST' | 'HTTP-Redirect';
   /**
    * Deliberately absent from most entries.
    *

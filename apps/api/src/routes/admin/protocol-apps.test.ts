@@ -281,8 +281,21 @@ describe('admin protocol configuration', () => {
     ]);
     expect(res.json().spEntityId).toBe('https://sp.example.test/metadata');
     expect(res.json().sloUrl).toBe('https://sp.example.test/slo');
+    expect(res.json().sloBinding).toBe('HTTP-POST');
     expect(res.json().spCertificates[0]).toContain('BEGIN CERTIFICATE');
     expect(res.json().wantAuthnRequestsSigned).toBe(true);
+  });
+
+  it('takes the SLO binding from the metadata along with the SLO URL', async () => {
+    const applicationId = await samlApplication('m');
+    const res = await post(`/api/admin/applications/${applicationId}/saml/import`, {
+      xml: SP_METADATA.replace(
+        'bindings:HTTP-POST" Location="https://sp.example.test/slo"',
+        'bindings:HTTP-Redirect" Location="https://sp.example.test/slo"',
+      ),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sloBinding).toBe('HTTP-Redirect');
   });
 
   it('leaves the decisions an administrator made alone when metadata is re-imported', async () => {

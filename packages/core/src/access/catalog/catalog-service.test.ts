@@ -203,6 +203,8 @@ describe('createFromCatalog', () => {
       tx.samlConfig.findUniqueOrThrow({ where: { applicationId: created.applicationId } }),
     );
     expect(config.allowIdpInitiated).toBe(false);
+    // Snipe-IT serves /saml/sls as HTTP-Redirect only.
+    expect(config.sloBinding).toBe('HTTP-Redirect');
   });
 
   it('gives a second instance of one application its own slug', async () => {

@@ -99,6 +99,7 @@ describe('parseSpMetadata', () => {
     // and it has to come from the document rather than from list order.
     expect(parsed.defaultAcsUrl).toBe('https://sp.example.test/acs');
     expect(parsed.sloUrl).toBe('https://sp.example.test/slo');
+    expect(parsed.sloBinding).toBe('HTTP-POST');
     expect(parsed.wantAssertionsSigned).toBe(true);
     expect(parsed.certificates[0]).toContain('BEGIN CERTIFICATE');
     // `pem()` line-wraps at 64 characters per RFC 7468, and this fixture's
@@ -139,6 +140,23 @@ describe('parseSpMetadata', () => {
     const parsed = parseSpMetadata(noUse);
     expect(parsed.certificates).toHaveLength(1);
     expect(parsed.encryptionCertificates).toHaveLength(1);
+  });
+
+  it('reads the SLO binding with its URL, skipping a binding Syntra cannot answer in', () => {
+    // Snipe-IT publishes its /saml/sls as HTTP-Redirect only. Storing the URL
+    // with a defaulted HTTP-POST sent it a LogoutResponse it never processed.
+    const redirectOnly = sp.replace(
+      '<SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://sp.example.test/slo"/>',
+      `<SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:SOAP" Location="https://sp.example.test/soap"/>
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://sp.example.test/sls"/>`,
+    );
+    const parsed = parseSpMetadata(redirectOnly);
+    expect(parsed.sloUrl).toBe('https://sp.example.test/sls');
+    expect(parsed.sloBinding).toBe('HTTP-Redirect');
+
+    const none = parseSpMetadata(sp.replace(/<SingleLogoutService[^>]*\/>/, ''));
+    expect(none.sloUrl).toBeNull();
+    expect(none.sloBinding).toBeNull();
   });
 
   it('honours isDefault rather than document order when picking the default', () => {
