@@ -13,7 +13,7 @@ import { z, type ZodTypeAny } from 'zod';
  * dependency for a problem that ends with that upgrade, so this walks Zod 3's
  * `_def` tree directly, covering the constructs `packages/contracts` actually
  * uses. When the upgrade lands, the first branch takes over, the walker
- * becomes dead code to delete, and `docs/api/openapi.json` will differ in
+ * becomes dead code to delete, and `apps/api/openapi.json` will differ in
  * small ways (Zod 4 spells some keywords differently) — the CI freshness check
  * says so, and regenerating is the whole fix.
  *

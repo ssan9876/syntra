@@ -86,7 +86,7 @@ function trimSlashes(value: string, side: 'end' | 'both'): string {
  * The `vN` in each stored ciphertext is the version that sealed it --
  * `rekey --status` counts rows per version, and `rekey` moves every row to
  * the latest version, after which raising `min_decryption_version` is the
- * REVOCATION of the old versions. See docs/runbooks/secret-rotation.md.
+ * REVOCATION of the old versions. See docs/operate.md (Runbooks).
  *
  * ACCESS LOGGING is Vault's too: every encrypt and decrypt this provider
  * makes is an authenticated request in Vault's audit device, with the token's

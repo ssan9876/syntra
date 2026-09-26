@@ -88,7 +88,7 @@ const httpsUrl = z
  * Transitive membership is not managed either: `read` reports DIRECT
  * memberships only, and a rule that names a group somebody holds through
  * another group would otherwise read as satisfied by a holding Provision
- * cannot revoke. Both are documented in `docs/connectors/entra-id.md`; neither
+ * cannot revoke. Both are documented in `docs/configure.md` (Microsoft Entra ID); neither
  * is a knob here because neither is a thing this connector could honour.
  */
 export const entraTargetConfigSchema = z

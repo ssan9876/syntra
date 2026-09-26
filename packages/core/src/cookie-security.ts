@@ -7,7 +7,7 @@
  * consulted independently and which `config.ts` had no say in at all.
  *
  * That mattered in both directions. The lab deployment sets NODE_ENV NOWHERE
- * -- not in `docs/lab/systemd/syntra.service`, not in `.env.example`, not in
+ * -- not in the example unit in `docs/install.md`, not in `.env.example`, not in
  * `packages/db/.env.example` -- so an instance behind TLS sent its session
  * cookie without `Secure`, and the federation binding cookie fell back to
  * `SameSite=Lax`, which `federation.ts`'s own comment says breaks every

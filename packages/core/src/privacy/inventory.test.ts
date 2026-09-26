@@ -116,9 +116,9 @@ describe('the data inventory', () => {
     expect(DATA_INVENTORY.PasswordCredential!.erasure).toBe('delete');
   });
 
-  it('is rendered into docs/privacy/data-inventory.md as committed (run `pnpm privacy:inventory`)', () => {
-    const path = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../docs/privacy/data-inventory.md');
+  it('is rendered into packages/core/data-inventory.md as committed (run `pnpm privacy:inventory`)', () => {
+    const path = resolve(dirname(fileURLToPath(import.meta.url)), '../../data-inventory.md');
     const committed = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-    expect(committed === renderDataInventory(), 'docs/privacy/data-inventory.md is stale: run `pnpm privacy:inventory`').toBe(true);
+    expect(committed === renderDataInventory(), 'packages/core/data-inventory.md is stale: run `pnpm privacy:inventory`').toBe(true);
   });
 });

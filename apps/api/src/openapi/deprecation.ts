@@ -53,7 +53,7 @@ export function deprecationHeaders(entry: RouteDeprecation): Record<string, stri
 }
 
 /**
- * Whether a deprecation honours the six-month notice docs/api/README.md
+ * Whether a deprecation honours the six-month notice docs/configure.md (The administration API)
  * promises. Checked by `openapi.test.ts`, so a shorter one cannot merge.
  */
 export function honoursNoticePeriod(entry: RouteDeprecation): boolean {

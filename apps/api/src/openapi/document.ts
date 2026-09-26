@@ -8,7 +8,7 @@ import { toJsonSchema, type JsonSchema } from './json-schema.js';
 /**
  * THE VERSION OF THE PUBLISHED CONTRACT — not of the product.
  *
- * Semantic, and governed by docs/api/README.md: within major version 1 only
+ * Semantic, and governed by docs/configure.md (The administration API): within major version 1 only
  * additive changes ship (a new operation, a new optional field or parameter,
  * a new response member, a new enum value on a response). Anything else — a
  * removed or renamed operation or field, a newly required input, a narrowed
@@ -17,7 +17,7 @@ import { toJsonSchema, type JsonSchema } from './json-schema.js';
  * description that changes no behaviour.
  *
  * A constant rather than the build's version, deliberately: the committed
- * `docs/api/openapi.json` is checked for freshness in CI, and a document that
+ * `apps/api/openapi.json` is checked for freshness in CI, and a document that
  * changed on every release would make that check meaningless.
  */
 export const API_VERSION = '1.0.0';
@@ -111,7 +111,7 @@ const INFO_DESCRIPTION = [
   'requirement.',
   '',
   'Errors are RFC 9457 problem details (`application/problem+json`). See',
-  'docs/api/README.md for versioning, deprecation, idempotency and rate limits.',
+  'docs/configure.md (The administration API) for versioning, deprecation, idempotency and rate limits.',
 ].join('\n');
 
 /** `/api/admin/roles/:id` → `/api/admin/roles/{id}`. */

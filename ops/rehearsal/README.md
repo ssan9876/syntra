@@ -1,8 +1,7 @@
 # The update rehearsal
 
-**This rehearsal has been run against the lab**, on 2026-08-25, following
-`docs/superpowers/plans/2026-08-24-remediation-5-update-feature.md`, Task 11,
-Steps 4-15, exactly. It found two real bugs neither the original plan nor any
+**This rehearsal has been run against the lab**, on 2026-08-25, following the
+update feature's rehearsal plan step by step. It found two real bugs neither the original plan nor any
 unit test anticipated — one in this rehearsal's own stub server, one in
 `ops/syntra-update` itself — fixed both, and re-ran the steps that exercised
 them to confirm the fixes hold. The live install (`/root/syntra`, unconverted,

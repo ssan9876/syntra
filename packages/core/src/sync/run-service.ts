@@ -732,7 +732,7 @@ async function currentMemberships(
  * own transaction means one failure rolls back only that change — the
  * directory row and its `SyncChange` status commit together or not at all —
  * while every other change in the run is unaffected and the loop genuinely
- * continues, per the spec (docs/superpowers/specs/2026-08-15-syntra-directory-sync-design.md, §10).
+ * continues.
  */
 export async function applyRun(
   tenantId: string,

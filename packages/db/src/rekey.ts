@@ -10,7 +10,7 @@
  *
  * Reads the SAME environment the API does (`.env`, or the release layout's
  * `shared/.env`), because the point is that the keys end up under exactly the
- * provider the API will read them with. See docs/runbooks/secret-rotation.md,
+ * provider the API will read them with. See docs/operate.md (Runbooks),
  * "Procedure B", for the full migration and rotation sequences.
  */
 import { keyManagementWarnings, parseKeyManagement } from '@syntra/core';

@@ -319,7 +319,6 @@ jobs:
       #
       # Neither is retried. A retry would hide the second one, and the second
       # one is the important one.
-      # See docs/superpowers/specs/2026-08-15-directory-sync-known-gaps.md.
       - name: Wait for Vault
         run: pnpm vault:wait
 
@@ -604,7 +603,7 @@ jobs:
         run: diff -u ops/prometheus-alerts.yml deploy/helm/syntra/files/prometheus-alerts.yml
 
   # ---------------------------------------------------------------------------
-  # The published OpenAPI description (docs/api/openapi.json) matches the code.
+  # The published OpenAPI description (apps/api/openapi.json) matches the code.
   #
   # The document is GENERATED -- from the route table the API registers and
   # the `*.openapi.ts` descriptions beside each route module -- and COMMITTED,
@@ -673,8 +672,8 @@ jobs:
         # --porcelain` for one that was never added: an untracked file has no
         # diff, and would otherwise pass.
         run: |
-          if ! git diff --exit-code -- docs/api/openapi.json \
-             || [ -n "$(git status --porcelain -- docs/api/openapi.json)" ]; then
-            echo "::error file=docs/api/openapi.json::docs/api/openapi.json is out of date. Run 'pnpm openapi:generate' and commit the result."
+          if ! git diff --exit-code -- apps/api/openapi.json \
+             || [ -n "$(git status --porcelain -- apps/api/openapi.json)" ]; then
+            echo "::error file=apps/api/openapi.json::apps/api/openapi.json is out of date. Run 'pnpm openapi:generate' and commit the result."
             exit 1
           fi
