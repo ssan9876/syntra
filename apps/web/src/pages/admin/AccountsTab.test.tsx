@@ -79,6 +79,23 @@ const renderAt = (url: string) =>
 
 beforeEach(() => vi.restoreAllMocks());
 
+describe('AccountsTab org unit column', () => {
+  it('marks a unit inherited from the linked person, so the reason for access is on screen', async () => {
+    mockBoth([
+      { ...users[0], effectiveOrgUnit: { id: 'ou1', name: 'IT', source: 'person' } },
+      { ...users[1], effectiveOrgUnit: { id: 'ou2', name: 'Ops', source: 'account' } },
+      { ...synced, effectiveOrgUnit: null },
+    ]);
+    renderPage();
+
+    const table = (await screen.findByRole('link', { name: 'J Doe' })).closest('table')!;
+    expect(within(table).getByRole('columnheader', { name: 'Org unit' })).toBeInTheDocument();
+    expect(within(table).getByText('IT (from the linked person)')).toBeInTheDocument();
+    expect(within(table).getByText('Ops')).toBeInTheDocument();
+    expect(within(table).getByText('None')).toBeInTheDocument();
+  });
+});
+
 describe('AccountsTab, finding an account', () => {
   it('sends the search from the URL to the API', async () => {
     const fetchSpy = vi

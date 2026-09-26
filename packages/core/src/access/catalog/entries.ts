@@ -12,6 +12,20 @@ import type { CatalogEntry } from './types.js';
  *
  * Each entry carries `docsUrl` for exactly that reason: the vendor's page is
  * authoritative and this file is a convenience.
+ *
+ * `launchUrl` ON A SAML ENTRY IS WHERE THE PORTAL TILE GOES. An application
+ * made from the catalog has IdP-initiated sign-in off, so the tile opens this
+ * address and the application is expected to start SP-initiated SSO from it
+ * (see the launch route in apps/api/src/routes/portal.ts). It should
+ * therefore be the page that sends an AuthnRequest, not a home page with a
+ * password form on it. Snipe-IT's is set to its SSO start page, checked
+ * live. The others are left as they were: Slack's workspace URL and Google's
+ * `mail.google.com/a/<domain>` already hand a SAML-enforced user to the IdP,
+ * Salesforce's My Domain and Zoom's vanity URL depend on how the org's login
+ * page is configured, and Nextcloud's `user_saml` start route is not on the
+ * vendor's documentation page — so an administrator whose tile lands on a
+ * login form sets the SSO start page on the application rather than this
+ * file guessing one.
  */
 
 const EMAIL_NAMEID = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
@@ -163,7 +177,14 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
     category: 'itsm',
     description: 'Asset management. Self-hosted, with SAML enabled in its settings.',
     docsUrl: 'https://snipe-it.readme.io/docs/saml',
-    launchUrl: 'https://{{host}}',
+    // Snipe-IT's SP-initiated start page, not its home page. A catalog SAML
+    // application is created with IdP-initiated sign-in OFF, so the portal
+    // tile opens `launchUrl` and relies on the application to send an
+    // AuthnRequest back. /login/saml does exactly that — verified live: it
+    // answers 302 to Syntra's /saml/sso with a SAMLRequest — whereas the bare
+    // host shows Snipe-IT's own login form and leaves the user to find the
+    // SSO button.
+    launchUrl: 'https://{{host}}/login/saml',
     variables: [
       { key: 'host', label: 'Snipe-IT hostname', example: 'assets.acme.example' },
     ],

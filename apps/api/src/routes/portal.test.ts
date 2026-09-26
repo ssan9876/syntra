@@ -11,6 +11,7 @@ import {
   localMasterKeyProvider,
   hashPassword,
   setPasswordHash,
+  upsertSamlConfig,
 } from '@syntra/core';
 import { buildTestApp } from '../test-support.js';
 
@@ -431,6 +432,97 @@ describe('launching a protocol application', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().url).not.toContain('attacker.example');
     expect(res.json().url).toBe(`http://${ctx.host}/saml/start/${application.id}`);
+  });
+
+  /**
+   * IdP-initiated sign-in is OFF by default, and /saml/start answers that with
+   * 409 `saml-idp-initiated-disabled` — so every SAML tile configured the
+   * recommended way used to open an error page. Such an application is now
+   * launched SP-initiated, at its own address.
+   */
+  describe('a SAML application with IdP-initiated sign-in', () => {
+    const configure = (applicationId: string, allowIdpInitiated: boolean) =>
+      withTenant(ctx.tenantId, (tx) =>
+        upsertSamlConfig(tx, applicationId, {
+          spEntityId: 'https://sp.acme.test',
+          acsUrls: ['https://sp.acme.test/acs'],
+          defaultAcsUrl: 'https://sp.acme.test/acs',
+          acsBinding: 'HTTP-POST',
+          nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+          nameIdClaim: null,
+          spCertificates: [],
+          wantAuthnRequestsSigned: false,
+          encryptAssertions: false,
+          encryptionCertificate: null,
+          sloUrl: null,
+          sloBinding: 'HTTP-POST',
+          allowIdpInitiated,
+          assertionLifetimeMs: 300_000,
+        }),
+      );
+    const launch = (id: string) => call('POST', `/api/portal/applications/${id}/launch`);
+
+    it('OFF, opens the application at its own launch address', async () => {
+      const application = await protocolApp('saml', 'https://sp.acme.test/login/saml');
+      await configure(application.id, false);
+      const res = await launch(application.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'launch', url: 'https://sp.acme.test/login/saml' });
+
+      // Audited with the direction it went, so the log can say why the user
+      // landed on the vendor's page rather than Syntra's.
+      const event = await withTenant(ctx.tenantId, (tx) =>
+        tx.auditEvent.findFirstOrThrow({
+          where: { action: 'application.launch', targetId: application.id },
+        }),
+      );
+      expect(event.payload).toMatchObject({ samlFlow: 'sp-initiated' });
+    });
+
+    it('OFF with no launch address, refuses and tells the administrator what to set', async () => {
+      const application = await protocolApp('saml');
+      await configure(application.id, false);
+      const res = await launch(application.id);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().type).toContain('not-launchable');
+      expect(res.json().detail).toContain('SSO start page');
+      expect(res.json().detail).toContain('IdP-initiated sign-in');
+      // Audited as a failure with the reason, never as a success for a launch
+      // that went nowhere.
+      const events = await withTenant(ctx.tenantId, (tx) =>
+        tx.auditEvent.findMany({
+          where: { action: 'application.launch', targetId: application.id },
+        }),
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]!.outcome).toBe('failure');
+      expect(events[0]!.payload).toMatchObject({ reason: 'no-launch-address' });
+    });
+
+    it('OFF, will not send the browser to a stored address that is not http(s)', async () => {
+      const application = await protocolApp('saml', 'https://sp.acme.test/login/saml');
+      await configure(application.id, false);
+      await withTenant(ctx.tenantId, (tx) =>
+        tx.application.update({
+          where: { id: application.id },
+          data: { launchUrl: 'javascript:alert(1)' },
+        }),
+      );
+      const res = await launch(application.id);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().type).toContain('not-launchable');
+    });
+
+    it('ON, still starts at Syntra, whatever launch address is stored', async () => {
+      const application = await protocolApp('saml', 'https://sp.acme.test/login/saml');
+      await configure(application.id, true);
+      const res = await launch(application.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        status: 'launch',
+        url: `http://${ctx.host}/saml/start/${application.id}`,
+      });
+    });
   });
 
   it('sends an OIDC launch to the relying party through a Syntra redirect', async () => {

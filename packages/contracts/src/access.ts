@@ -51,8 +51,14 @@ const applicationFields = z.object({
    * `nonce` and PKCE verifier, so launching one means sending the browser to
    * the application's own start address and letting it begin the code flow.
    *
-   * Meaningless for a SAML application, whose launch address is derived from
-   * the tenant's own protocol identity and never stored.
+   * Optional for a SAML application, and what it means depends on that
+   * application's `allowIdpInitiated`. With IdP-initiated sign-in ON the tile
+   * starts the sign-in at Syntra's own /saml/start and this is unused. With
+   * it OFF — the secure default — the tile opens THIS address and the
+   * application starts SP-initiated SSO from it, so it should be the
+   * application's SSO start page; with none recorded the launch answers 409
+   * `not-launchable` saying so. See the launch route in
+   * apps/api/src/routes/portal.ts.
    */
   launchUrl: webUrl.optional(),
   /**

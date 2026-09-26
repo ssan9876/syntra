@@ -7,7 +7,7 @@ import {
   deactivateGroup,
   reactivateGroup,
 } from '../directory/group-service.js';
-import { createOrgUnit } from '../directory/org-unit-service.js';
+import { createOrgUnit, deactivateOrgUnit } from '../directory/org-unit-service.js';
 import { createUser } from '../directory/user-service.js';
 import { createApplication, updateApplication } from './application-service.js';
 import { assignApplication, listAssignments, unassignApplication } from './assignment-service.js';
@@ -309,5 +309,103 @@ describe('resolveApplicationIdsForUser', () => {
     });
     const ids = await withTenant(tenantId, (tx) => resolveApplicationIdsForUser(tx, userId));
     expect([...ids]).toEqual([crm.id]);
+  });
+});
+
+/**
+ * The org-unit arm starts from the login's EFFECTIVE unit: its own, else its
+ * linked person's. On a real install people are placed in units (that drives
+ * where the directory writes their account) and logins are not, and reading
+ * only `User.orgUnitId` made an application assigned to a unit reach nobody.
+ */
+describe('org-unit assignments through the linked person', () => {
+  const personIn = (orgUnitId: string | null, status = 'active') =>
+    withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Jo', familyName: 'Doe', orgUnitId, status },
+      });
+      await tx.user.update({ where: { id: userId }, data: { personId: person.id } });
+      return person;
+    });
+
+  it("reaches a login with no unit of its own through its person's unit", async () => {
+    const crm = await app('crm');
+    const it_ = await withTenant(tenantId, (tx) => createOrgUnit(tx, 'IT'));
+    await personIn(it_.id);
+    await withTenant(tenantId, (tx) =>
+      assignApplication(tx, crm.id, { type: 'orgUnit', id: it_.id }),
+    );
+    expect(await names()).toEqual(['crm']);
+    expect(await withTenant(tenantId, (tx) => isApplicationAssigned(tx, userId, crm.id))).toBe(
+      true,
+    );
+  });
+
+  it("reaches it through the units above the person's unit too", async () => {
+    const crm = await app('crm');
+    const { head, care } = await withTenant(tenantId, async (tx) => {
+      const head = await createOrgUnit(tx, 'Head Office');
+      const care = await createOrgUnit(tx, 'Care', head.id);
+      return { head, care };
+    });
+    await personIn(care.id);
+    await withTenant(tenantId, (tx) =>
+      assignApplication(tx, crm.id, { type: 'orgUnit', id: head.id }),
+    );
+    expect(await names()).toEqual(['crm']);
+  });
+
+  it("lets the login's own unit override its person's", async () => {
+    // A login's unit is set on the account deliberately — a contractor's login
+    // kept in Contractors while their person sits in the team they work for.
+    const crm = await app('crm');
+    const wiki = await app('wiki');
+    const { it_, contractors } = await withTenant(tenantId, async (tx) => ({
+      it_: await createOrgUnit(tx, 'IT'),
+      contractors: await createOrgUnit(tx, 'Contractors'),
+    }));
+    await personIn(it_.id);
+    await withTenant(tenantId, async (tx) => {
+      await tx.user.update({ where: { id: userId }, data: { orgUnitId: contractors.id } });
+      await assignApplication(tx, crm.id, { type: 'orgUnit', id: it_.id });
+      await assignApplication(tx, wiki.id, { type: 'orgUnit', id: contractors.id });
+    });
+    expect(await names()).toEqual(['wiki']);
+  });
+
+  it('inherits nothing when the login has no person', async () => {
+    const crm = await app('crm');
+    await withTenant(tenantId, async (tx) => {
+      const it_ = await createOrgUnit(tx, 'IT');
+      // A person in IT who is NOT linked to this login.
+      await tx.person.create({
+        data: { tenantId, givenName: 'Other', familyName: 'Person', orgUnitId: it_.id },
+      });
+      await assignApplication(tx, crm.id, { type: 'orgUnit', id: it_.id });
+    });
+    expect(await names()).toEqual([]);
+  });
+
+  it('inherits nothing from a deactivated person', async () => {
+    // Mirrors the rule for deactivated groups and units: the person path is a
+    // way of reaching access, and a deactivated person reaches nothing by it.
+    const crm = await app('crm');
+    const it_ = await withTenant(tenantId, (tx) => createOrgUnit(tx, 'IT'));
+    await personIn(it_.id, 'inactive');
+    await withTenant(tenantId, (tx) =>
+      assignApplication(tx, crm.id, { type: 'orgUnit', id: it_.id }),
+    );
+    expect(await names()).toEqual([]);
+  });
+
+  it("grants nothing through the person's unit once that unit is deactivated", async () => {
+    const crm = await app('crm');
+    const it_ = await withTenant(tenantId, (tx) => createOrgUnit(tx, 'IT'));
+    await personIn(it_.id);
+    await withTenant(tenantId, async (tx) => {
+      await assignApplication(tx, crm.id, { type: 'orgUnit', id: it_.id });
+      await deactivateOrgUnit(tx, it_.id, 'team disbanded');
+    });
+    expect(await names()).toEqual([]);
   });
 });

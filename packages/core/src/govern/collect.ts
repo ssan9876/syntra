@@ -1,5 +1,6 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import { LIVE_GRANT_STATUSES } from '../automate/types.js';
+import { effectiveOrgUnit } from '../access/effective-org-unit.js';
 import type {
   AttributionInput,
   DirectAssignmentFact,
@@ -53,7 +54,7 @@ export interface ApplicationPath {
  * section 7 asserts that function already knows which unit produced the match;
  * it does not, and this is where Govern learns it.
  *
- * Set-based over the whole tenant in FOUR queries, because calling a per-user
+ * Set-based over the whole tenant in FIVE queries, because calling a per-user
  * helper in a loop over 1,180 users inside one 5000 ms transaction is a P2028
  * on the one nightly job that must not fail.
  *
@@ -62,8 +63,13 @@ export interface ApplicationPath {
  * focused function into a general one nobody can reason about.
  */
 export async function resolveApplicationPaths(tx: TenantClient): Promise<ApplicationPath[]> {
-  const [users, memberships, units, assignments] = await Promise.all([
-    tx.user.findMany({ select: { id: true, orgUnitId: true } }),
+  const [users, persons, memberships, units, assignments] = await Promise.all([
+    tx.user.findMany({ select: { id: true, orgUnitId: true, personId: true } }),
+    // The persons' units, because the org-unit arm starts from the login's
+    // EFFECTIVE unit — its own, else its person's — exactly as
+    // `resolveApplicationIdsForUser` does. Without this the access review
+    // would say nobody holds an application that the portal is showing them.
+    tx.person.findMany({ select: { id: true, orgUnitId: true, status: true } }),
     tx.groupMembership.findMany({ select: { userId: true, groupId: true, group: { select: { name: true } } } }),
     tx.orgUnit.findMany({ select: { id: true, name: true, parentId: true } }),
     tx.appAssignment.findMany({
@@ -80,6 +86,7 @@ export async function resolveApplicationPaths(tx: TenantClient): Promise<Applica
   ]);
 
   const unitById = new Map(units.map((u) => [u.id, u]));
+  const personById = new Map(persons.map((p) => [p.id, p]));
 
   // Built once for the tenant, not once per user. The seen-set and the depth
   // cap are not paranoia: parentId is a self-relation with no acyclicity
@@ -157,7 +164,8 @@ export async function resolveApplicationPaths(tx: TenantClient): Promise<Applica
       }
     }
 
-    const chain = chainFor(user.orgUnitId);
+    const person = user.personId === null ? null : (personById.get(user.personId) ?? null);
+    const chain = chainFor(effectiveOrgUnit(user, person)?.orgUnitId ?? null);
     for (const unit of chain) {
       for (const a of byUnit.get(unit.orgUnitId) ?? []) {
         // The chain is truncated AT THE MATCH, so the recorded path is the

@@ -844,13 +844,47 @@ sign-in does, and none of them issues an assertion or a token without an
 whichever door somebody came in by.
 
 **An application in the catalog is a bookmark, a SAML service provider or an
-OIDC relying party.** A bookmark carries a launch URL. A SAML application's
-launch address is *derived* from the tenant's own protocol identity and never
-stored — the portal sends the browser to `/saml/start/:id`, which re-enters
-`authorize()` on its own rather than inheriting the launch's decision. An OIDC
-application is launched by sending the browser to the relying party's own start
-address, because OpenID Connect has no identity-provider-initiated flow: only
-the relying party knows its own `state`, `nonce` and PKCE verifier.
+OIDC relying party.** A bookmark carries a launch URL. How a SAML application
+is launched depends on its **Allow sign-in started from Syntra** setting
+(`allowIdpInitiated`):
+
+- **On:** the launch address is *derived* from the tenant's own protocol
+  identity and never stored — the portal sends the browser to
+  `/saml/start/:id`, which re-enters `authorize()` on its own rather than
+  inheriting the launch's decision.
+- **Off (the default, and what the catalog creates):** `/saml/start` would
+  refuse the unsolicited sign-in with `409 saml-idp-initiated-disabled`, so
+  the tile instead opens the application's own **launch address** and the
+  application starts *SP-initiated* sign-in, sending an `AuthnRequest` back to
+  `/saml/sso`. The launch address must therefore be the application's **SSO
+  start page** — Snipe-IT's is `https://<host>/login/saml` — not a home page
+  with a password form. With none recorded the launch answers
+  `409 not-launchable`, telling the administrator to set the launch address or
+  allow sign-in started from Syntra, and the refusal is audited as a failed
+  `application.launch` with `reason: no-launch-address`. The SAML panel on the application's page
+  shows and edits the launch address beside that switch and warns when it is
+  empty. The `application.launch` audit event records which way it went
+  (`samlFlow: sp-initiated | idp-initiated`).
+
+An OIDC application is launched by sending the browser to the relying party's
+own start address, because OpenID Connect has no identity-provider-initiated
+flow: only the relying party knows its own `state`, `nonce` and PKCE verifier.
+
+**Assigning an application to an org unit reaches the people in it, and
+everybody in the units below.** A login's unit for access is its own
+`User.orgUnitId` when that is set, and otherwise the unit of the **person it
+is linked to** — the same `Person.orgUnitId` that decides where Provision
+places their account. Most installs place people and never set a unit on the
+login, and before this fallback an application assigned to a unit reached
+nobody. A login's own unit still wins, so a contractor's login can be kept in
+*Contractors* while their person sits in the team they work for. A login with
+no person (a service account) inherits nothing, and neither does one whose
+person is deactivated. The account list and the account page show the unit
+access resolves through, as *IT (from the linked person)* when it is
+inherited. The same rule feeds the Govern access paths, Automate's
+`user.orgUnit` audience field and org-unit-scoped review campaigns (which,
+unlike access, keep an inactive person's unit so a leaver's holdings are
+still reviewed).
 
 **Nothing derives an issuer, an entity ID, an audience or a redirect target
 from the `Host` header.** A tenant is resolved from that header, so
@@ -1043,7 +1077,7 @@ list. This slice adds:
 | `mfa.removed` | A factor was removed, carrying how many recovery codes went with it |
 | `mfa.recovery_codes_issued` | A fresh set was minted; the old set stopped working |
 | `notify.delivery_failed` | **A notification could not be sent.** The factor-added mail is one of only two things making "a stolen password can enrol a factor" an acceptable trade, so this is the event that says a control has stopped working. Alert on it |
-| `application.launch` | Somebody entered an application through the portal, carrying whether it was a bookmark, a SAML application or an OIDC one |
+| `application.launch` | Somebody entered an application through the portal, carrying whether it was a bookmark, a SAML application or an OIDC one, and for SAML whether the launch was SP- or IdP-initiated (`samlFlow`) |
 | `saml.assertion_issued` | An assertion was issued to a service provider, naming it, the ACS URL it went to and the factor behind the session |
 | `saml.acs_refused` | A request named an assertion consumer service URL that is not on the application's allowlist. **Somebody is probing, or a service provider changed its address without telling anyone** |
 | `saml.signature_refused` | An `AuthnRequest` or `LogoutRequest` failed signature verification, or arrived for an application that requires signatures and has no certificate registered. **A service provider whose signing has broken and somebody probing signatures look the same here; both are worth a look** |

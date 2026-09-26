@@ -21,6 +21,7 @@ import { AccountTokens } from './AccountTokens.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
+import { orgUnitLabel, type EffectiveOrgUnit } from './org-unit-label.js';
 
 interface AccountDetail {
   id: string;
@@ -54,6 +55,11 @@ interface AccountDetail {
    * are edited on their own screens.
    */
   orgUnitId: string | null;
+  /**
+   * The unit application access resolves through: `orgUnitId` when set,
+   * otherwise the linked person's. See `orgUnitLabel`.
+   */
+  effectiveOrgUnit?: EffectiveOrgUnit | null;
   person: { id: string; givenName: string; familyName: string } | null;
 }
 
@@ -363,6 +369,16 @@ export function AccountDetailPage() {
                   </span>
                 )}
               </span>
+            ),
+          },
+          {
+            // Shown as the unit ACCESS resolves through, not the raw column:
+            // an account with no unit of its own whose person sits in IT
+            // reaches IT's applications, and "None" here would contradict
+            // the portal the user is looking at.
+            label: 'Org unit',
+            value: orgUnitLabel(data.effectiveOrgUnit) ?? (
+              <span className="font-normal text-muted">None</span>
             ),
           },
           {

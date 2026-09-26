@@ -3,6 +3,7 @@ import { idParam, isLaunchableUrl, type ApplicationTile } from '@syntra/contract
 import {
   authorize,
   findApplication,
+  findSamlConfigForApplication,
   isApplicationAssigned,
   endSessions,
   listSessionsForUser,
@@ -198,6 +199,62 @@ export async function registerPortalRoutes(
         );
       }
 
+      // A SAML application that refuses IdP-initiated sign-in is launched
+      // SP-INITIATED: the tile opens the application's own address, the
+      // application sends an AuthnRequest back to Syntra's /saml/sso, and the
+      // assertion answers a request the application itself started.
+      //
+      // Sending it to /saml/start instead -- which is what every SAML tile used
+      // to do -- meets `allowIdpInitiated: false`, the secure default, and gets
+      // a 409 `saml-idp-initiated-disabled`. That made the Applications button
+      // broken for every application configured the recommended way, and the
+      // user saw an error page for an application they are assigned.
+      //
+      // No SAML config at all keeps today's behaviour: /saml/start answers
+      // that with its own 404, which is the accurate description of an
+      // application whose SAML side was never set up.
+      const samlConfig =
+        application.type === 'saml'
+          ? await request.db((tx) => findSamlConfigForApplication(tx, id))
+          : null;
+      const spInitiated = samlConfig !== null && !samlConfig.allowIdpInitiated;
+
+      // Refused BEFORE the success is audited, so the log never records a
+      // successful launch that went nowhere -- and audited as a FAILURE with
+      // the reason, so an administrator asking "why can nobody open Snipe-IT"
+      // finds the answer in the log rather than in a user's screenshot.
+      // Re-checked with `isLaunchableUrl` for the reason the bookmark branch
+      // below gives: this is the address the browser is sent to
+      // unconditionally.
+      if (spInitiated && (!application.launchUrl || !isLaunchableUrl(application.launchUrl))) {
+        await request.db((tx) =>
+          recordEvent(tx, {
+            actorUserId: userId,
+            action: 'application.launch',
+            targetType: 'Application',
+            targetId: id,
+            outcome: 'failure',
+            sourceIp: request.ip,
+            payload: {
+              slug: application.slug,
+              type: application.type,
+              samlFlow: 'sp-initiated',
+              reason: 'no-launch-address',
+            },
+          }),
+        );
+        throw new ProblemError(
+          409,
+          'not-launchable',
+          'That application has no launch address configured',
+          'This application only accepts sign-ins that start at the application ' +
+            'itself (IdP-initiated sign-in is off), so its tile has to open the ' +
+            "application's own sign-in page. An administrator needs to set the " +
+            "application's launch address to its SSO start page, or enable " +
+            'IdP-initiated sign-in in its SAML settings.',
+        );
+      }
+
       await request.db((tx) =>
         recordEvent(tx, {
           actorUserId: userId,
@@ -206,9 +263,21 @@ export async function registerPortalRoutes(
           targetId: id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { slug: application.slug, type: application.type },
+          payload: {
+            slug: application.slug,
+            type: application.type,
+            // Which way a SAML launch went, so "the tile opened the vendor's
+            // page, not ours" is answerable from the log.
+            ...(application.type === 'saml'
+              ? { samlFlow: spInitiated ? 'sp-initiated' : 'idp-initiated' }
+              : {}),
+          },
         }),
       );
+
+      if (spInitiated) {
+        return { status: 'launch' as const, url: application.launchUrl! };
+      }
 
       // A protocol application's launch address is derived from the tenant's
       // own identity, never stored and never taken from the request. The

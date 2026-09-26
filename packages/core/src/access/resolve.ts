@@ -1,5 +1,6 @@
 import type { TenantClient } from '@syntra/db';
 import { listActiveGroupsForUser } from '../directory/group-service.js';
+import { effectiveOrgUnitForUser } from './effective-org-unit.js';
 
 /** A tree deep enough to hit this is a cycle, not an organization. */
 const MAX_ORG_UNIT_DEPTH = 64;
@@ -47,20 +48,23 @@ async function orgUnitChain(tx: TenantClient, orgUnitId: string | null): Promise
  * ACTIVE group they belong to, and assignments naming their org unit or one
  * above it. A retired application is excluded; a hidden one is not, because
  * hidden means "no tile", not "no access".
+ *
+ * "Their org unit" is the EFFECTIVE one — the login's own, else the linked
+ * person's (`effectiveOrgUnit`). Reading only `User.orgUnitId` made an
+ * assignment on a unit reach nobody on an install where people are placed in
+ * units and logins are not, which is the normal shape of one: placement is a
+ * property of the person, and nobody sets a unit twice.
  */
 export async function resolveApplicationIdsForUser(
   tx: TenantClient,
   userId: string,
 ): Promise<Set<string>> {
-  const user = await tx.user.findUnique({
-    where: { id: userId },
-    select: { orgUnitId: true },
-  });
   // ACTIVE groups only. A deactivated group grants nothing — see
   // `listActiveGroupsForUser`, and `orgUnitChain` above for the same rule
   // applied to the tree.
   const groups = await listActiveGroupsForUser(tx, userId);
-  const orgUnitIds = await orgUnitChain(tx, user?.orgUnitId ?? null);
+  const unit = await effectiveOrgUnitForUser(tx, userId);
+  const orgUnitIds = await orgUnitChain(tx, unit?.orgUnitId ?? null);
 
   const rows = await tx.appAssignment.findMany({
     where: {

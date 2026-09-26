@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
+import { effectiveOrgUnitsForUsers } from '../access/effective-org-unit.js';
 import { assertReferenceInTenant } from '../tenant-reference.js';
 import {
   conditionSchema,
@@ -288,9 +289,23 @@ async function holdingsInScope(
 
   const users = await tx.user.findMany({
     where: { personId: { not: null } },
-    select: { personId: true, orgUnitId: true },
+    select: { id: true, personId: true, orgUnitId: true },
   });
-  const orgUnitByPerson = new Map(users.map((u) => [u.personId!, u.orgUnitId]));
+  // Each login's EFFECTIVE unit — its own, else its person's — the rule app
+  // access resolves by (`effectiveOrgUnit`). Reading `User.orgUnitId` alone
+  // made an org-scoped campaign empty on an install where units are set on
+  // people and not on logins, and an empty review reads as a clean one.
+  //
+  // `includeInactivePerson`, unlike access resolution: a review is looking for
+  // what a leaver still holds, and gating the inactive out would hide exactly
+  // the holdings it exists to find.
+  const effective = await effectiveOrgUnitsForUsers(tx, users, { includeInactivePerson: true });
+  const orgUnitByPerson = new Map<string, string | null>();
+  for (const u of users) {
+    // A second login with no unit must not erase the first one's.
+    const unit = effective.get(u.id)?.orgUnitId ?? null;
+    if (unit !== null || !orgUnitByPerson.has(u.personId!)) orgUnitByPerson.set(u.personId!, unit);
+  }
 
   const contracts = await tx.contract.findMany({
     select: {

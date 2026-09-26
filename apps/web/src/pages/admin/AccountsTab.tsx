@@ -23,6 +23,7 @@ import {
 import { useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
+import { orgUnitLabel, type EffectiveOrgUnit } from './org-unit-label.js';
 
 interface UserRow {
   id: string;
@@ -39,6 +40,8 @@ interface UserRow {
    * one and needs its own label.
    */
   locked?: boolean;
+  /** The unit app access resolves through, own or inherited. See `orgUnitLabel`. */
+  effectiveOrgUnit?: EffectiveOrgUnit | null;
 }
 
 interface SourceRow {
@@ -72,6 +75,7 @@ const COLUMNS: ColumnDef[] = [
   { id: 'login', label: 'Login' },
   { id: 'email', label: 'Email' },
   { id: 'managedBy', label: 'Managed by' },
+  { id: 'orgUnit', label: 'Org unit' },
   { id: 'status', label: 'Status', required: true },
 ];
 
@@ -432,6 +436,7 @@ export function AccountsTab() {
                     </th>
                   )}
                   {shows('managedBy') && <th scope="col">Managed by</th>}
+                  {shows('orgUnit') && <th scope="col">Org unit</th>}
                   <th scope="col">Status</th>
                 </tr>
               </thead>
@@ -468,6 +473,13 @@ export function AccountsTab() {
                         </span>
                       )}
                     </td>
+                    )}
+                    {shows('orgUnit') && (
+                      <td>
+                        {orgUnitLabel(user.effectiveOrgUnit) ?? (
+                          <span className="text-muted">None</span>
+                        )}
+                      </td>
                     )}
                     <td>
                       {/*

@@ -32,7 +32,9 @@ import {
   revokeOrphanedRecoveryCodes,
   type DeactivateOutcome,
   type IssueSetupOutcome,
+  effectiveOrgUnitsForUsers,
 } from '@syntra/core';
+import type { TenantClient } from '@syntra/db';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
@@ -61,6 +63,39 @@ export interface AdminUserRouteOptions {
  * exactly the same reasons, and two copies of this mapping is how one of them
  * ends up answering 500 for a case the other explains.
  */
+/**
+ * The org unit each account's APP ACCESS resolves from, named, and where it
+ * came from.
+ *
+ * `orgUnitId` on the row is the account's own column and stays exactly that —
+ * the edit form writes it back. This is the separate answer to "which unit do
+ * org-unit assignments reach this login through", which since access started
+ * falling back to the linked person's unit (`effectiveOrgUnit`) is no longer
+ * the same thing. Without it an administrator sees "Org unit: none" on an
+ * account that is plainly getting IT's applications, and has nothing on the
+ * screen to explain why.
+ */
+async function effectiveUnitsFor(
+  tx: TenantClient,
+  users: readonly { id: string; orgUnitId: string | null; personId: string | null }[],
+): Promise<Map<string, { id: string; name: string; source: 'account' | 'person' }>> {
+  const effective = await effectiveOrgUnitsForUsers(tx, users);
+  const ids = [...new Set([...effective.values()].map((e) => e.orgUnitId))];
+  const units =
+    ids.length === 0
+      ? []
+      : await tx.orgUnit.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } });
+  const nameById = new Map(units.map((u) => [u.id, u.name]));
+  const out = new Map<string, { id: string; name: string; source: 'account' | 'person' }>();
+  for (const [userId, unit] of effective) {
+    const name = nameById.get(unit.orgUnitId);
+    // A unit id with no row is a dangling reference, not a unit; answering
+    // with a name-less entry would render as a blank label.
+    if (name !== undefined) out.set(userId, { id: unit.orgUnitId, name, source: unit.source });
+  }
+  return out;
+}
+
 function raiseIfRefused(outcome: DeactivateOutcome): void {
   if (outcome.ok) return;
   switch (outcome.reason) {
@@ -111,10 +146,12 @@ export async function registerAdminUserRoutes(
     { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
     async (request) => {
       const { q, status, page, pageSize } = statusPageQuery.parse(request.query);
-      const { result, locks } = await request.db(async (tx) => {
+      const { result, locks, units } = await request.db(async (tx) => {
         const result = await listUsers(tx, { search: q, status, page, pageSize });
         return {
           result,
+          // Page-scoped like the locks: two queries whatever the page size.
+          units: await effectiveUnitsFor(tx, result.rows),
           // Scoped to the page. This used to read every lockout row for a list
           // that was every user; now both are bounded, and the narrower read is
           // strictly less work than the join it still replaces.
@@ -130,7 +167,11 @@ export async function registerAdminUserRoutes(
         locks.filter((l) => isLocked(l, now)).map((l) => l.userId),
       );
       return {
-        users: result.rows.map((u) => ({ ...u, locked: lockedIds.has(u.id) })),
+        users: result.rows.map((u) => ({
+          ...u,
+          locked: lockedIds.has(u.id),
+          effectiveOrgUnit: units.get(u.id) ?? null,
+        })),
         total: result.total,
         page: result.page,
         pageSize: result.pageSize,
@@ -384,7 +425,14 @@ export async function registerAdminUserRoutes(
             })
           : null;
 
-        return { ...user, locked: isLocked(lock, new Date()), person };
+        const units = await effectiveUnitsFor(tx, [user]);
+
+        return {
+          ...user,
+          locked: isLocked(lock, new Date()),
+          person,
+          effectiveOrgUnit: units.get(user.id) ?? null,
+        };
       });
     },
   );
@@ -516,7 +564,9 @@ export async function registerAdminUserRoutes(
           // fallback container on every target. Overwriting a unit the person
           // already has would undo a decision made about the person — and any
           // AccountPlacement protecting a manual move — from a form whose
-          // subject is the account.
+          // subject is the account. (Access reads the account's unit first and
+          // falls back to the person's — `effectiveOrgUnit` — so the account
+          // keeps the unit picked here for access either way.)
           if (body.orgUnitId) {
             const person = await tx.person.findUnique({
               where: { id: personId },

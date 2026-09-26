@@ -91,7 +91,22 @@ const toLines = (value: string) =>
     .map((line) => line.trim())
     .filter((line) => line !== '');
 
-export function ApplicationSso({ applicationId }: { applicationId: string }) {
+export function ApplicationSso({
+  applicationId,
+  launchUrl,
+  onApplicationSaved,
+}: {
+  applicationId: string;
+  /**
+   * The application's stored launch address. For a SAML application with
+   * IdP-initiated sign-in off this is where the portal tile goes, so the SAML
+   * panel shows and edits it beside that switch. Undefined while the
+   * application itself has not been read.
+   */
+  launchUrl?: string | null | undefined;
+  /** Re-read the application after its launch address is saved. */
+  onApplicationSaved?: (() => void) | undefined;
+}) {
   const saml = useApiResource<SamlConfig>(
     `/api/admin/applications/${applicationId}/saml`,
   );
@@ -137,10 +152,19 @@ export function ApplicationSso({ applicationId }: { applicationId: string }) {
         <SamlPanel
           // Remounted from each read, so an import or a save shows what the
           // server now holds rather than what was typed before it.
-          key={saml.updatedAt?.getTime() ?? 0}
+          //
+          // The launch address is in the key too: it arrives from a separate
+          // read, and a form initialised before it landed would show an empty
+          // address — and the warning that goes with one — for an application
+          // that has one.
+          key={`${saml.updatedAt?.getTime() ?? 0}|${launchUrl ?? ''}`}
           applicationId={applicationId}
           config={saml.data!}
-          onSaved={() => saml.reload()}
+          launchUrl={launchUrl ?? null}
+          onSaved={() => {
+            saml.reload();
+            onApplicationSaved?.();
+          }}
         />
       )}
       {hasOidc && (
@@ -175,6 +199,7 @@ const SAML_LABELS: Record<string, string> = {
   nameIdFormat: 'Name ID format',
   spCertificates: 'Signing certificates',
   sloUrl: 'Single logout URL',
+  launchUrl: 'Launch address',
   url: 'Service provider metadata',
   xml: 'Service provider metadata',
 };
@@ -206,10 +231,12 @@ const wildcardWarning = (value: string) =>
 function SamlPanel({
   applicationId,
   config,
+  launchUrl,
   onSaved,
 }: {
   applicationId: string;
   config: SamlConfig;
+  launchUrl: string | null;
   onSaved(): void;
 }) {
   const toast = useToast();
@@ -222,6 +249,7 @@ function SamlPanel({
     allowIdpInitiated: config.allowIdpInitiated,
     wsFedEnabled: config.wsFedEnabled,
     sloUrl: config.sloUrl ?? '',
+    launchUrl: launchUrl ?? '',
   };
   const [form, setForm] = useState(initial);
   const [metadata, setMetadata] = useState('');
@@ -243,7 +271,8 @@ function SamlPanel({
     form.wantAuthnRequestsSigned !== initial.wantAuthnRequestsSigned ||
     form.allowIdpInitiated !== initial.allowIdpInitiated ||
     form.wsFedEnabled !== initial.wsFedEnabled ||
-    form.sloUrl.trim() !== initial.sloUrl;
+    form.sloUrl.trim() !== initial.sloUrl ||
+    form.launchUrl.trim() !== initial.launchUrl;
 
   /** A refusal, split into what belongs against a field and what does not. */
   const refuse = (cause: unknown) => {
@@ -263,6 +292,19 @@ function SamlPanel({
     setProblem(null);
     setErrors({});
     try {
+      // Checked before anything is written, so a refused address does not
+      // leave the SAML half saved and this half not. The API has no way to
+      // REMOVE a launch address (it takes a URL or nothing), so emptying the
+      // box is refused here by name rather than saved as "no change" — which
+      // would read as having cleared it.
+      const nextLaunchUrl = form.launchUrl.trim();
+      if (nextLaunchUrl !== initial.launchUrl && nextLaunchUrl === '') {
+        setErrors({
+          launchUrl:
+            "A launch address can be changed but not removed. Enter the application's SSO start page.",
+        });
+        return;
+      }
       const acsUrls = toLines(form.acsUrls);
       await api(`/api/admin/applications/${applicationId}/saml`, {
         method: 'PUT',
@@ -311,6 +353,15 @@ function SamlPanel({
           sloUrl: form.sloUrl.trim() === '' ? null : form.sloUrl.trim(),
         }),
       });
+      // The launch address lives on the APPLICATION, not its SAML record, so
+      // it is its own write — and only when it changed, so saving a
+      // certificate does not also rewrite an address nobody touched.
+      if (nextLaunchUrl !== initial.launchUrl) {
+        await api(`/api/admin/applications/${applicationId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ launchUrl: nextLaunchUrl }),
+        });
+      }
       // A toast rather than the inline "Saved." this used to set: the panel
       // is re-read after a save and remounted from what the server stored,
       // which took the inline note with it.
@@ -487,6 +538,32 @@ function SamlPanel({
               value={form.sloUrl}
               onChange={(v) => set('sloUrl', v)}
               error={errors.sloUrl}
+            />
+            {/*
+              Next to the IdP-initiated switch because that switch decides
+              what this address is for. With it ON, the portal tile starts the
+              sign-in at Syntra and this address is not used for SAML. With it
+              OFF — the default, and what the catalog creates — the tile opens
+              THIS address and relies on the application to send an
+              AuthnRequest back, so it has to be the application's SSO start
+              page, not a home page with a password form on it. Left empty,
+              the tile cannot open the application at all and the user is told
+              to ask an administrator; the warning says so before they do.
+            */}
+            <Field
+              name="launchUrl"
+              label="Launch address (the application's SSO start page)"
+              value={form.launchUrl}
+              onChange={(v) => set('launchUrl', v)}
+              className="sm:col-span-2"
+              error={errors.launchUrl}
+              warning={
+                form.allowIdpInitiated
+                  ? undefined
+                  : form.launchUrl.trim() === ''
+                    ? 'Sign-in started from Syntra is off, so the portal tile opens this address — and it is empty, so the tile cannot open this application. Enter the page that starts single sign-on at the application, or allow sign-in started from Syntra.'
+                    : "Sign-in started from Syntra is off, so the portal tile opens this address. It should be the application's SSO start page, which sends the user back here to sign in."
+              }
             />
           </FormSection>
 
