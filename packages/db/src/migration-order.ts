@@ -150,6 +150,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261106090000_credential_pickup',
   '20261106120000_held_action_approvals',
   '20261107000000_mirror_org_units',
+  '20261108000000_incident_state',
 ];
 
 /**

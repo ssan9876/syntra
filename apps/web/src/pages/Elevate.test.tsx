@@ -54,7 +54,7 @@ const renderElevate = () =>
         <SessionProbe />
         <Routes>
           <Route path="/elevate" element={<Elevate />} />
-          <Route path="/admin/users" element={<h1>Console</h1>} />
+          <Route path="/admin" element={<h1>Console</h1>} />
           <Route path="/mfa" element={<h1>Step up</h1>} />
           <Route path="/enrol" element={<h1>Enrol</h1>} />
         </Routes>
@@ -118,7 +118,7 @@ describe('Elevate', () => {
       kind: 'verify',
       attemptToken: 'tok',
       factors: ['totp'],
-      returnTo: '/admin/users',
+      returnTo: '/admin',
     });
 
     // And the portal session they arrived with is untouched.
@@ -145,7 +145,7 @@ describe('Elevate', () => {
     expect(takeChallenge()).toMatchObject({
       kind: 'enrol',
       factors: ['totp'],
-      returnTo: '/admin/users',
+      returnTo: '/admin',
     });
     expect(screen.getByTestId('probe')).toHaveTextContent(
       'portal:directory.read',
@@ -266,12 +266,12 @@ describe('where elevation returns to', () => {
         <SessionProvider>
           <Routes>
             <Route path="/elevate" element={<Elevate />} />
-            <Route path="/admin/users" element={<h1>Users</h1>} />
+            <Route path="/admin" element={<h1>Overview</h1>} />
           </Routes>
         </SessionProvider>
       </MemoryRouter>,
     );
     await submit();
-    expect(await screen.findByRole('heading', { name: 'Users' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeVisible();
   });
 });

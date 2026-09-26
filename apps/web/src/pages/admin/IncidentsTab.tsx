@@ -9,6 +9,7 @@ import {
   TableToolbar,
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
+import { IncidentCard, type Incident } from './IncidentCard.js';
 import {
   ATTENTION_URL,
   changeRequestSentence,
@@ -18,15 +19,6 @@ import {
   type AttentionSummary,
 } from './attention.js';
 
-interface Incident {
-  kind: string;
-  severity: 'critical' | 'warning';
-  title: string;
-  detail: string;
-  count: number;
-  lastAt: string | null;
-  href: string;
-}
 
 /**
  * What has quietly stopped working.
@@ -156,31 +148,7 @@ export function IncidentsTab() {
           {incidents.length > 0 && (
             <ul className="divide-y divide-border-subtle">
               {incidents.map((incident) => (
-                <li key={incident.kind} className="p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {incident.severity === 'critical' ? (
-                          <StateBadge state="blocked">Broken</StateBadge>
-                        ) : (
-                          <StateBadge state="attention">Degraded</StateBadge>
-                        )}
-                        <span className="font-medium text-ink">{incident.title}</span>
-                      </div>
-                      <p className="mt-1 max-w-[68ch] text-muted">{incident.detail}</p>
-                      {incident.lastAt && (
-                        <p className="mt-0.5 text-sm text-muted">
-                          Last seen {new Date(incident.lastAt).toLocaleString()}
-                        </p>
-                      )}
-                    </div>
-                    {/* The screen that can fix it. A row that only states a
-                        problem leaves the reader to work out where to go. */}
-                    <Link className="link shrink-0 text-sm" to={incident.href}>
-                      Go there
-                    </Link>
-                  </div>
-                </li>
+                <IncidentCard key={incident.kind} incident={incident} onChanged={reload} />
               ))}
             </ul>
           )}

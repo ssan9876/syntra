@@ -1,5 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import { PERMISSIONS, hasPermission, listIncidents, readAttentionSummary, type Permission } from '@syntra/core';
+import { z } from 'zod';
+import {
+  INCIDENT_KINDS,
+  PERMISSIONS,
+  RESOLVABLE_INCIDENTS,
+  acknowledgeIncident,
+  hasPermission,
+  listIncidents,
+  readAttentionSummary,
+  recordEvent,
+  resolveIncident,
+  type IncidentKind,
+  type Permission,
+} from '@syntra/core';
+import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission, tokenScopeAllows } from '../../plugins/require-permission.js';
 
@@ -18,9 +32,20 @@ const CHANGE_APPROVER_PERMISSIONS: Permission[] = [
  * and this route only gathers it. Gating the summary harder than its parts
  * would mean the person who noticed something was wrong could not see what.
  *
- * There is deliberately no acknowledge, snooze or dismiss. Every entry
- * disappears when the thing behind it is fixed and not before, so the page
- * cannot be made to look clean by anybody except by making it true.
+ * Acknowledge and resolve exist, and neither can make the page look clean
+ * while it is not:
+ *
+ *  - ACKNOWLEDGE hides nothing. The incident stays, marked with who is on it,
+ *    and the mark lapses the moment something newer happens.
+ *  - RESOLVE is offered only for EVENTS -- runs that failed, messages never
+ *    sent -- and is a watermark: what happened up to now is dealt with, and a
+ *    new failure brings the incident straight back. A CONDITION (a target
+ *    skipping its runs, an expired credential) cannot be resolved; it goes
+ *    when it is fixed and not before.
+ *
+ * Acknowledging needs only `AUDIT_READ`, like reading. Resolving needs the
+ * management permission of the area the failures are in, because it is a
+ * decision that they need no further action.
  */
 export async function registerAdminIncidentRoutes(
   app: FastifyInstance,
@@ -34,6 +59,19 @@ export async function registerAdminIncidentRoutes(
     async (request) => {
       const now = new Date();
       const incidents = await request.db((tx) => listIncidents(tx, now));
+      // Names for whoever acknowledged, read once. An id on screen is
+      // something the reader has to go and look up.
+      const ackBy = [
+        ...new Set(incidents.map((i) => i.acknowledged?.byUserId).filter((id): id is string => !!id)),
+      ];
+      const names = new Map(
+        (ackBy.length === 0
+          ? []
+          : await request.db((tx) =>
+              tx.user.findMany({ where: { id: { in: ackBy } }, select: { id: true, displayName: true } }),
+            )
+        ).map((u) => [u.id, u.displayName]),
+      );
       if (options.schedulerRunning && !options.schedulerRunning()) {
         incidents.unshift({
           kind: 'scheduler_unavailable',
@@ -42,15 +80,100 @@ export async function registerAdminIncidentRoutes(
           detail: 'The job scheduler has not started. Automatic startup retries are in progress; check the server logs if this persists.',
           count: 1,
           lastAt: null,
-          href: '/admin/incidents',
+          href: '/admin/operations',
+          items: [],
+          resolvable: false,
+          acknowledged: null,
         });
       }
       return {
         incidents: incidents.map((incident) => ({
           ...incident,
           lastAt: incident.lastAt?.toISOString() ?? null,
+          items: incident.items.map((item) => ({ ...item, at: item.at?.toISOString() ?? null })),
+          acknowledged: incident.acknowledged && {
+            at: incident.acknowledged.at.toISOString(),
+            by: incident.acknowledged.byUserId
+              ? (names.get(incident.acknowledged.byUserId) ?? null)
+              : null,
+            note: incident.acknowledged.note,
+          },
         })),
       };
+    },
+  );
+
+  const kindParam = z.object({ kind: z.enum(INCIDENT_KINDS as [IncidentKind, ...IncidentKind[]]) });
+  const noteBody = z
+    .object({ note: z.string().trim().max(500).optional() })
+    .strict()
+    .default({});
+
+  app.post(
+    '/incidents/:kind/acknowledge',
+    { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
+    async (request, reply) => {
+      const { kind } = kindParam.parse(request.params);
+      const { note } = noteBody.parse(request.body ?? {});
+      await request.db(async (tx) => {
+        await acknowledgeIncident(tx, request.tenantId, kind, request.session.userId, note || null, new Date());
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'incident.acknowledged',
+          targetType: 'Incident',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { kind, note: note || null },
+        });
+      });
+      return reply.status(204).send();
+    },
+  );
+
+  /** The area whose management permission resolving a kind of incident needs. */
+  const RESOLVE_PERMISSION: Partial<Record<IncidentKind, Permission>> = {
+    provision_run_failed: PERMISSIONS.PROVISION_MANAGE,
+    sync_run_failed: PERMISSIONS.SYNC_MANAGE,
+    webhook_undelivered: PERMISSIONS.TENANT_MANAGE,
+    notification_undelivered: PERMISSIONS.TENANT_MANAGE,
+    task_failing: PERMISSIONS.AUTOMATE_MANAGE,
+  };
+
+  app.post(
+    '/incidents/:kind/resolve',
+    { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
+    async (request, reply) => {
+      const { kind } = kindParam.parse(request.params);
+      const { note } = noteBody.parse(request.body ?? {});
+      if (!(RESOLVABLE_INCIDENTS as readonly string[]).includes(kind)) {
+        throw new ProblemError(
+          409,
+          'incident-not-resolvable',
+          'This clears when it is fixed',
+          'It is a condition that is still true, not an event that is over. Acknowledge it instead, and it goes when the cause is fixed.',
+        );
+      }
+      const needed = RESOLVE_PERMISSION[kind]!;
+      const allowed =
+        tokenScopeAllows(request, needed) &&
+        (await request.db((tx) => hasPermission(tx, request.session.userId, needed)));
+      if (!allowed) {
+        throw new ProblemError(403, 'forbidden', 'Not allowed', `Resolving this needs ${needed}.`);
+      }
+      await request.db(async (tx) => {
+        await resolveIncident(tx, request.tenantId, kind, request.session.userId, note || null, new Date());
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'incident.resolved',
+          targetType: 'Incident',
+          targetId: null,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { kind, note: note || null },
+        });
+      });
+      return reply.status(204).send();
     },
   );
 

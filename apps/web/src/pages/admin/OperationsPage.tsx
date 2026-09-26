@@ -39,6 +39,9 @@ export interface JobFinding {
   since: string;
   detail: string;
   repairs: ('requeue' | 'mark_failed' | 'release_lease')[];
+  /** Absent from an older server. */
+  error?: string | null;
+  subjectLabel?: string | null;
 }
 
 export interface JobHealthBody {
@@ -225,12 +228,20 @@ function JobHealthPanel() {
               {findings.map((finding) => (
                 <tr key={finding.id}>
                   <td className="text-ink">
-                    {KIND_LABEL[finding.kind] ?? finding.kind}
+                    <span className="block">{finding.subjectLabel ?? KIND_LABEL[finding.kind] ?? finding.kind}</span>
+                    {finding.subjectLabel && (
+                      <span className="block text-xs text-muted">{KIND_LABEL[finding.kind] ?? finding.kind}</span>
+                    )}
                     {finding.status && <div className="text-xs text-muted">{finding.status}</div>}
                   </td>
                   <td><Status tone={FINDING_TONE[finding.finding]}>{FINDING_LABEL[finding.finding]}</Status></td>
                   <td className="whitespace-nowrap max-lg:hidden">{when(finding.since)}</td>
-                  <td className="text-sm">{finding.detail}</td>
+                  <td className="text-sm">
+                    {finding.detail}
+                    {finding.error && (
+                      <span className="mt-1 block break-words font-mono text-xs text-danger">{finding.error}</span>
+                    )}
+                  </td>
                   <td>
                     <div className="flex justify-end gap-2">
                       {mayRepair && finding.repairs.map((action) => (

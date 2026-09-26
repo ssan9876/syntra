@@ -220,6 +220,7 @@ model Tenant {
   entitlements              Entitlement[]
   targetAccounts            TargetAccount[]
   credentialPickups         CredentialPickup[]
+  incidentStates            IncidentState[]
   accountEntitlements       AccountEntitlement[]
   provisionRuns             ProvisionRun[]
   personProvisionReceipts   PersonProvisionReceipt[]
@@ -5387,4 +5388,28 @@ model PrivacyCase {
   @@unique([tenantId, reference])
   @@index([tenantId, status, dueAt])
   @@index([tenantId, personId])
+}
+
+/// A person's answer to an incident on the attention list, one row per kind.
+///
+/// Incidents themselves are computed from live state on every read; this is
+/// only what somebody said about one. `acknowledgedAt` marks it as being
+/// handled -- and lapses the moment something newer happens, so a fresh failure
+/// is never hidden behind an old acknowledgement. `resolvedAt` is a watermark:
+/// an event incident (failed runs, undelivered messages) counts only what
+/// happened after it.
+model IncidentState {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  kind              String
+  acknowledgedAt    DateTime?
+  acknowledgedById  String?   @db.Uuid
+  acknowledgeNote   String?
+  resolvedAt        DateTime?
+  resolvedById      String?   @db.Uuid
+  resolveNote       String?
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([tenantId, kind])
 }

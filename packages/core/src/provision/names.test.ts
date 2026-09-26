@@ -432,7 +432,7 @@ describe('generateCorrelationKey — the email rule', () => {
     });
 
   it('keeps an email address intact, lowercased', () => {
-    expect(key(email(withEmail('SSander@Sander.xyz')))).toBe('ssander@sander.xyz');
+    expect(key(email(withEmail('JDoe@Contoso.com')))).toBe('jdoe@contoso.com');
   });
 
   it('keeps _ and + in the local part', () => {

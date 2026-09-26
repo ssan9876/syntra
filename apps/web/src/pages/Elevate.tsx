@@ -32,7 +32,7 @@ export function Elevate() {
     | null;
   const intended = from?.from?.pathname
     ? `${from.from.pathname}${from.from.search ?? ''}${from.from.hash ?? ''}`
-    : '/admin/users';
+    : '/admin';
 
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);

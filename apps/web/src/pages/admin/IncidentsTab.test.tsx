@@ -56,7 +56,7 @@ describe('IncidentsTab', () => {
     // A dashboard whose rows are dead ends is one people read once.
     mockIncidents([incident()]);
     renderPage();
-    expect(await screen.findByRole('link', { name: /go there/i })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Open' })).toHaveAttribute(
       'href',
       '/admin/webhooks',
     );
@@ -72,12 +72,14 @@ describe('IncidentsTab', () => {
     expect(screen.getByText('Degraded')).toBeInTheDocument();
   });
 
-  it('offers no way to dismiss anything', async () => {
-    // A row disappears when the thing behind it is fixed and not before, so
-    // nobody can make this page look clean except by making it true.
+  it('offers acknowledgement, but nothing that just makes a row go away', async () => {
+    // Acknowledging leaves the row in place with who has it; there is no
+    // dismiss or snooze, so the page still cannot be made to look clean
+    // except by making it true.
     mockIncidents([incident()]);
     renderPage();
     await screen.findByText('3 webhooks were never delivered');
-    expect(screen.queryByRole('button', { name: /dismiss|acknowledge|snooze/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /dismiss|snooze|hide/i })).toBeNull();
   });
 });

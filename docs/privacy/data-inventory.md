@@ -65,6 +65,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `Holding` | person: `personId` | retain | Access-review evidence frozen in a snapshot; removed with the snapshot by the Govern snapshot retention. |
 | `HoldingCertification` | person: `lastCertifiedByPersonId` | retain | Certification evidence: who last certified an access. |
 | `HoldingEvent` | person: `personId` | retain | Snapshot evidence; removed with the snapshot. |
+| `IncidentState` | user: `acknowledgedById`, `resolvedById` | retain | Which administrator acknowledged or resolved an incident on the attention list, and their note. Kept as operational evidence, like the audit event it mirrors. |
 | `LifecycleCaseEvent` | operation: `operationId` | pseudonymize | Messages and metadata are cleared. |
 | `LifecycleLegalHold` | any: `subjectId` | retain | A preservation order. An active one refuses the erasure; a released one is the record of it. |
 | `LifecycleObservation` | step: `stepId` | delete | What a target reported for the person's account; retention removes these anyway. |
@@ -2292,6 +2293,23 @@ No personal data. Columns: `id`, `tenantId`, `name`, `description`, `sourceId`, 
 | `createdByUserId` | identity |  |  |
 
 Not personal data: `id`, `tenantId`, `kind`, `value`, `normalizedValue`, `active`, `createdAt`, `updatedAt`.
+
+#### `IncidentState`
+
+Linked to a data subject by user: `acknowledgedById`, `resolvedById`. Erasure: **retain** -- Which administrator acknowledged or resolved an incident on the attention list, and their note. Kept as operational evidence, like the audit event it mirrors.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `id` | identity | retained |  |
+| `acknowledgedAt` | operational | retained |  |
+| `acknowledgedById` | identity | retained |  |
+| `acknowledgeNote` | operational | retained |  |
+| `resolvedAt` | operational | retained |  |
+| `resolvedById` | identity | retained |  |
+| `resolveNote` | operational | retained |  |
+| `updatedAt` | operational | retained |  |
+
+Not personal data: `tenantId`, `kind`.
 
 #### `LifecyclePolicy`
 

@@ -359,13 +359,13 @@ describe('an Entra ID target with a GUID tenantId and a userPrincipalDomain', ()
   it('adoption finds a conflicted key by the UPN local part (GUID tenantId)', async () => {
     // The live report: GUID tenantId, a conflict row left by a create Graph
     // refused, and a candidate search that looked only at sAMAccountName.
-    const { id: targetId } = await createEntraTarget('ssander.xyz');
+    const { id: targetId } = await createEntraTarget('contoso.com');
     const personId = await seedAnna();
-    await seedConflicted(targetId, personId, 'ssander');
-    seedUnmanaged('seth', 'SSander@ssander.xyz');
+    await seedConflicted(targetId, personId, 'jdoe');
+    seedUnmanaged('jane', 'JDoe@contoso.com');
 
     const candidate = await adoptionCandidate(tenantId, provider, personId, targetId, entra());
-    expect(candidate.anchor).toBe('seth');
+    expect(candidate.anchor).toBe('jane');
 
     const result = await adoptAccount(tenantId, provider, {
       personId,
@@ -375,8 +375,8 @@ describe('an Entra ID target with a GUID tenantId and a userPrincipalDomain', ()
       sourceIp: null,
       connector: entra(),
     });
-    expect(result.anchor).toBe('seth');
-    expect((await accountOf(personId)).anchor).toBe('seth');
+    expect(result.anchor).toBe('jane');
+    expect((await accountOf(personId)).anchor).toBe('jane');
   });
 
   it('never matches a user in another domain, and says so without base-DN advice', async () => {

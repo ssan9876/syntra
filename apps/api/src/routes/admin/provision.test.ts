@@ -1160,7 +1160,7 @@ describe('PATCH /api/admin/targets/:id mirrorOrgUnits', () => {
     await create(cookie);
     const base = (await get(`/api/admin/targets/${targetId}`, cookie)).json().config.baseDn as string;
     await withTenant(ctx.tenantId, async (tx) => {
-      const parent = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'ssander.local' } });
+      const parent = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'contoso.local' } });
       await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'IT', parentId: parent.id } });
     });
     const response = await get(
@@ -1169,7 +1169,7 @@ describe('PATCH /api/admin/targets/:id mirrorOrgUnits', () => {
     );
     expect(response.statusCode).toBe(200);
     const it = response.json().units.find((u: { name: string }) => u.name === 'IT');
-    expect(it).toMatchObject({ depth: 1, derivedDn: `OU=IT,OU=ssander.local,OU=Syntra,${base}` });
+    expect(it).toMatchObject({ depth: 1, derivedDn: `OU=IT,OU=contoso.local,OU=Syntra,${base}` });
   });
 });
 

@@ -34,13 +34,13 @@ const unit = (id: string, name: string, parentId: string | null = null, status =
 describe('deriveMirroredDns', () => {
   it('nests each unit under its ancestors, top-level unit nearest the root', () => {
     const { dns, problems } = deriveMirroredDns(
-      [unit('a', 'ssander.local'), unit('b', 'IT', 'a'), unit('c', 'Helpdesk', 'b')],
+      [unit('a', 'contoso.local'), unit('b', 'IT', 'a'), unit('c', 'Helpdesk', 'b')],
       ROOT,
     );
     expect(problems).toEqual([]);
-    expect(dns.get('a')).toBe(`OU=ssander.local,${ROOT}`);
-    expect(dns.get('b')).toBe(`OU=IT,OU=ssander.local,${ROOT}`);
-    expect(dns.get('c')).toBe(`OU=Helpdesk,OU=IT,OU=ssander.local,${ROOT}`);
+    expect(dns.get('a')).toBe(`OU=contoso.local,${ROOT}`);
+    expect(dns.get('b')).toBe(`OU=IT,OU=contoso.local,${ROOT}`);
+    expect(dns.get('c')).toBe(`OU=Helpdesk,OU=IT,OU=contoso.local,${ROOT}`);
   });
 
   it('escapes every name per RFC 4514, so a name cannot name another container', () => {
@@ -134,7 +134,7 @@ let reviewerId: string;
 let localId: string;
 let itId: string;
 
-const LOCAL_DN = `OU=ssander.local,${ROOT}`;
+const LOCAL_DN = `OU=contoso.local,${ROOT}`;
 const IT_DN = `OU=IT,${LOCAL_DN}`;
 
 beforeEach(async () => {
@@ -173,7 +173,7 @@ beforeEach(async () => {
     const reviewer = await tx.user.create({
       data: { tenantId, login: 'reviewer', email: 'reviewer@acme.test', displayName: 'Reviewer' },
     });
-    const local = await tx.orgUnit.create({ data: { tenantId, name: 'ssander.local' } });
+    const local = await tx.orgUnit.create({ data: { tenantId, name: 'contoso.local' } });
     const it = await tx.orgUnit.create({ data: { tenantId, name: 'IT', parentId: local.id } });
     const person = await tx.person.create({
       data: { tenantId, givenName: 'Anna', familyName: 'Novak', orgUnitId: it.id },
@@ -270,10 +270,15 @@ describe('a mirroring run', () => {
     expect(fake.containers).toEqual(expect.arrayContaining([ROOT, LOCAL_DN, IT_DN]));
     expect(accountDn()).toBe(`CN=anna.novak,${IT_DN}`);
     const stored = await rows();
-    expect(stored.map((r) => [r.dn, r.source, r.state])).toEqual([
-      [IT_DN, 'mirrored', 'live'],
-      [LOCAL_DN, 'mirrored', 'live'],
-    ]);
+    // Order-free: `dn asc` follows the database collation, which sorts
+    // "OU=contoso.local" and "OU=IT" differently from a byte comparison.
+    expect(stored.map((r) => [r.dn, r.source, r.state])).toEqual(
+      expect.arrayContaining([
+        [IT_DN, 'mirrored', 'live'],
+        [LOCAL_DN, 'mirrored', 'live'],
+      ]),
+    );
+    expect(stored).toHaveLength(2);
     expect(stored.every((r) => r.anchor !== null)).toBe(true);
 
     // Converged: the next run proposes no structure.
@@ -374,7 +379,7 @@ describe('a mirroring run', () => {
       previousDn: FLAT,
     });
 
-    // The run creates `ssander.local` first, then moves the flat OU under it.
+    // The run creates `contoso.local` first, then moves the flat OU under it.
     const run = await preview();
     const structure = (await actionsOf(run.id)).filter((a) => a.actionType.endsWith('_container'));
     expect(structure.map((a) => [a.actionType, (a.after as { dn: string }).dn])).toEqual([
@@ -408,7 +413,7 @@ describe('mirrorPreview', () => {
     expect(view).toMatchObject({ mirrorOrgUnits: false, placesAccountsInContainers: true, rootDn: 'OU=Org,DC=acme,DC=test' });
     expect(view!.units.find((u) => u.id === itId)).toMatchObject({
       depth: 1,
-      derivedDn: 'OU=IT,OU=ssander.local,OU=Org,DC=acme,DC=test',
+      derivedDn: 'OU=IT,OU=contoso.local,OU=Org,DC=acme,DC=test',
       placement: 'unplaced',
     });
   });

@@ -54,6 +54,8 @@ interface Item {
   label: string;
   count?: number;
   to: string;
+  /** Replaces the state's own word, e.g. "Acknowledged". */
+  badge?: string;
 }
 
 const MINUTE = 60_000;
@@ -140,6 +142,9 @@ export function DashboardPage() {
   const applications = useApiResource<{ applications: unknown[] }>(
     can('access.read') ? '/api/admin/applications' : null,
   );
+  const incidents = useApiResource<{
+    incidents: { kind: string; severity: 'critical' | 'warning'; title: string; acknowledged?: unknown }[];
+  }>(mayAudit ? '/api/admin/incidents' : null);
   const activity = useApiResource<{ events: AuditEvent[] }>(
     mayAudit ? '/api/admin/audit?limit=8' : null,
   );
@@ -158,6 +163,17 @@ export function DashboardPage() {
   for (const outage of degradation?.connectorOutages ?? []) {
     const to = outage.systemKind === 'target' ? `/admin/targets/${outage.id}` : `/admin/sources/${outage.id}`;
     items.push({ key: `outage-${outage.id}`, state: 'blocked', label: `${outage.name} unreachable`, to });
+  }
+  // What has stopped working, from the attention list. An acknowledged one
+  // stays here -- acknowledging hides nothing -- but says somebody has it.
+  for (const incident of incidents.data?.incidents ?? []) {
+    items.push({
+      key: `incident-${incident.kind}`,
+      state: incident.acknowledged ? 'pending' : incident.severity === 'critical' ? 'blocked' : 'attention',
+      label: incident.title,
+      to: '/admin/activity',
+      ...(incident.acknowledged ? { badge: 'Acknowledged' } : {}),
+    });
   }
   const lanes = work.data?.lanes;
   if (lanes && lanes.overdue > 0) {
@@ -186,7 +202,7 @@ export function DashboardPage() {
   }
 
   const checking =
-    (mayAudit && (status.loading || jobs.loading)) ||
+    (mayAudit && (status.loading || jobs.loading || incidents.loading)) ||
     (mayWork && work.loading) ||
     (mayDirectory && summary.loading);
 
@@ -255,7 +271,7 @@ export function DashboardPage() {
                         {item.label}
                       </span>
                       <span className="mt-1 block">
-                        <StateBadge state={item.state} />
+                        <StateBadge state={item.state}>{item.badge}</StateBadge>
                       </span>
                     </span>
                     <Chevron />

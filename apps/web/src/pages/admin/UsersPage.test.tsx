@@ -31,16 +31,16 @@ const json = (body: unknown) =>
 
 const PERSONS = [
   { id: 'p1', givenName: 'Andrew', familyName: 'Gray', businessEmail: 'ag@x.test', externalId: 'E1', status: 'active' },
-  { id: 'p2', givenName: 'Marc', familyName: 'Puleo', businessEmail: 'mp@x.test', externalId: 'E2', status: 'active' },
+  { id: 'p2', givenName: 'Jamie', familyName: 'Lee', businessEmail: 'mp@x.test', externalId: 'E2', status: 'active' },
   { id: 'p3', givenName: 'Kaycen', familyName: 'Tyre', businessEmail: 'kt@x.test', externalId: 'E3', status: 'active' },
 ];
 
 // `personId` is carried here because the summary card counts people who have
 // no account, and counting that means knowing which accounts belong to whom.
-// Andrew and Marc have accounts; Kaycen is the joiner.
+// Andrew and Jamie have accounts; Kaycen is the joiner.
 const USERS = [
   { id: 'u1', login: 'agray', displayName: 'Andrew Gray', email: 'ag@x.test', status: 'active', statusReason: null, sourceId: null, personId: 'p1' },
-  { id: 'u2', login: 'mpuleo', displayName: 'Marc Puleo', email: 'mp@x.test', status: 'active', statusReason: null, sourceId: null, locked: true, personId: 'p2' },
+  { id: 'u2', login: 'jlee', displayName: 'Jamie Lee', email: 'mp@x.test', status: 'active', statusReason: null, sourceId: null, locked: true, personId: 'p2' },
 ];
 
 function mockApi(persons = PERSONS, users = USERS, summary?: unknown) {
