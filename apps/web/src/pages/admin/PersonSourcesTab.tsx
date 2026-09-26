@@ -104,12 +104,7 @@ export function PersonSourcesTab() {
                     New HR feed
                   </Link>
                 }
-              >
-                A delimited file your HR system drops on SFTP — joiners, movers
-                and leavers. Syntra reads it on a schedule, shows what would
-                change before anything does, and keeps the person register in
-                step with it.
-              </Empty>
+              />
             </div>
           )}
 

@@ -1,6 +1,16 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Alert, Button, Panel, SkeletonRows, Status, Table, useToast } from '@syntra/ui';
+import {
+  Alert,
+  Button,
+  Metric,
+  MetricRow,
+  Panel,
+  SkeletonRows,
+  Status,
+  Table,
+  useToast,
+} from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -90,7 +100,7 @@ export function GovernBatchPage() {
           blocked plan, because an administrator should not have to learn a
           third one. */}
       {blocked && (
-        <Alert tone="danger" title="This batch will not run, and confirming will not change that">
+        <Alert tone="danger" title="Blocked — confirming will not unblock it">
           {data?.batch.blockedReason}
         </Alert>
       )}
@@ -100,9 +110,8 @@ export function GovernBatchPage() {
         </Alert>
       )}
       {data !== null && data.withheldOutOfScope > 0 && (
-        <Alert tone="info" title="Some rows are outside what you may see">
-          {data.withheldOutOfScope} of this batch&rsquo;s rows are about people outside your org
-          unit and are not listed. The counts above are the whole batch.
+        <Alert tone="info">
+          {data.withheldOutOfScope} rows outside your org unit are not listed.
         </Alert>
       )}
 
@@ -124,9 +133,7 @@ export function GovernBatchPage() {
               and was deleted with the rest of the prose. Restored as state:
               shown while it is TRUE, and gone the moment it stops being. */}
           {!finished && (
-            <Alert tone="warning" title="Nothing here has happened yet">
-              This is the last point at which a mistake costs nothing.
-            </Alert>
+            <Alert tone="warning">Nothing here has happened yet.</Alert>
           )}
 
           <Panel title={`${dispatchable.length} removals Govern can dispatch`}>
@@ -187,16 +194,11 @@ export function GovernBatchPage() {
               them one, and the campaign's revoked total never includes them. */}
           {requiresChange.length > 0 && (
             <Panel
-              title={`${requiresChange.length} that require a change somewhere else`}
+              // The title carries "not removed": everything else here is a
+              // removal, and a reader who skims would otherwise leave
+              // believing these had been dealt with.
+              title={`${requiresChange.length} not removed — require a change elsewhere`}
             >
-              {/* Not a caption: it corrects the expectation the page itself
-                  sets. Everything else here is a removal; these are the rows
-                  this batch will NOT remove, and a reader who skims would
-                  otherwise leave believing they had been dealt with. */}
-              <Alert tone="info">
-                These are not removed by this batch. Each gets a remediation
-                item with an owner when the batch is confirmed.
-              </Alert>
               <ul className="divide-y divide-border-subtle">
                 {requiresChange.map((d) => (
                   <li key={d.id} className="p-4">
@@ -259,12 +261,22 @@ export function GovernBatchPage() {
           )}
 
           {finished && (
-            <Alert tone="info" title={`This batch is ${data.batch.status}`}>
-              {data.batch.dispatchedCount} dispatched, {data.batch.requiresChangeCount} require a
-              change elsewhere, {data.batch.failedCount} failed. A dispatch is not an outcome:
-              each one advances to <em>confirmed</em> when the owning subsystem reports it applied,
-              and to <em>applied</em> only when a later snapshot no longer shows the holding.
-            </Alert>
+            <Panel title={`This batch is ${data.batch.status}`} bodyClassName="p-4">
+              <MetricRow>
+                <Metric label="Dispatched" value={data.batch.dispatchedCount} />
+                <Metric
+                  label="Require a change elsewhere"
+                  value={data.batch.requiresChangeCount}
+                  quietWhenZero
+                />
+                <Metric
+                  label="Failed"
+                  value={data.batch.failedCount}
+                  tone="danger"
+                  quietWhenZero
+                />
+              </MetricRow>
+            </Panel>
           )}
         </div>
       )}

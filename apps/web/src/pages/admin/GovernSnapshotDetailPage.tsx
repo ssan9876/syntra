@@ -166,10 +166,7 @@ export function GovernSnapshotDetailPage() {
                                 const owner =
                                   (result as { owner?: string }).owner ?? 'the owning subsystem';
                                 setActionError(null);
-                                toast({
-                                  title: `Refresh queued with ${owner}`,
-                                  body: 'The next snapshot shows what it found.',
-                                });
+                                toast({ title: `Refresh queued with ${owner}` });
                                 reload();
                               })
                               .catch((cause: unknown) =>

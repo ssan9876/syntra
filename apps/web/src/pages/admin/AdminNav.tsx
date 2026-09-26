@@ -114,6 +114,50 @@ export const GROUPS: NavGroup[] = [
   },
 ];
 
+/**
+ * The console's front page, above the groups rather than in one: it belongs
+ * to none of them, and a group called "Home" holding one link is the group of
+ * one this file forbids.
+ */
+export const OVERVIEW: NavItem = {
+  to: '/admin',
+  label: 'Overview',
+  permission: '',
+  icon: 'overview',
+};
+
+const COLLAPSED_KEY = 'syntra.nav.collapsed';
+
+/**
+ * Which groups the reader folded away, remembered in their browser.
+ *
+ * A convenience, so storage failing -- a private window, blocked site data --
+ * just means every group starts open. It is never allowed to throw.
+ */
+function useCollapsedGroups() {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem(COLLAPSED_KEY);
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggle = (label: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      try {
+        window.localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        // Remembering is optional; folding still works for this visit.
+      }
+      return next;
+    });
+  return { collapsed, toggle };
+}
+
 interface WorkLanes {
   action: number;
   waiting: number;
@@ -201,7 +245,11 @@ export function AdminNav() {
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => setMenuOpen(false), [pathname]);
-  const current = groups.flatMap((group) => group.items).find((item) => pathname.startsWith(item.to));
+  const current =
+    pathname === OVERVIEW.to || pathname === `${OVERVIEW.to}/`
+      ? OVERVIEW
+      : groups.flatMap((group) => group.items).find((item) => pathname.startsWith(item.to));
+  const { collapsed, toggle } = useCollapsedGroups();
 
   return (
     <nav
@@ -227,33 +275,57 @@ export function AdminNav() {
         id="admin-nav-groups"
         className={`px-3 py-5 max-lg:px-6 max-lg:pt-0 max-lg:pb-4 ${menuOpen ? '' : 'max-lg:hidden'}`}
       >
-        {groups.map((group, index) => (
-          <div key={group.label} className={index === 0 ? '' : 'mt-6'}>
+        {groups.length > 0 && (
+          <NavLink to={OVERVIEW.to} end className={({ isActive }) => linkClass(isActive)}>
+            {({ isActive }) => (
+              <>
+                <Icon
+                  name={OVERVIEW.icon}
+                  className={`size-4 ${isActive ? 'text-primary' : 'text-muted group-hover:text-ink'}`}
+                />
+                <span className="min-w-0 flex-1 truncate">{OVERVIEW.label}</span>
+              </>
+            )}
+          </NavLink>
+        )}
+        {groups.map((group) => {
+          // The group holding the current page never folds: a rail that hides
+          // where you are has stopped answering the one question it is for.
+          const holdsCurrent = group.items.some((item) => item === current);
+          const open = holdsCurrent || !collapsed.has(group.label);
+          const id = `nav-group-${group.label.toLowerCase().replace(/\s+/g, '-')}`;
+          return (
+          <div key={group.label} className="mt-5">
             {/* Sentence case, muted, small. A section label is a signpost and
                 should not compete with the destinations under it. */}
-            <h2 className="px-3 pb-1.5 text-xs font-semibold tracking-wide text-muted">
-              {group.label}
+            <h2>
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-controls={id}
+                disabled={holdsCurrent}
+                onClick={() => toggle(group.label)}
+                className="group/heading flex w-full items-center gap-1.5 rounded-control px-3 pb-1.5 pt-1 text-left text-xs font-semibold tracking-wide text-muted transition-colors duration-150 ease-out-quart enabled:hover:text-ink disabled:cursor-default"
+              >
+                <span className="flex-1">{group.label}</span>
+                {!open && group.items.some((item) => item.signal === 'employeeWork') && lanes && (
+                  <WorkBadge lanes={lanes} />
+                )}
+                <svg
+                  viewBox="0 0 12 12"
+                  className={`size-3 transition-transform duration-150 ease-out-quart ${open ? '' : '-rotate-90'} ${holdsCurrent ? 'opacity-0' : 'opacity-60 group-hover/heading:opacity-100'}`}
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
             </h2>
-            <ul className="space-y-px">
+            <ul id={id} className="space-y-px" hidden={!open}>
               {group.items.map((item) => (
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
-                    className={({ isActive }) =>
-                      [
-                        'group flex items-center gap-2.5 rounded-control px-3 py-1.5 text-sm',
-                        'transition-colors duration-150 ease-out-quart',
-                        isActive
-                          ? // The selected item is the only place weight and
-                            // colour are spent. Everything else stays quiet so
-                            // that "where am I" is answerable at a glance —
-                            // and it gets an edge as well as a tint, because
-                            // `primary-soft` on `surface-2` is a difference of
-                            // hue that a washed-out ward monitor flattens.
-                            'bg-bg font-semibold text-primary shadow-raised ring-1 ring-border-subtle'
-                          : 'font-medium text-ink/80 hover:bg-bg hover:text-ink',
-                      ].join(' ')
-                    }
+                    className={({ isActive }) => linkClass(isActive)}
                   >
                     {({ isActive }) => (
                       <>
@@ -270,10 +342,26 @@ export function AdminNav() {
               ))}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </div>
     </nav>
   );
+}
+
+function linkClass(isActive: boolean) {
+  return [
+    'group flex items-center gap-2.5 rounded-control px-3 py-1.5 text-sm',
+    'transition-colors duration-150 ease-out-quart',
+    isActive
+      ? // The selected item is the only place weight and colour are spent.
+        // Everything else stays quiet so that "where am I" is answerable at a
+        // glance -- and it gets an edge as well as a tint, because
+        // `primary-soft` on `surface-2` is a difference of hue that a
+        // washed-out ward monitor flattens.
+        'bg-bg font-semibold text-primary shadow-raised ring-1 ring-border-subtle'
+      : 'font-medium text-ink/80 hover:bg-bg hover:text-ink',
+  ].join(' ');
 }
 
 /**

@@ -93,11 +93,11 @@ function consequence(action: HeldAction): string {
   const after = record(action.after);
   switch (action.actionType) {
     case 'rename_account':
-      return `The sign-in name for ${nameOf(action.person)} changes from ${text(before.correlationKey) ?? 'its current value'} to ${text(after.correlationKey) ?? 'the new value'}. Anything that stored the old name — saved sign-ins, profile paths, scripts — stops matching.`;
+      return `The sign-in name for ${nameOf(action.person)} changes from ${text(before.correlationKey) ?? 'its current value'} to ${text(after.correlationKey) ?? 'the new value'}. Anything using the old name stops matching.`;
     case 'enable_account':
-      return `${nameOf(action.person)}'s account is enabled again, and everything it still holds comes back with the sign-in.`;
+      return `${nameOf(action.person)}'s account is enabled again, with everything it still holds.`;
     case 'create_account':
-      return `An account for ${nameOf(action.person)} is created again at the target. It vanished; if somebody deleted it on purpose, this undoes that.`;
+      return `An account for ${nameOf(action.person)} is created again at the target, undoing any deliberate deletion.`;
     default:
       return `This ${action.actionType} is applied to ${nameOf(action.person)}'s account.`;
   }
@@ -185,20 +185,12 @@ export function HeldActionApprovals({
   return (
     <Panel title="Waiting for your approval">
       <div className="space-y-3 p-4" data-testid="held-actions">
-        <p className="max-w-[72ch] text-muted">
-          This run finished without these changes: each needs a person&rsquo;s
-          confirmation, and the run applied automatically, which confirms
-          nothing. Approving one does not replay it. A new run is queued, reads
-          the target again, and applies the change only if it still plans
-          exactly this one. An approval is used once and lapses after 24 hours.
-        </p>
         {queued && (
           <Alert tone="success" title="Approved — a run has been queued">
-            It appears on the{' '}
+            See the{' '}
             <Link className="link" to={`/admin/targets/${targetId}/runs`}>
               runs page
-            </Link>{' '}
-            once the worker picks it up.
+            </Link>
           </Alert>
         )}
         {problem && <Alert tone="danger">{problem}</Alert>}
@@ -258,12 +250,7 @@ export function HeldActionApprovals({
           <div className="space-y-2">
             <p>{consequence(asking)}</p>
             <p className="font-mono text-sm">{changeSummary(asking)}</p>
-            <p className="text-muted">
-              A run is queued now. It reads the target again and applies this
-              change only if it plans exactly the same one; otherwise the
-              approval lapses unused after 24 hours. Nothing else in the run is
-              confirmed by this.
-            </p>
+            <p className="text-muted">A run is queued now. Unused approvals lapse after 24 hours.</p>
           </div>
         )}
       </Dialog>

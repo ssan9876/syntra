@@ -202,9 +202,7 @@ export function OrgUnitDetailPage() {
         <Panel title="Users in this unit">
           {data.users.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nobody is in this unit">
-                Move an account into it from the account's own record.
-              </Empty>
+              <Empty title="Nobody is in this unit" />
             </div>
           ) : (
             <Table>
@@ -248,10 +246,7 @@ export function OrgUnitDetailPage() {
         <Panel title="Child units">
           {data.children.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nothing beneath this unit">
-                A unit can hold others — a site under a region, a team under a
-                department.
-              </Empty>
+              <Empty title="Nothing beneath this unit" />
             </div>
           ) : (
             <Table>
@@ -294,7 +289,7 @@ export function OrgUnitDetailPage() {
                   active={data.status === 'active'}
                   basePath={`/api/admin/org-units/${data.id}`}
                   label="org unit"
-                  consequences="Users stay where they are. The unit grants nothing — neither its applications nor a role scoped to it."
+                  consequences="Users stay. It grants nothing, scoped roles included."
                   onChanged={reload}
                 />
               ) : (
@@ -303,8 +298,7 @@ export function OrgUnitDetailPage() {
                 // then quietly undo itself. Saying who owns it is the honest
                 // answer — the same one the account record gives.
                 <span className="text-sm text-muted">
-                  {source?.name ?? 'A directory source'} owns this unit, and the
-                  next sync run would put it back
+                  Managed by {source?.name ?? 'a directory source'}
                 </span>
               )}
             </div>
@@ -319,7 +313,7 @@ export function OrgUnitDetailPage() {
                   path={`/api/admin/org-units/${data.id}`}
                   label="org unit"
                   confirmWord={data.name}
-                  warning="The unit is removed from the directory and from Syntra. It has to be empty first — a deactivated user still counts as being in it. This cannot be undone."
+                  warning="Must be empty; inactive users count. Cannot be undone."
                   // Back to the list, not back to this screen: staying would
                   // leave the reader looking at a record that no longer exists
                   // and a page whose every control now answers 404.

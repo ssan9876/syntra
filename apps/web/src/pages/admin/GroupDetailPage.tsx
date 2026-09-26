@@ -224,10 +224,7 @@ export function GroupDetailPage() {
 
             {members.length === 0 ? (
               <div className="p-6">
-                <Empty title="Nobody is in this group">
-                  Add an account below. The group grants its applications to
-                  everybody in it.
-                </Empty>
+                <Empty title="Nobody is in this group" />
               </div>
             ) : (
               <Table stickyHeader label="Members">
@@ -273,10 +270,7 @@ export function GroupDetailPage() {
                 // `directory.read`, and they cannot ask somebody for a right
                 // they cannot name either. An empty picker instead would say
                 // there is nobody left to add, which is not true.
-                <p className="text-sm text-muted">
-                  Adding a member needs directory.read, which this account does not
-                  hold.
-                </p>
+                <p className="text-sm text-muted">Adding members needs directory.read</p>
               ) : (
                 <>
                   <Select
@@ -330,8 +324,7 @@ export function GroupDetailPage() {
                 // puts its status back, so the control is not offered rather
                 // than offered and quietly undone.
                 <span className="text-sm text-muted">
-                  {source?.name ?? 'A directory source'} owns this group, and the
-                  next sync run would put it back
+                  Managed by {source?.name ?? 'a directory source'}
                 </span>
               )}
             </div>

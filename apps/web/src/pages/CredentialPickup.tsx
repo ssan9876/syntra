@@ -20,19 +20,10 @@ type View =
   | { kind: 'revealed'; status: Status; password: string }
   | { kind: 'refused'; status: Status };
 
-const UNUSABLE: Record<Exclude<State, 'ready'>, { title: string; body: string }> = {
-  used: {
-    title: 'This link has already been used',
-    body: 'Each link shows the password once. If that was not you, tell your administrator now.',
-  },
-  expired: {
-    title: 'This link has expired',
-    body: 'Links stop working after three days.',
-  },
-  revoked: {
-    title: 'This link has been withdrawn',
-    body: 'A newer link may have been sent in its place.',
-  },
+const UNUSABLE: Record<Exclude<State, 'ready'>, string> = {
+  used: 'This link has already been used',
+  expired: 'This link has expired',
+  revoked: 'This link has been withdrawn',
 };
 
 /**
@@ -116,8 +107,7 @@ export function CredentialPickup() {
 
         {view.kind === 'unknown' && (
           <Alert tone="warning" title="This link is not recognised">
-            Check that the whole link was copied from the message. If it was,
-            contact your administrator.
+            Check the whole link was copied.
           </Alert>
         )}
 
@@ -176,8 +166,7 @@ export function CredentialPickup() {
               </Button>
             ) : (
               <p className="mt-6 text-sm text-muted">
-                This link no longer works. Keep the password somewhere safe until
-                you have signed in and changed it.
+                Shown once — this link no longer works.
               </p>
             )}
           </div>
@@ -188,10 +177,9 @@ export function CredentialPickup() {
 }
 
 function Unusable({ state }: { state: Exclude<State, 'ready'> }) {
-  const copy = UNUSABLE[state];
   return (
-    <Alert tone="warning" title={copy.title}>
-      {copy.body} Contact your administrator for a new one.
+    <Alert tone="warning" title={UNUSABLE[state]}>
+      Contact your administrator for a new one.
     </Alert>
   );
 }

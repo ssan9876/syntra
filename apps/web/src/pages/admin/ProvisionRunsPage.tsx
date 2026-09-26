@@ -117,9 +117,7 @@ export function ProvisionRunsPage() {
     try {
       await api(`/api/admin/targets/${id}/runs`, { method: 'POST' });
       seen.current = runs.length;
-      setNotice(
-        'A run has been queued. It appears below once the worker picks it up.',
-      );
+      setNotice('A run has been queued.');
       setWaiting(1);
     } catch (cause) {
       setProblem(
@@ -165,11 +163,7 @@ export function ProvisionRunsPage() {
                     Run a preview
                   </Button>
                 }
-              >
-                A run evaluates every person against this target&apos;s rules and
-                proposes what it would change. Nothing is written until the plan
-                is reviewed.
-              </Empty>
+              />
             </div>
           )}
 

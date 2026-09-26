@@ -110,9 +110,10 @@ describe('creating a campaign', () => {
     await screen.findByLabelText('Name');
     await userEvent.click(screen.getByRole('checkbox', { name: /targetEntitlement/ }));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Show me what this covers' }));
-    expect(await screen.findByText(/4,?120 holdings/)).toBeInTheDocument();
-    expect(screen.getByText(/1,?180 persons/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview scope' }));
+    expect(await screen.findByText(/^4,?120$/)).toBeInTheDocument();
+    expect(screen.getByText('Holdings')).toBeInTheDocument();
+    expect(screen.getByText(/^1,?180$/)).toBeInTheDocument();
   });
 
   /**
@@ -126,8 +127,9 @@ describe('creating a campaign', () => {
     await screen.findByLabelText('Name');
     await userEvent.click(screen.getByRole('checkbox', { name: /targetEntitlement/ }));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Show me who would review it' }));
-    expect(await screen.findByText(/17 resolve to nobody/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Preview reviewers' }));
+    expect(await screen.findByText('Resolve to nobody')).toBeInTheDocument();
+    expect(screen.getByText('17')).toBeInTheDocument();
     expect(screen.getByText(/no manager/)).toBeInTheDocument();
   });
 

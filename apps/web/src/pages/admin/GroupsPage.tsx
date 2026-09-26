@@ -178,10 +178,7 @@ export function GroupsPage() {
 
           {data && groups.length === 0 && total === 0 && !filtered && (
             <div className="p-6">
-              <Empty title="No groups yet">
-                Create a group to grant the same access to several people at
-                once instead of repeating it per person.
-              </Empty>
+              <Empty title="No groups yet" />
             </div>
           )}
 
@@ -198,9 +195,7 @@ export function GroupsPage() {
                     Reset filters
                   </button>
                 }
-              >
-                Group names and descriptions are searched.
-              </Empty>
+              />
             </div>
           )}
 

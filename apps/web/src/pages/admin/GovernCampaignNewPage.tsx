@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Check, Field, Panel, Select } from '@syntra/ui';
+import { Alert, Button, Check, Field, Metric, MetricRow, Panel, Select } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
@@ -240,20 +240,30 @@ export function GovernCampaignNewPage() {
 
           <div>
             <Button onClick={() => void previewScope()} disabled={kinds.size === 0}>
-              Show me what this covers
+              Preview scope
             </Button>
           </div>
 
           {scopePreview && (
-            <Alert tone={scopePreview.holdings === 0 ? 'warning' : 'info'}>
-              This scope covers {scopePreview.holdings.toLocaleString()} holdings across{' '}
-              {scopePreview.persons.toLocaleString()} persons and {scopePreview.systems}{' '}
-              systems.
+            <div className="space-y-3">
+              <MetricRow>
+                <Metric
+                  label="Holdings"
+                  value={scopePreview.holdings.toLocaleString()}
+                  tone={scopePreview.holdings === 0 ? 'warning' : 'neutral'}
+                />
+                <Metric label="Persons" value={scopePreview.persons.toLocaleString()} />
+                <Metric label="Systems" value={scopePreview.systems} />
+              </MetricRow>
               {scopePreview.sample.length > 0 && (
-                <> For example: {scopePreview.sample.map((s) => s.resourceName).join(', ')}.</>
+                <p className="text-muted">
+                  e.g. {scopePreview.sample.map((s) => s.resourceName).join(', ')}
+                </p>
               )}
-              {scopePreview.holdings === 0 && ' Nobody would have anything to review.'}
-            </Alert>
+              {scopePreview.holdings === 0 && (
+                <Alert tone="warning">Nobody would have anything to review.</Alert>
+              )}
+            </div>
           )}
         </div>
       </Panel>
@@ -278,17 +288,27 @@ export function GovernCampaignNewPage() {
 
             <div>
               <Button onClick={() => void previewReviewers()} disabled={kinds.size === 0}>
-                Show me who would review it
+                Preview reviewers
               </Button>
             </div>
 
             {reviewerPreview && (
-              <Alert tone={reviewerPreview.blocked === 0 ? 'info' : 'warning'}>
-                {reviewerPreview.resolved.toLocaleString()} items resolve,{' '}
-                {reviewerPreview.viaFallback.toLocaleString()} fall to the fallback, and{' '}
-                {reviewerPreview.blocked.toLocaleString()} resolve to nobody.
+              <div className="space-y-3">
+                <MetricRow>
+                  <Metric label="Resolved" value={reviewerPreview.resolved.toLocaleString()} />
+                  <Metric
+                    label="Via fallback"
+                    value={reviewerPreview.viaFallback.toLocaleString()}
+                  />
+                  <Metric
+                    label="Resolve to nobody"
+                    value={reviewerPreview.blocked.toLocaleString()}
+                    tone="warning"
+                    quietWhenZero
+                  />
+                </MetricRow>
                 {reviewerPreview.blockedSample.length > 0 && (
-                  <ul className="mt-2 list-disc pl-5">
+                  <ul className="list-disc pl-5">
                     {reviewerPreview.blockedSample.map((row) => (
                       <li key={`${row.subjectKey}:${row.resourceName}`}>
                         {row.resourceName} — {row.reason}
@@ -296,7 +316,7 @@ export function GovernCampaignNewPage() {
                     ))}
                   </ul>
                 )}
-              </Alert>
+              </div>
             )}
           </div>
         </Panel>

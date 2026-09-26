@@ -91,7 +91,7 @@ export function AccountSessions({ userId }: { userId: string }) {
     try {
       const res = await fetch(path, { method });
       if (!res.ok) {
-        setFailure('Could not end that session. It may have already expired.');
+        setFailure('Could not end that session.');
         return;
       }
       toast({ title: done });
@@ -124,10 +124,7 @@ export function AccountSessions({ userId }: { userId: string }) {
       {!data && loading && <SkeletonRows rows={2} />}
 
       {!loading && sessions.length === 0 && (
-        <Empty title="No active sessions">
-          This account is not signed in anywhere. A session appears here as
-          soon as somebody signs in with it.
-        </Empty>
+        <Empty title="No active sessions" />
       )}
 
       {sessions.length > 0 && (

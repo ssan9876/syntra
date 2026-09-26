@@ -120,7 +120,7 @@ describe('choosing what the file contains', () => {
    * knows. The line beneath says what Syntra will do about it, which is what
    * they have to decide.
    */
-  it('states the consequence of the mode chosen', async () => {
+  it('warns about leavers only while a snapshot is chosen', async () => {
     mockFetch();
     renderNew();
 
@@ -128,7 +128,7 @@ describe('choosing what the file contains', () => {
     expect(screen.getByText(/missing from the file are treated as leavers/i)).toBeVisible();
 
     await userEvent.click(screen.getByRole('radio', { name: /only what changed/i }));
-    expect(screen.getByText(/missing from the file are left alone/i)).toBeVisible();
+    expect(screen.queryByText(/treated as leavers/i)).toBeNull();
   });
 
   it('sends the chosen mode when creating', async () => {

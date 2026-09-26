@@ -160,7 +160,7 @@ export function PrivacyCasePage() {
   });
   const bundle = () => run('bundle', async () => {
     await post('/access-bundle', {});
-    return 'Access bundle queued. It is downloaded from Activity → Exports once ready.';
+    return 'Access bundle queued in Activity → Exports.';
   });
   const submitRectify = () => run('rectify', async () => {
     const changes = Object.fromEntries(
@@ -172,14 +172,14 @@ export function PrivacyCasePage() {
   });
   const restrict = (lift: boolean) => run(lift ? 'lift' : 'restrict', async () => {
     await post(lift ? '/restriction/lift' : '/restriction');
-    return lift ? 'Restriction lifted.' : 'Processing restricted. Imports, sync and provisioning now withhold changes to this person.';
+    return lift ? 'Restriction lifted.' : 'Processing restricted.';
   });
   const erasure = (verb: 'request' | 'approve' | 'cancel') => run(verb, async () => {
     const result = await post(`/erasure/${verb}`);
     if (verb === 'approve' && result.receipt) {
       download(`syntra-erasure-receipt-${row.reference}.json`, result.receipt);
       setConfirm('');
-      return 'Erasure completed. The receipt has been downloaded and is kept on the case.';
+      return 'Erasure completed. Receipt downloaded.';
     }
     return verb === 'request' ? 'Erasure requested. A different administrator must approve it.' : 'Erasure cancelled.';
   });

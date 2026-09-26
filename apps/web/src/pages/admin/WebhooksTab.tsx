@@ -189,11 +189,7 @@ export function WebhooksTab() {
           {loading && <SkeletonRows rows={3} cols={4} />}
           {!loading && endpoints.length === 0 && !adding && (
             <div className="p-6">
-              <Empty title="Nothing is subscribed">
-                An endpoint receives a signed message each time Syntra notifies
-                somebody — so a ticketing system, a chat channel or a data
-                warehouse can act on it too.
-              </Empty>
+              <Empty title="Nothing is subscribed" />
             </div>
           )}
 
@@ -247,7 +243,7 @@ export function WebhooksTab() {
                               path={`/api/admin/webhooks/${endpoint.id}`}
                               label="endpoint"
                               confirmWord={endpoint.name}
-                              warning="The signing secret and anything still queued for this endpoint go with it. The receiving system will stop being told."
+                              warning="Deletes its signing secret and queued deliveries."
                               onDeleted={reload}
                             />
                           }
@@ -359,9 +355,7 @@ function SecretPanel({
       <Panel>
       <div className="p-5">
         <h2 className="font-semibold text-ink">Signing secret for {name}</h2>
-        <p className="mt-1 text-muted">
-          Paste this into the receiving system now. It is not shown again.
-        </p>
+        <p className="mt-1 text-muted">Shown once — copy it now.</p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <code className="min-w-0 flex-1 overflow-x-auto rounded-panel bg-surface-2 px-3 py-2 font-mono text-sm text-ink">
             {secret}
@@ -534,7 +528,7 @@ function Deliveries({
   const deliveries = data?.deliveries ?? [];
   if (deliveries.length === 0) {
     return (
-      <div className="p-5 text-muted">Nothing has been sent to this endpoint yet.</div>
+      <div className="p-5 text-muted">Nothing sent yet</div>
     );
   }
 

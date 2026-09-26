@@ -249,10 +249,7 @@ export function GovernReportsTab() {
           </p>
           {data.body.rows.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nobody holds anything in this system">
-                Either the system was read and is empty, or it is not in the snapshot at all —
-                the header above says which.
-              </Empty>
+              <Empty title="Nobody holds anything in this system" />
             </div>
           ) : (
             <Table stickyHeader label="Holders">

@@ -230,10 +230,10 @@ describe('deactivate, never delete', () => {
     await screen.findByText('mokafor');
 
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
-    // Since write-back, the copy names the owner and the setting; with no
-    // readable sources the page falls back to "A directory source".
+    // Since write-back, the copy names the setting and the owner; with no
+    // readable sources the page falls back to "the directory source".
     expect(
-      screen.getByText(/owns this account, and write-back is off/),
+      screen.getByText(/write-back off in the directory source/i),
     ).toBeInTheDocument();
   });
 
@@ -312,7 +312,7 @@ describe('org units, the last part of the directory to get this', () => {
     await screen.findByText('Care');
     expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
     expect(
-      screen.getByText(/owns this unit, and the next sync run would put it back/),
+      screen.getByText(/managed by a directory source/i),
     ).toBeInTheDocument();
   });
 });

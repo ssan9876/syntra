@@ -97,9 +97,9 @@ describe('UpdatesPage', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /update to 1\.5\.0/i }));
 
-    expect(screen.getByText(/Signing in will stop working for about a minute/i)).toBeInTheDocument();
-    expect(screen.getByText(/Back up the database, and stop if that fails/i)).toBeInTheDocument();
-    expect(screen.getByText(/put 1\.4\.0 back automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Sign-in unavailable for about a minute/i)).toBeInTheDocument();
+    expect(screen.getByText(/Back up the database; stop if that fails/i)).toBeInTheDocument();
+    expect(screen.getByText(/Roll back to 1\.4\.0 automatically/i)).toBeInTheDocument();
   });
 
   it('does not start anything until the confirmation is taken', async () => {

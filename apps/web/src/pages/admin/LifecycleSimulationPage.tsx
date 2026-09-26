@@ -97,7 +97,10 @@ export function LifecycleSimulationPage() {
       <Button type="submit" loading={busy} disabled={scope === 'person' ? !personId.trim() : !department.trim()}>{stale ? 'Simulate again' : 'Simulate without writes'}</Button>
     </form></Panel>
     {outcome ? <Panel title={`Expected effects — ${outcome.kind} (${outcome.people.length} ${outcome.people.length === 1 ? 'person' : 'people'})`} actions={stale ? <StateBadge state="attention">Out of date</StateBadge> : null}><div className="space-y-3 p-4" aria-live="polite">
-      <Alert tone="info">No external writes were performed. Computed {new Date(outcome.computedAt).toLocaleString()}.</Alert>
+      <dl className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+        <div className="flex gap-2"><dt className="text-muted">Computed</dt><dd className="text-ink">{new Date(outcome.computedAt).toLocaleString()}</dd></div>
+        <div className="flex gap-2"><dt className="text-muted">External writes</dt><dd><StateBadge state="healthy">None</StateBadge></dd></div>
+      </dl>
       {outcome.unsupported.length ? <Alert tone="warning" title="Unsupported capabilities">{outcome.unsupported.join('; ')}</Alert> : null}
       {outcome.safetyBlockers.length ? <Alert tone="warning" title="Safety blockers">{outcome.safetyBlockers.join('; ')}</Alert> : null}
       {outcome.people.length === 0 ? <p>No active person matched.</p> : <Table>
@@ -118,7 +121,7 @@ export function LifecycleSimulationPage() {
     <Panel title="Previous simulations"><div className="p-4">
       {history.data?.simulations.length ? <Table tight><thead><tr><th scope="col">When</th><th scope="col">Scenario</th><th scope="col">Scope</th><th scope="col">People</th><th scope="col">Expires</th><th scope="col"></th></tr></thead><tbody>
         {history.data.simulations.map((simulation) => <tr key={simulation.id}><td>{new Date(simulation.createdAt).toLocaleString()}</td><td>{simulation.kind}</td><td>{simulation.department ?? simulation.personId ?? simulation.scope}</td><td>{simulation.peopleCount}</td><td>{simulation.expiresAt ? new Date(simulation.expiresAt).toLocaleDateString() : '—'}</td><td><Button size="sm" variant="ghost" onClick={() => void load(simulation.id)}>Open</Button></td></tr>)}
-      </tbody></Table> : <p className="text-sm text-muted">No simulation has been run yet.</p>}
+      </tbody></Table> : <p className="text-sm text-muted">No simulations yet</p>}
     </div></Panel>
   </>;
 }

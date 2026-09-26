@@ -76,10 +76,7 @@ export function GovernSnapshotsTab() {
                   Build a snapshot now
                 </Button>
               }
-            >
-              Build one and the inventory, the coverage register and the standing findings
-              appear on their own.
-            </Empty>
+            />
           </div>
         )}
         {snapshots.length > 0 && (

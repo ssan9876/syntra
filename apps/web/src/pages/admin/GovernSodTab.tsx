@@ -74,11 +74,7 @@ export function GovernSodTab() {
           {functions.data === null && functions.loading && <SkeletonRows rows={3} cols={2} />}
           {functions.error !== null && <Alert tone="danger">{functions.error}</Alert>}
           {functions.data !== null && functions.data.functions.length === 0 && (
-            <Empty title="No business functions yet">
-              A function is a name and a set of resources: &ldquo;raise a payment&rdquo; is the
-              entitlement in the finance system, the group in Active Directory and the role in the
-              SaaS tool that each let somebody do it.
-            </Empty>
+            <Empty title="No business functions yet" />
           )}
           {(functions.data?.functions ?? []).length > 0 && (
             <ul className="divide-y divide-border-subtle">
@@ -172,18 +168,18 @@ export function GovernSodTab() {
                     );
                 }}
               >
-                Show me who this would flag, before I save it
+                Preview who this flags
               </Button>
             </div>
 
             {preview !== null && (
               <Alert tone={preview.violatingPersons > 0 ? 'warning' : 'info'}>
-                This rule is violated by {preview.violatingPersons} person(s) today
+                Flags {preview.violatingPersons} person(s) today
                 {preview.sample.length > 0 &&
                   `: ${preview.sample.map((s) => s.displayName).join(', ')}`}
                 .
                 {preview.unevaluableSubjects > 0 &&
-                  ` ${preview.unevaluableSubjects} more could not be evaluated, because a resource one of these functions names could not be read.`}
+                  ` ${preview.unevaluableSubjects} not evaluated: a resource could not be read.`}
               </Alert>
             )}
           </div>
@@ -218,9 +214,7 @@ export function GovernSodTab() {
           {violations.data === null && violations.loading && <SkeletonRows rows={3} cols={3} />}
           {violations.error !== null && <Alert tone="danger">{violations.error}</Alert>}
           {violations.data !== null && violations.data.violations.length === 0 && (
-            <Empty title="No open violations">
-              Nothing currently holds both sides of any rule you have written.
-            </Empty>
+            <Empty title="No open violations" />
           )}
           {(violations.data?.violations ?? []).length > 0 && (
             <ul className="divide-y divide-border-subtle">

@@ -162,17 +162,13 @@ export function GovernFindingsTab() {
           {data && sorted.length === 0 && status === 'open' && (
             <div className="p-6">
               <Empty
-                title="Nothing to look at here yet"
+                title="No findings yet"
                 action={
                   <Link to="/admin/govern?tab=snapshots" className={buttonClasses('secondary')}>
                     Build a snapshot
                   </Link>
                 }
-              >
-                Build a snapshot and the standing findings appear on their own — access nobody
-                can explain, access held by people with no contract, orphan accounts, and
-                sources nobody has read.
-              </Empty>
+              />
             </div>
           )}
 
@@ -209,7 +205,7 @@ export function GovernFindingsTab() {
                           variant="secondary"
                           onClick={() => {
                             const reason = window.prompt(
-                              'Why is this acceptable? An acceptance needs a reason and an expiry.',
+                              'Reason for accepting',
                             );
                             if (reason === null || reason.trim() === '') return;
                             const until = window.prompt('Accept until (YYYY-MM-DD)?');

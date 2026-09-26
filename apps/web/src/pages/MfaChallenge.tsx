@@ -152,9 +152,7 @@ export function MfaChallenge() {
         setChallenge(next);
         setCode('');
         setMode(firstMode(next.factors));
-        setError(
-          'Your organization now asks for a different factor. Use one of the options below.',
-        );
+        setError('Your organization now asks for a different factor.');
         return;
       }
 
@@ -229,7 +227,6 @@ export function MfaChallenge() {
         <Wordmark className="mb-8" />
         <div className="rounded-panel border border-border-subtle bg-bg p-6">
           <h1 className="text-lg font-semibold text-ink">{t('mfa.title')}</h1>
-          <p className="mt-1 text-muted">{t('mfa.lead')}</p>
 
           <form onSubmit={submit} noValidate className="mt-6 space-y-4">
             {mode === 'totp' && (

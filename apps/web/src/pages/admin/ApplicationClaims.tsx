@@ -205,10 +205,7 @@ export function ApplicationClaims({
         )}
 
         {rows.length === 0 && !adding && (
-          <Empty title="Nothing beyond the name identifier">
-            The application receives whoever signed in and nothing else. Add a
-            mapping if it needs an email address, a department or a group list.
-          </Empty>
+          <Empty title="Nothing beyond the name identifier" />
         )}
 
         {rows.length > 0 && (

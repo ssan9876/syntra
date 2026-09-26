@@ -30,8 +30,8 @@ export function PickerNote({ shown, total, to, label }: PickerNoteProps) {
   if (total <= shown) return null;
   return (
     <p className="mt-1 text-sm text-muted">
-      Showing the first {shown.toLocaleString()} of {total.toLocaleString()}.
-      Use <Link to={to}>{label}</Link> to find one that is not listed.
+      Showing the first {shown.toLocaleString()} of {total.toLocaleString()} ·{' '}
+      <Link to={to}>Search {label}</Link>
     </p>
   );
 }

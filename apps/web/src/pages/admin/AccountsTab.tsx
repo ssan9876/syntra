@@ -179,7 +179,6 @@ export function AccountsTab() {
   // Same narrowing as PeopleTab, and for the same reason: a 200 without its
   // collection must render an empty table, not a blank console.
   const users = data?.users ?? [];
-  const anySynced = users.some((user) => Boolean(user.sourceId));
   const total = data?.total ?? users.length;
   const shownPageSize = data?.pageSize ?? 50;
   const filtered = q !== '' || status !== '';
@@ -291,37 +290,33 @@ export function AccountsTab() {
               to="/admin/users?tab=people"
               label="People"
             />
-            <Select
-              label="Org unit"
-              value={v.orgUnitId ?? ''}
-              name="orgUnitId"
-              onChange={(x) => set('orgUnitId', x)}
-              error={errs.orgUnitId}
-              options={[
-                { value: '', label: 'None' },
-                ...(unitsData?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
-              ]}
-            />
-            {/*
-              Said only when it changes the answer. The account always takes
-              the unit picked here — that is access resolution — but PLACEMENT
-              follows the person's own unit, and this form does not overwrite
-              one they already have. Without this line the picker looks like it
-              decided where their account will be created, and it did not.
-            */}
             {(() => {
+              // Said only when it changes the answer. The account always takes
+              // the unit picked here — that is access resolution — but
+              // PLACEMENT follows the person's own unit, and this form does not
+              // overwrite one they already have.
               const chosen = people.find((p) => p.id === v.personId);
-              if (!chosen?.orgUnitId) return null;
-              const unit = (unitsData?.orgUnits ?? []).find(
-                (u) => u.id === chosen.orgUnitId,
-              );
+              const placedIn = chosen?.orgUnitId
+                ? ((unitsData?.orgUnits ?? []).find((u) => u.id === chosen.orgUnitId)?.name ??
+                  'another unit')
+                : null;
               return (
-                <p className="text-sm text-muted sm:col-span-2">
-                  {chosen.givenName} {chosen.familyName} is already placed in{' '}
-                  {unit?.name ?? 'another unit'}, and their account will be
-                  created there. The unit above applies to this login's access
-                  only.
-                </p>
+                <Select
+                  label="Org unit"
+                  value={v.orgUnitId ?? ''}
+                  name="orgUnitId"
+                  onChange={(x) => set('orgUnitId', x)}
+                  error={errs.orgUnitId}
+                  warning={
+                    chosen && placedIn
+                      ? `${chosen.givenName} ${chosen.familyName} is already placed in ${placedIn} — access only`
+                      : undefined
+                  }
+                  options={[
+                    { value: '', label: 'None' },
+                    ...(unitsData?.orgUnits ?? []).map((u) => ({ value: u.id, label: u.name })),
+                  ]}
+                />
               );
             })()}
           </>
@@ -334,20 +329,6 @@ export function AccountsTab() {
           through a directory source, an upstream identity provider, or a
           password reset. Offering a box here would be offering a control the
           product does not have. */}
-
-      {!error && anySynced && (
-        // Said once, above the table, and again on the account's own screen.
-        // An administrator who edits the wrong account would have their change
-        // overwritten by the next run without explanation.
-        <div className="mb-4">
-          <Alert tone="info" title="Some of these accounts are managed elsewhere">
-            An account with a directory source named against it has its login,
-            name and email owned by that directory: the fields are read-only
-            here and are rewritten on every run. Change them in the directory
-            itself.
-          </Alert>
-        </div>
-      )}
 
       {!error && data && users.length > 0 && (
         <TableToolbar>
@@ -376,10 +357,7 @@ export function AccountsTab() {
                     Start from a person instead
                   </Link>
                 }
-              >
-                Users appear here once they are created, or once a directory
-                synchronization brings them in.
-              </Empty>
+              />
             </div>
           )}
 
@@ -396,9 +374,7 @@ export function AccountsTab() {
                     Reset filters
                   </button>
                 }
-              >
-                Logins, display names and work email addresses are searched.
-              </Empty>
+              />
             </div>
           )}
 

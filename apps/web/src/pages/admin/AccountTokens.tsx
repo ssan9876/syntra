@@ -107,17 +107,14 @@ export function AccountTokens({ userId }: { userId: string }) {
           <span className="mt-1 block">
             <Identifier value={issued} />
           </span>
-          Copy it into the integration now. It is not shown again.
+          Shown once — copy it now.
         </Alert>
       )}
 
       {!data && loading && <SkeletonRows rows={2} />}
 
       {!loading && tokens.length === 0 && (
-        <Empty title="No API tokens">
-          A token lets a program act as this account, with this account&rsquo;s
-          permissions and no more.
-        </Empty>
+        <Empty title="No API tokens" />
       )}
 
       {tokens.length > 0 && (

@@ -181,11 +181,9 @@ function useRenameSupport(targetId: string | null): RenameSupport {
 /**
  * "Apply renames automatically": confirm `rename_account` without a person.
  *
- * What it changes is said beside the box, because the name of the setting
- * does not: a rename changes the name somebody signs in with. On Active
- * Directory that is the sAMAccountName, and what breaks is concrete and
- * outside Syntra -- cached logons, profile paths, and anything that stored
- * the old name -- so that warning is louder there.
+ * On Active Directory a rename changes the sAMAccountName, and what breaks is
+ * concrete and outside Syntra -- cached logons, profile paths, and anything
+ * that stored the old name -- so the box carries that as a warning there.
  */
 function AutoConfirmRenames({
   type,
@@ -201,6 +199,13 @@ function AutoConfirmRenames({
   onChange: (value: boolean) => void;
 }) {
   const refused = support.state === 'refused';
+  // Conditional, each of them: said only while it applies.
+  const warnings = [
+    type === 'activeDirectory'
+      ? 'Changes the sAMAccountName: breaks cached logons and profile paths.'
+      : null,
+    checked && !refused && !renameEnabled ? 'No effect while renaming is off under Lifecycle timings.' : null,
+  ].filter((line): line is string => line !== null);
   return (
     <div className="sm:col-span-2" data-testid="auto-confirm-renames">
       <Check
@@ -209,25 +214,11 @@ function AutoConfirmRenames({
         disabled={refused}
         onChange={onChange}
         label="Apply renames automatically"
-        warning={
-          type === 'activeDirectory'
-            ? 'On Active Directory a rename changes the sAMAccountName. That breaks cached logons, profile paths and anything else that stored the old name.'
-            : undefined
-        }
+        warning={warnings.length > 0 ? warnings.join(' ') : undefined}
       />
-      <p className="mt-1 pl-6 text-sm text-muted">
-        A rename changes the name the person signs in with. Off by default: each
-        rename then waits on its run for somebody to approve it. When on, runs
-        apply renames without asking, scheduled and requested alike, and each
-        one is recorded in the audit log as confirmed by this setting. Renames
-        only: a re-enable, a re-created account or a run held by a safety
-        threshold still waits for a person.
-        {!renameEnabled &&
-          ' Renames are planned only when “Rename an account when the person’s name changes” is on, under Lifecycle timings.'}
-      </p>
       {refused && (
         <p className="mt-1 pl-6 text-sm text-muted">
-          This target cannot rename accounts, so there is nothing to apply: {support.reason}
+          Cannot rename accounts: {support.reason}
         </p>
       )}
     </div>
@@ -270,9 +261,7 @@ function OrgUnitsSection({
   if (placesAccounts === false) {
     return (
       <p className="text-sm text-muted sm:col-span-2" data-testid="mirror-unsupported">
-        This target does not place accounts in containers — its accounts live in one
-        flat directory — so there is no tree of OUs to mirror org units into. Org
-        units still decide who is provisioned through business rules.
+        This target does not place accounts in containers.
       </p>
     );
   }
@@ -284,22 +273,6 @@ function OrgUnitsSection({
         onChange={onMirror}
         label="Mirror org units as OUs"
       />
-      <p className="pl-6 text-sm text-muted">
-        The recommended way to place org units on this target. Each active org unit is
-        placed at an OU derived from its place in the tree —{' '}
-        <code>OU=&lt;unit&gt;,OU=&lt;parent&gt;,…,&lt;root&gt;</code> — with no DN to
-        type per unit. Runs create the missing OUs parent first, and move an OU, with
-        every account in it, when its unit is renamed or moved. Turning this on writes
-        nothing by itself: the next run shows which OUs it would create and which
-        accounts would move, and a container move always waits for a person to confirm
-        it. OUs are never deleted; a deactivated or deleted unit&apos;s OU stays where
-        it is.
-      </p>
-      <p className="pl-6 text-sm text-muted" data-testid="mirror-override-note">
-        A DN typed by hand on an org unit (its Containers panel, &ldquo;Set a DN by
-        hand&rdquo;) is an override: it takes precedence over the mirror for that unit on
-        this target, until the unit is switched back to mirrored.
-      </p>
       <Field
         label="Org-unit root"
         name="orgUnitRootDn"
@@ -308,10 +281,6 @@ function OrgUnitsSection({
         placeholder={baseDn === '' ? 'The base DN' : baseDn}
         {...(rootError === undefined ? {} : { error: rootError })}
       />
-      <p className="text-sm text-muted">
-        Where the tree hangs, below the base DN. Blank uses the base DN itself. A root
-        that does not exist yet is created by the first run, like any missing parent.
-      </p>
       <OrgUnitMirrorPreview targetId={targetId} rootDn={rootDn} unsaved={unsaved} />
     </div>
   );
@@ -512,11 +481,7 @@ export function TargetDetailPage() {
           // target exists" is the fact that decides what to do next, and
           // `fail` puts the field-level messages on their own controls.
           setCreatedId(created.id);
-          setNotice(
-            'The target was created, but its deprovisioning ladder and safety ' +
-              'thresholds were refused and are not saved. What you typed is ' +
-              'still in the boxes below — correct it and press Save.',
-          );
+          setNotice('Target created; ladder and thresholds not saved. Fix them and press Save.');
           fail(cause, 'The ladder and thresholds were refused.');
         }
         return;
@@ -647,7 +612,7 @@ export function TargetDetailPage() {
               title={
                 data.enabled
                   ? undefined
-                  : 'This target is disabled, so a run would not start. Enable it and save first.'
+                  : 'Target is disabled'
               }
             >
               Run now
@@ -679,7 +644,7 @@ export function TargetDetailPage() {
             {(data.lastSkipReason ?? '').includes('is awaiting review') && (
               <p className="mt-2">
                 <Link to={`/admin/targets/${targetId}/runs`} className="link font-medium">
-                  Go to the runs for this target
+                  Review runs
                 </Link>
               </p>
             )}
@@ -888,12 +853,12 @@ export function TargetDetailPage() {
               <div className="space-y-3 sm:col-span-2">
                 {gaps.noProfile && (
                   <Alert tone="warning">
-                    This target has no account profile, so it cannot create accounts.
+                    No account profile: accounts cannot be created.
                   </Alert>
                 )}
                 {gaps.noAccountRule && (
                   <Alert tone="warning">
-                    No business rule grants an account on this target, so no one will be provisioned.
+                    No rule grants an account: nobody is provisioned.
                   </Alert>
                 )}
                 <ul className="flex flex-wrap gap-x-6 gap-y-2">
@@ -932,7 +897,7 @@ export function TargetDetailPage() {
               ]}
             />
             <Field
-              label="Schedule"
+              label="Schedule (cron, UTC)"
               name="schedule"
               value={form.schedule}
               onChange={(v) => set('schedule', v)}
@@ -942,20 +907,9 @@ export function TargetDetailPage() {
               placeholder="Blank — runs only when started by hand"
               {...mark('schedule')}
             />
-            {/*
-              Permanent, unlike the warnings the form controls carry: a cron
-              expression is not something a label can explain, and the zone
-              it fires in is not something a reader can guess. UTC because
-              `boss.schedule` is called without a `tz`, and pg-boss defaults
-              it to UTC — the same zone `cronExpression` validates in.
-            */}
-            <p className="text-sm text-muted sm:col-span-2">
-              A cron expression, evaluated in UTC: <code>0 * * * *</code> runs
-              hourly, <code>*/15 * * * *</code> every 15 minutes,{' '}
-              <code>0 3 * * *</code> daily at 03:00 UTC. Leave it blank to run
-              this target only when somebody starts a run, in which case
-              applying scheduled runs automatically does nothing.
-            </p>
+            {/* The zone is in the label: it fires in UTC because
+                `boss.schedule` is called without a `tz`, and pg-boss defaults
+                it to UTC — the same zone `cronExpression` validates in. */}
             <Check
               className="sm:col-span-2"
               checked={form.enabled}
@@ -969,7 +923,7 @@ export function TargetDetailPage() {
               label="Apply scheduled runs automatically"
               warning={
                 form.autoApply && form.schedule.trim() === ''
-                  ? 'There is no schedule, so no scheduled run will happen for this to apply.'
+                  ? 'No schedule, so no scheduled run will happen.'
                   : undefined
               }
             />

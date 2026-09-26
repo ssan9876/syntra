@@ -117,8 +117,7 @@ export function GovernCampaignDetailPage() {
                       {data.coverage.percent}% covered
                     </span>
                     <span className="text-sm text-muted">
-                      of {data.coverage.denominator} items, where coverage is{' '}
-                      {data.coverage.statement}
+                      of {data.coverage.denominator} items · {data.coverage.statement}
                     </span>
                   </div>
                   <Meter
@@ -155,8 +154,7 @@ export function GovernCampaignDetailPage() {
 
               {data.counts.blocked > 0 && (
                 <Alert tone="warning" title="Some items resolved to nobody">
-                  {data.counts.blocked} item(s) have no reviewer and no fallback. They cannot be
-                  decided by anybody until somebody is named.
+                  {data.counts.blocked} item(s) have no reviewer or fallback.
                 </Alert>
               )}
             </div>
@@ -185,7 +183,7 @@ export function GovernCampaignDetailPage() {
                           `${outcome.itemCount} item(s) generated` +
                             (outcome.blockedCount === 0
                               ? '.'
-                              : `, and ${outcome.blockedCount} resolved to nobody — they cannot be decided until somebody is named.`),
+                              : `; ${outcome.blockedCount} resolved to nobody.`),
                         );
                       },
                     )
@@ -263,22 +261,15 @@ export function GovernCampaignDetailPage() {
             </div>
           </Panel>
 
-          {/* NOT hidden behind a toggle, and the sentence is on the panel rather
-              than in a tooltip nobody opens. */}
-          <Panel title="Reviewer quality">
+          {/* "Signals", not "quality" or "violations": a fast, thorough
+              reviewer of a small stable team looks identical to a
+              rubber-stamper on these aggregates. */}
+          <Panel title="Reviewer signals">
             <div className="p-4">
-              <Alert tone="info">
-                None of these are violations and this screen does not call them violations. A
-                manager of a stable ten-person team who reads everything and certifies all of it
-                in four minutes is behaving correctly and will look identical to a rubber-stamper
-                on the aggregate.
-              </Alert>
               {data.signals.length === 0 ? (
-                <p className="mt-3 text-muted">
-                  Nothing computed yet. These are produced when the campaign closes.
-                </p>
+                <p className="text-muted">Computed when the campaign closes</p>
               ) : (
-                <div className="mt-3"><Table>
+                <div><Table>
                   <thead>
                     <tr>
                       <th>Reviewer</th>

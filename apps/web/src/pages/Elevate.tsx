@@ -77,16 +77,12 @@ export function Elevate() {
       navigate(routeFor(kind), { replace: true });
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'not-an-administrator') {
-        setError(
-          'This account holds no administrative roles. Ask an administrator to grant you one.',
-        );
+        setError('This account holds no administrative roles.');
       } else if (cause instanceof ApiError && cause.kind === 'security-key-required') {
         // The password was right; the tenant requires a security key for the
         // console and this account has none. "Incorrect password" here would
         // send them to retype one that is correct.
-        setError(
-          'This organization requires a security key for administration. Register one on the Security page, then try again.',
-        );
+        setError('Administration requires a security key. Register one under Security.');
       } else if (isRateLimited(cause)) {
         setError(t('common.rate_limited'));
       } else {
@@ -103,10 +99,6 @@ export function Elevate() {
         <h1 className="text-lg font-semibold text-ink">
           Confirm your password
         </h1>
-        <p className="mt-1.5 text-muted">
-          Administration runs in a separate, shorter session. Entering your
-          password again starts one.
-        </p>
 
         <form onSubmit={onSubmit} noValidate className="mt-6 space-y-4">
           <Field

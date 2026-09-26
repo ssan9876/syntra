@@ -100,9 +100,7 @@ export function SourcesTab() {
                     Connect a directory
                   </Link>
                 }
-              >
-                Connect one to bring users and groups in automatically.
-              </Empty>
+              />
             </div>
           )}
 

@@ -94,8 +94,7 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
     return (
       <Panel title="Activity">
         <Empty title="Not visible to you">
-          Reading an account&apos;s history needs the <code>audit.read</code>{' '}
-          permission.
+          Requires <code>audit.read</code>
         </Empty>
       </Panel>
     );
@@ -119,10 +118,7 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
         // were trustworthy is worse than having no log.
         <div className="p-4">
           <Alert tone="danger" title="This audit log has been altered">
-            Verification failed at entry {data.brokenAtSequence}. An entry at or
-            before that point was changed or removed outside Syntra. Treat
-            everything below as unverified and investigate the database
-            directly.
+            Verification failed at entry {data.brokenAtSequence}.
           </Alert>
         </div>
       )}

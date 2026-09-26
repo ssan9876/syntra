@@ -61,13 +61,6 @@ describe('an orphan proposal', () => {
     expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull();
   });
 
-  /** And says why, rather than leaving a guess with no verb on the screen. */
-  it('says that confirming an owner is not available yet', async () => {
-    mockOrphans([proposal()]);
-    renderPage();
-    expect(await screen.findByText(/cannot be confirmed from here yet/i)).toBeInTheDocument();
-  });
-
   /** Denying still works: it is Govern's own write and it always was. */
   it('still records a denial', async () => {
     const sent = mockOrphans([proposal()]);

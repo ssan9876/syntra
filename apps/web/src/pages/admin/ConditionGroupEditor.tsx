@@ -96,7 +96,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
           depth={depth + 1}
         />
         <Button type="button" size="sm" onClick={() => onChange(node.child)}>
-          Remove NOT, keep the condition inside it
+          Remove NOT
         </Button>
       </div>
     );

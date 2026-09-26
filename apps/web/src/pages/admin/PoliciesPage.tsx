@@ -411,7 +411,7 @@ export function PoliciesPage() {
                   // and a rule requiring one is refused until it exists.
                   warning={
                     factorType === 'webauthn'
-                      ? 'Needs a primary domain set for this tenant. A rule requiring a security key is refused until one exists.'
+                      ? 'Needs a tenant primary domain first.'
                       : undefined
                   }
                   error={formFields.factorType}
@@ -457,12 +457,7 @@ export function PoliciesPage() {
               </div>
               {outcome === 'deny' && devicePlatforms.length > 0 && (
                 <div className="sm:col-span-2">
-                  <Alert tone="warning" title="A device is what the browser claims to be">
-                    <p>
-                      Anyone can change it. This will stop an ordinary user on that
-                      device and will not stop someone who wants through.
-                    </p>
-                  </Alert>
+                  <Alert tone="warning">Device is browser-reported and easily spoofed.</Alert>
                 </div>
               )}
             </FormSection>
@@ -485,13 +480,12 @@ export function PoliciesPage() {
                   >
                     <p>
                       {impact.usersNeedingEnrolment === 0
-                        ? 'Everyone it matches already holds a factor that satisfies it.'
-                        : `${impact.usersNeedingEnrolment} of them hold no factor that satisfies this rule, and will be asked to set one up the next time they sign in.`}
+                        ? 'All hold a satisfying factor.'
+                        : `${impact.usersNeedingEnrolment} must enrol at next sign-in.`}
                     </p>
                     {impact.unevaluatedConditions.length > 0 && (
                       <p className="mt-1 text-sm text-muted">
-                        Counted without {impact.unevaluatedConditions.join(' or ')}, which
-                        only a real sign-in can supply. The true number is at most this.
+                        Upper bound: {impact.unevaluatedConditions.join(' or ')} not evaluated
                       </p>
                     )}
                   </Alert>
@@ -520,10 +514,7 @@ export function PoliciesPage() {
         {loading && <SkeletonRows rows={3} cols={3} />}
 
         {!loading && policy && policy.rules.length === 0 && (
-          <Empty title="No rules yet">
-            Every sign-in falls through to the default below. Add a rule to require
-            a second factor of a group, a department or an address range.
-          </Empty>
+          <Empty title="No rules yet" />
         )}
 
         {!loading && policy && policy.rules.length > 0 && (

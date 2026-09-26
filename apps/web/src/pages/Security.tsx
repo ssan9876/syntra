@@ -71,7 +71,7 @@ export function Security() {
       setCodeError(
         isRateLimited(cause)
           ? t('common.rate_limited')
-          : 'That code did not match. Check your app and try the next one.',
+          : 'That code did not match.',
       );
     } finally {
       setBusy(false);
@@ -116,9 +116,9 @@ export function Security() {
       );
       if (result.recoveryCodesRevoked > 0) {
         setNotice(
-          `That key was removed, and ${result.recoveryCodesRevoked} unused recovery code${
+          `Key removed. ${result.recoveryCodesRevoked} unused recovery code${
             result.recoveryCodesRevoked === 1 ? '' : 's'
-          } stopped working with it. Set up a factor and generate new ones.`,
+          } stopped working.`,
         );
       }
       await load();
@@ -156,12 +156,12 @@ export function Security() {
       );
       if (result.recoveryCodesRevoked > 0) {
         setNotice(
-          `Your authenticator app was removed, and ${result.recoveryCodesRevoked} unused recovery code${
+          `Authenticator app removed. ${result.recoveryCodesRevoked} unused recovery code${
             result.recoveryCodesRevoked === 1 ? '' : 's'
-          } stopped working with it. Set up a factor and generate new ones.`,
+          } stopped working.`,
         );
       } else {
-        setNotice('Your authenticator app was removed.');
+        setNotice('Authenticator app removed.');
       }
       await load();
     } catch (cause) {
@@ -228,18 +228,17 @@ export function Security() {
         >
           {enrolment && (
             <div className="space-y-4 p-4">
-              <p className="text-muted">
-                Scan this with your authenticator app, then type the code it shows.
-              </p>
               <img
                 src={enrolment.qr}
                 alt="QR code for your authenticator app"
                 className="size-48 rounded-control border border-border-subtle"
               />
-              <p className="text-sm text-muted">
-                Cannot scan? Enter this key instead:{' '}
-                <Identifier value={enrolment.secret} />
-              </p>
+              <dl className="text-sm">
+                <dt className="text-muted">Setup key</dt>
+                <dd>
+                  <Identifier value={enrolment.secret} />
+                </dd>
+              </dl>
               <Field
                 label="Code from your app"
                 value={code}
@@ -285,7 +284,7 @@ export function Security() {
             {status && !status.webauthn.available ? (
               <Alert tone="info" title="Security keys are not available here">
                 {status.webauthn.unavailableReason ??
-                  'An administrator must configure this tenant before security keys can be used.'}
+                  'Not configured for this organization.'}
               </Alert>
             ) : (
               <div className="flex flex-wrap items-end gap-3">
@@ -318,10 +317,7 @@ export function Security() {
             </p>
             {codes && (
               <>
-                <Alert tone="warning" title="Save these now">
-                  They are shown once. Syntra stores only their fingerprints and
-                  cannot show them again.
-                </Alert>
+                <Alert tone="warning">Shown once — save them now.</Alert>
                 <ul className="grid grid-cols-2 gap-2 font-mono text-ink sm:grid-cols-3">
                   {codes.map((value) => (
                     <li key={value} className="rounded-control bg-surface-2 px-2 py-1 text-center">

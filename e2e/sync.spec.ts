@@ -278,7 +278,7 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
     has: page.getByRole('heading', { name: 'Connection test' }),
   });
   await expect(report).toBeVisible();
-  await expect(report).toContainText('Found 2 users, 1 groups');
+  await expect(report).toContainText(/Users\s*2\s*Groups\s*1/);
   await expect(report).toContainText('inetOrgPerson');
   // The anchor attribute among them. It is operational on OpenLDAP and is not
   // returned by an ordinary search, so a report that lists uid and mail but

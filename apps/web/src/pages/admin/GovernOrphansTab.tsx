@@ -76,10 +76,7 @@ export function GovernOrphansTab() {
                   Build a snapshot
                 </Link>
               }
-            >
-              Build a snapshot and any account in a target system with no linked person is
-              proposed here, with the evidence behind the guess.
-            </Empty>
+            />
           </div>
         )}
         {proposals.length > 0 && (
@@ -103,12 +100,6 @@ export function GovernOrphansTab() {
                     reconciliation rules. That is a Provision slice, and doing
                     it here would put an access-bearing write inside Govern,
                     which boundaries.test.ts structurally forbids. */}
-                <p className="mt-2 text-muted">
-                  This guess cannot be confirmed from here yet — linking an account to a
-                  person is a write Provision owns, and Govern deliberately makes none.
-                  Denying a wrong guess is recorded either way, so the next snapshot stops
-                  proposing it.
-                </p>
                 <div className="mt-2 flex flex-wrap items-end gap-2">
                   {denying === p.id ? (
                     <>

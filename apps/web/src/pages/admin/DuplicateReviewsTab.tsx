@@ -68,7 +68,7 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (!loading && groups.length === 0) return <Panel><div className="p-6"><Empty title="No duplicate reviews waiting">New HR identities with a matching business email will stop here before Syntra creates another person.</Empty></div></Panel>;
+  if (!loading && groups.length === 0) return <Panel><div className="p-6"><Empty title="No duplicate reviews waiting" /></div></Panel>;
 
   return (
     <div className="space-y-4">

@@ -89,9 +89,7 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
     await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
 
     expect(screen.getByLabelText(/container/i)).toHaveValue(`OU=Sales,${BASE_DN}`);
-    expect(screen.getByTestId('hand-typed-precedence')).toHaveTextContent(
-      /takes precedence over the mirror if mirroring is turned on later/i,
-    );
+    expect(screen.queryByTestId('hand-typed-precedence')).not.toBeInTheDocument();
   });
 
   it('posts the typed DN to the materialise endpoint', async () => {
@@ -185,7 +183,6 @@ describe('ContainersPanel on a mirroring target', () => {
     expect(row).toHaveTextContent('Mirrored automatically');
     expect(row).toHaveTextContent(`OU=Sales,${BASE_DN}`);
     expect(row).toHaveTextContent('The next run creates it');
-    expect(row).toHaveTextContent(/no action needed: the next run records this placement/i);
     // Automatic first: no recommendation to turn on what is already on, and the
     // typed DN is only the secondary override.
     expect(screen.queryByRole('link', { name: /turn on mirroring/i })).not.toBeInTheDocument();
@@ -203,7 +200,7 @@ describe('ContainersPanel on a mirroring target', () => {
     );
     expect(screen.getByText(/set a dn by hand on acme ad \(overrides the mirror\)/i)).toBeInTheDocument();
     expect(screen.getByTestId('hand-typed-precedence')).toHaveTextContent(
-      /a typed dn takes precedence over the mirror/i,
+      /stops following the org-unit tree/i,
     );
   });
 
@@ -223,14 +220,13 @@ describe('ContainersPanel on a mirroring target', () => {
     renderPanel();
     const row = await screen.findByTestId('container-t-1');
     expect(row).toHaveTextContent('Typed by hand (overrides the mirror)');
-    expect(row).toHaveTextContent('a typed DN always takes precedence over the mirror');
-    expect(row).toHaveTextContent(`Mirrored, it would be OU=Sales,${BASE_DN}`);
+    expect(row).toHaveTextContent(`Mirrored DNOU=Sales,${BASE_DN}`);
     expect(buttonNames()[0]).toBe('Switch to mirrored');
     await userEvent.click(screen.getByRole('button', { name: /switch to mirrored/i }));
     await waitFor(() => expect(switched).toBe(true));
   });
 
-  it('says a pending move out loud, and what stopping tracking a mirrored row does', async () => {
+  it('shows where a pending move comes from', async () => {
     mockRoutes({
       '/api/admin/targets': () => json(targets),
       '/api/admin/org-units/ou-1/containers': () =>
@@ -239,9 +235,8 @@ describe('ContainersPanel on a mirroring target', () => {
     renderPanel();
     const row = await screen.findByTestId('container-t-1');
     expect(row).toHaveTextContent('The next run moves it');
-    expect(row).toHaveTextContent(`Currently at OU=Old,${BASE_DN}`);
+    expect(row).toHaveTextContent(`Currently atOU=Old,${BASE_DN}`);
     expect(screen.getByRole('button', { name: /stop tracking/i })).toBeInTheDocument();
-    expect(row).toHaveTextContent('the next run derives it again');
   });
 
   it('pre-fills the typed DN under the parent’s container on that target', async () => {

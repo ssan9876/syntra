@@ -153,7 +153,7 @@ describe('PoliciesPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /check who this affects/i }));
 
     expect(await screen.findByText(/matches 12 of 40 active users/i)).toBeInTheDocument();
-    expect(screen.getByText(/9 of them hold no factor/i)).toBeInTheDocument();
+    expect(screen.getByText(/9 must enrol at next sign-in/i)).toBeInTheDocument();
   });
 
   it('says which conditions the count could not include', async () => {
@@ -176,7 +176,7 @@ describe('PoliciesPage', () => {
     await userEvent.type(screen.getByLabelText(/name/i), 'Offsite');
     await userEvent.click(screen.getByRole('button', { name: /check who this affects/i }));
 
-    expect(await screen.findByText(/counted without source address/i)).toBeInTheDocument();
+    expect(await screen.findByText(/upper bound: source address/i)).toBeInTheDocument();
   });
 
   it('reports a rejected rule with the server message attached', async () => {
@@ -297,10 +297,10 @@ describe('PoliciesPage', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: /add a rule/i }));
     await userEvent.click(screen.getByRole('button', { name: 'Android' }));
-    expect(screen.queryByText(/what the browser claims to be/i)).toBeNull();
+    expect(screen.queryByText(/easily spoofed/i)).toBeNull();
 
     await userEvent.selectOptions(screen.getByLabelText("Outcome"), 'deny');
-    expect(await screen.findByText(/what the browser claims to be/i)).toBeInTheDocument();
+    expect(await screen.findByText(/easily spoofed/i)).toBeInTheDocument();
   });
 
   it('picks a country by name and shows it as a removable chip', async () => {

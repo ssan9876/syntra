@@ -664,11 +664,13 @@ describe('deleting a source', () => {
     mockFetch();
     renderEdit();
 
-    const panel = await screen.findByText(/this source owns/i);
-    expect(panel).toHaveTextContent('12 users');
-    expect(panel).toHaveTextContent('3 groups');
-    expect(panel).toHaveTextContent('2 organizational units');
-    expect(panel).toHaveTextContent(/deactivates every one of those/i);
+    const title = await screen.findByText(/this source owns/i);
+    expect(title).toHaveTextContent('12 users');
+    expect(title).toHaveTextContent('3 groups');
+    expect(title).toHaveTextContent('2 organizational units');
+    expect(title.closest('[role="alert"]')).toHaveTextContent(
+      /deactivates every one of those/i,
+    );
   });
 
   it('keeps the button inert until the numbers are acknowledged', async () => {
@@ -788,13 +790,13 @@ describe('running a source by hand', () => {
 });
 
 describe('the correlation key', () => {
-  it('states the rule the server enforces', async () => {
+  it('makes the correlation key a single choice among the user mappings', async () => {
     mockFetch();
     renderNew();
 
-    expect(
-      await screen.findByText(/exactly one user mapping is the correlation key/i),
-    ).toBeInTheDocument();
+    // Radios, not checkboxes: "exactly one" is the control, not a caption.
+    const radios = await screen.findAllByRole('radio', { name: /correlate user records/i });
+    expect(radios.filter((r) => (r as HTMLInputElement).checked)).toHaveLength(1);
   });
 
   it('releases the previous one when another is chosen, so there is always exactly one', async () => {

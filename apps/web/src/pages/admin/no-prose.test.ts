@@ -91,6 +91,33 @@ describe('no prose in the console', () => {
   });
 });
 
+describe('no paragraphs in the console', () => {
+  /**
+   * The props went, and sentences came back as free-standing JSX: a
+   * `<p className="text-sm text-muted">` under a button, a paragraph inside a
+   * panel. This reads every run of literal JSX text and refuses one long
+   * enough to be an explanation. Short warnings, errors and empty states fit
+   * under it; a paragraph does not.
+   */
+  const MAX_WORDS = 18;
+
+  it(`has no run of JSX text longer than ${MAX_WORDS} words`, () => {
+    const offenders: string[] = [];
+    for (const file of sources()) {
+      const text = file.text
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, ' ')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/^\s*\/\/.*$/gm, ' ');
+      for (const match of text.matchAll(/>([^<>{}]+)</g)) {
+        const run = match[1]!.replace(/\s+/g, ' ').trim();
+        if (/[=;]|=>/.test(run)) continue;
+        if (run.split(' ').length > MAX_WORDS) offenders.push(`${file.name}: ${run.slice(0, 80)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('the components that carried the prose', () => {
   const read = (p: string) => readFileSync(p, 'utf8');
 

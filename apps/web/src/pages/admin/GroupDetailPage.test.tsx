@@ -214,7 +214,7 @@ describe('GroupDetailPage', () => {
 
       await screen.findByRole('heading', { name: 'Ward Nurses' });
       expect(
-        await screen.findByText(/adding a member needs directory.read/i),
+        await screen.findByText(/adding members needs directory.read/i),
       ).toBeInTheDocument();
     });
   });

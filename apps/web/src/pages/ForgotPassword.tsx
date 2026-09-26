@@ -37,12 +37,10 @@ export function ForgotPassword() {
             <>
               <h1 className="text-lg font-semibold text-ink">{t('forgot.sent_title')}</h1>
               <Alert tone="info">{t('forgot.sent')}</Alert>
-              <p className="mt-4 text-sm text-muted">{t('forgot.sent_help')}</p>
             </>
           ) : (
             <>
               <h1 className="text-lg font-semibold text-ink">{t('forgot.title')}</h1>
-              <p className="mt-1 text-muted">{t('forgot.lead')}</p>
               <form onSubmit={submit} noValidate className="mt-6 space-y-4">
                 <Field
                   label={t('forgot.field')}

@@ -66,16 +66,9 @@ export function EntraConnectorFields({
         value={userPrincipalDomain}
         onChange={onUserPrincipalDomainChange}
         autoComplete="off"
+        placeholder="contoso.com"
         {...mark('userPrincipalDomain')}
       />
-      <p className="sm:col-span-2 -mt-2 text-sm text-ink-muted">
-        The domain new users sign in with, e.g. contoso.com — must be a
-        verified domain in the tenant; leave empty only if Tenant ID is itself
-        a domain. A new account is named{' '}
-        <code>&lt;account name&gt;@&lt;this domain&gt;</code>. Entra ID has no
-        containers, so the account profile&apos;s container settings are
-        ignored for this target.
-      </p>
       <Field
         label="Application client secret"
         name="bindPassword"
@@ -111,7 +104,7 @@ export function EntraConnectorFields({
         <div>
           <dt className="text-muted">Group memberships managed</dt>
           <dd className="mt-0.5 text-ink">
-            Direct memberships of assigned security groups. Nested and dynamic groups are not.
+            Direct, in assigned security groups
           </dd>
         </div>
       </dl>
@@ -224,9 +217,7 @@ export function HttpConnectorFields({
 
       {hostPlaceholder && (
         <Alert tone="warning">
-          Replace <code>{'{instance}'}</code> in the connector document&apos;s{' '}
-          <code>baseUrl</code> with your Snipe-IT host, e.g.{' '}
-          <code>https://assets.example.com/api/v1</code>.
+          Replace <code>{'{instance}'}</code> in <code>baseUrl</code> with your Snipe-IT host.
         </Alert>
       )}
 

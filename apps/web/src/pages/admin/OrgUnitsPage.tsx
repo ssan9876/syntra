@@ -93,10 +93,7 @@ export function OrgUnitsPage() {
 
           {data && (data.orgUnits ?? []).length === 0 && (
             <div className="p-6">
-              <Empty title="No org units yet">
-                Add a unit such as a department or site to scope administrative
-                roles to part of the organization.
-              </Empty>
+              <Empty title="No org units yet" />
             </div>
           )}
 

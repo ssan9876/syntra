@@ -326,7 +326,7 @@ export function ProductEditorPage() {
                 // empty condition publishes nothing, which looks identical to
                 // a saved product that simply nobody has requested yet.
                 audience.trim() === ''
-                  ? 'Empty means nobody can see this. Use { "all": [] } for everybody with an active contract.'
+                  ? 'Empty: nobody can see this product.'
                   : undefined
               }
             />
@@ -336,14 +336,9 @@ export function ProductEditorPage() {
               // preview: an audience whose blast radius is only visible after
               // saving is an audience that gets saved and then discovered.
               <Alert tone={preview.matched === 0 ? 'warning' : 'info'}>
-                Visible to {preview.matched} of {preview.total} people.
-                {preview.sample.length > 0 && (
-                  <>
-                    {' '}
-                    For example: {preview.sample.map((s) => s.displayName).join(', ')}.
-                  </>
-                )}
-                {preview.matched === 0 && ' Nobody will see this product.'}
+                Visible to {preview.matched} of {preview.total} people
+                {preview.sample.length > 0 &&
+                  `: ${preview.sample.map((s) => s.displayName).join(', ')}`}
               </Alert>
             )}
           </div>

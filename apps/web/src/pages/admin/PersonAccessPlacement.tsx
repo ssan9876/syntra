@@ -81,7 +81,7 @@ export function Placement({
       await api(base, { method: 'DELETE' });
       // Nothing moves now. The next run computes the rule's answer and
       // proposes the move, in a plan somebody reviews.
-      setNote(`${targetName} will move this account back to where the rule puts it on its next run.`);
+      setNote(`${targetName} moves it back on its next run.`);
       reload();
     } catch (cause) {
       setProblem(
@@ -98,7 +98,7 @@ export function Placement({
     <div className="border-t border-border-subtle p-4">
       {placement === null ? (
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-muted">Placed by the rule.</span>
+          <StateBadge state="healthy">Placed by the rule</StateBadge>
           <Button variant="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
             Move
           </Button>

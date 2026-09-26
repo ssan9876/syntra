@@ -52,7 +52,7 @@ describe('ConditionGroupEditor', () => {
     const notNode: ConditionDraft = { kind: 'not', child: leaf('Finance') };
     render(<ConditionGroupEditor node={notNode} onChange={onChange} depth={0} />);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Remove NOT, keep the condition inside it' }),
+      screen.getByRole('button', { name: 'Remove NOT' }),
     );
     expect(onChange).toHaveBeenCalledWith(leaf('Finance'));
   });

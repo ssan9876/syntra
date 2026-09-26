@@ -72,8 +72,8 @@ describe('OnboardPersonPage', () => {
     await user.type(screen.getByLabelText('Login'), 'mokafor');
     await user.type(screen.getByLabelText('Email'), 'maya@acme.test');
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
-    expect(await screen.findByText(/Their Syntra login was created/)).toHaveTextContent(
-      failure === 'link' ? 'could not be linked' : 'created and linked',
+    expect(await screen.findByText(/Syntra login: created/)).toHaveTextContent(
+      failure === 'link' ? 'created, not linked' : 'created and linked',
     );
     expect(screen.getByRole('link', { name: 'Open saved person' })).toHaveAttribute('href', '/admin/people/p1');
     expect(screen.getByRole('link', { name: 'Open saved login' })).toHaveAttribute('href', '/admin/users/u1');
@@ -166,7 +166,7 @@ describe('OnboardPersonPage', () => {
 
     // Named, so nobody retypes a person who is already there and collides on
     // the external id next time.
-    expect(await screen.findByText(/Maya Okafor was created/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Maya Okafor: created/i)).toBeInTheDocument();
     expect(
       screen.getByText(/contract sequence 1 already exists/i),
     ).toBeInTheDocument();
@@ -448,7 +448,7 @@ describe('OnboardPersonPage', () => {
     await user.click(screen.getByRole('button', { name: 'Add someone' }));
 
     expect(await screen.findByText(/external id already exists/i)).toBeInTheDocument();
-    expect(screen.queryByText(/was created/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/: created/i)).not.toBeInTheDocument();
   });
 });
 

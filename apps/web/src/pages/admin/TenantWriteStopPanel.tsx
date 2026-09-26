@@ -25,7 +25,7 @@ export function TenantWriteStopPanel() {
   if (!data) return null;
   return <ExternalWriteStopPanel
     title="Tenant-wide external writes"
-    stoppedTitle="All provisioning writes are stopped for every target in this tenant"
+    stoppedTitle="Provisioning writes stopped for every target"
     state={{ pausedAt: data.pausedAt ?? null, pauseReason: data.pauseReason ?? null, pauseExpiresAt: data.pauseExpiresAt ?? null }}
     basePath="/api/admin/provision"
     onChanged={reload}

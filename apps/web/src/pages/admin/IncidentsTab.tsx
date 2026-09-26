@@ -51,7 +51,6 @@ export function IncidentsTab() {
   );
 
   const incidents = data?.incidents ?? [];
-  const critical = incidents.filter((i) => i.severity === 'critical').length;
   // Work waiting for a decision, beside what is broken. Read separately: it
   // is gated per section on the viewer's own permissions, not on audit.read,
   // and a failure to read it must not hide the incidents.
@@ -83,12 +82,10 @@ export function IncidentsTab() {
                       <p className="mt-1 max-w-[68ch] text-muted">The plan would {run.planned.replace(/^would /, '')}.</p>
                     )}
                     <p className="mt-0.5 text-sm text-muted">
-                      Planned {new Date(run.startedAt).toLocaleString()}.{' '}
-                      {run.status === 'blocked' && run.requiresConfirmation
-                        ? 'Scheduled runs and onboardings on this target wait until it is confirmed or cancelled.'
-                        : run.status === 'blocked'
-                          ? 'Nobody can confirm it; the next run replaces it and checks again.'
-                          : 'Scheduled runs wait until it is applied; an onboarding, an offboarding or a run started by hand replaces it with a fresh plan.'}
+                      Planned {new Date(run.startedAt).toLocaleString()}
+                      {run.status === 'blocked' && run.requiresConfirmation && (
+                        <span className="text-warning"> · Blocks this target&rsquo;s runs</span>
+                      )}
                     </p>
                   </div>
                   <Link className="link shrink-0 text-sm" to={run.href}>
@@ -99,7 +96,7 @@ export function IncidentsTab() {
             ))}
             {moreRuns > 0 && (
               <li className="p-4 text-muted">
-                {moreRuns} more provisioning {moreRuns === 1 ? 'run is' : 'runs are'} waiting; see each target&rsquo;s runs.
+                {moreRuns} more provisioning {moreRuns === 1 ? 'run' : 'runs'} waiting
               </li>
             )}
             {held.map((item) => (
@@ -110,11 +107,6 @@ export function IncidentsTab() {
                       <StateBadge state="attention">Held action</StateBadge>
                       <span className="font-medium text-ink">{heldActionsSentence(item)}</span>
                     </div>
-                    <p className="mt-0.5 max-w-[68ch] text-sm text-muted">
-                      The run applied everything else and finished. These need a person&rsquo;s
-                      confirmation, which an automatic run never gives; approving one queues a
-                      run that applies it if it is still the same change.
-                    </p>
                   </div>
                   <Link className="link shrink-0 text-sm" to={item.href}>
                     Review and approve
@@ -157,9 +149,7 @@ export function IncidentsTab() {
             <div className="p-6">
               {/* The answer somebody wants most often. A dashboard that
                   manufactures a row to look busy is one people stop reading. */}
-              <Empty title="Nothing is broken">
-                No undelivered messages, no skipped runs, no failed syncs.
-              </Empty>
+              <Empty title="Nothing is broken" />
             </div>
           )}
 
@@ -198,12 +188,6 @@ export function IncidentsTab() {
         </div>
       )}
 
-      {critical > 0 && (
-        <p className="mt-3 text-sm text-muted">
-          {critical} of these {critical === 1 ? 'is' : 'are'} something somebody
-          believes is working.
-        </p>
-      )}
     </>
   );
 }

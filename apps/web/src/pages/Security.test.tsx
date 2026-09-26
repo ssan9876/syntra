@@ -138,7 +138,7 @@ describe('removing a security key says what it cost', () => {
 
     await userEvent.click(screen.getAllByRole('button', { name: 'Remove' })[1]!);
     expect(
-      await screen.findByText(/4 unused recovery codes stopped working with it/),
+      await screen.findByText(/4 unused recovery codes stopped working/),
     ).toBeInTheDocument();
   });
 

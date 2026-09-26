@@ -138,10 +138,7 @@ export function ApplicationSso({
   if (!hasSaml && !hasOidc) {
     return (
       <Panel title="Single sign-on">
-        <div className="p-4 text-muted">
-          This application has no SAML or OpenID Connect configuration. Add one
-          from the catalog, or register it against the API.
-        </div>
+        <div className="p-4 text-muted">No SAML or OpenID Connect configuration</div>
       </Panel>
     );
   }
@@ -225,7 +222,7 @@ const sameLines = (a: string, b: string) =>
  */
 const wildcardWarning = (value: string) =>
   value.includes('*')
-    ? 'Matched exactly: a * is taken literally, not as a wildcard.'
+    ? 'No wildcards: * is matched literally.'
     : undefined;
 
 function SamlPanel({
@@ -300,8 +297,7 @@ function SamlPanel({
       const nextLaunchUrl = form.launchUrl.trim();
       if (nextLaunchUrl !== initial.launchUrl && nextLaunchUrl === '') {
         setErrors({
-          launchUrl:
-            "A launch address can be changed but not removed. Enter the application's SSO start page.",
+          launchUrl: 'A launch address cannot be removed.',
         });
         return;
       }
@@ -389,11 +385,7 @@ function SamlPanel({
         ),
       });
       setMetadata('');
-      toast({
-        tone: 'success',
-        title: 'Metadata imported',
-        body: 'The fields now show what the metadata said.',
-      });
+      toast({ tone: 'success', title: 'Metadata imported' });
       onSaved();
     } catch (cause) {
       refuse(cause);
@@ -523,13 +515,20 @@ function SamlPanel({
             />
             {form.wsFedEnabled && (
               <div className="sm:col-span-2">
-                <Alert>
-                  <p>
-                    Point the application at{' '}
-                    <code>{`${window.location.origin}/saml/wsfed`}</code> with{' '}
-                    <code>wtrealm={form.spEntityId || 'your entity ID'}</code>.
-                  </p>
-                </Alert>
+                <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-muted">WS-Federation endpoint</dt>
+                    <dd>
+                      <Identifier value={`${window.location.origin}/saml/wsfed`} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted">wtrealm</dt>
+                    <dd>
+                      {form.spEntityId ? <Identifier value={form.spEntityId} /> : '—'}
+                    </dd>
+                  </div>
+                </dl>
               </div>
             )}
             <Field
@@ -552,17 +551,15 @@ function SamlPanel({
             */}
             <Field
               name="launchUrl"
-              label="Launch address (the application's SSO start page)"
+              label="Launch address (SSO start page)"
               value={form.launchUrl}
               onChange={(v) => set('launchUrl', v)}
               className="sm:col-span-2"
               error={errors.launchUrl}
               warning={
-                form.allowIdpInitiated
-                  ? undefined
-                  : form.launchUrl.trim() === ''
-                    ? 'Sign-in started from Syntra is off, so the portal tile opens this address — and it is empty, so the tile cannot open this application. Enter the page that starts single sign-on at the application, or allow sign-in started from Syntra.'
-                    : "Sign-in started from Syntra is off, so the portal tile opens this address. It should be the application's SSO start page, which sends the user back here to sign in."
+                !form.allowIdpInitiated && form.launchUrl.trim() === ''
+                  ? 'Empty: the portal tile cannot open this application.'
+                  : undefined
               }
             />
           </FormSection>
@@ -736,7 +733,7 @@ function OidcPanel({
         {secret && (
           <Alert tone="warning" title="New client secret">
             <code className="mt-1 block break-all font-mono text-sm">{secret}</code>
-            Paste it into the application now. It is not shown again.
+            Shown once — copy it now.
           </Alert>
         )}
 
@@ -805,7 +802,7 @@ function OidcPanel({
             warning={
               // Only while the box is ticked. Off, nothing is about to break.
               form.rotateSecret
-                ? 'The current secret stops working the moment this is saved.'
+                ? 'The current secret stops working on save.'
                 : undefined
             }
           />

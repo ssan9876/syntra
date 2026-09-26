@@ -9,6 +9,8 @@ import {
   Field,
   FormActions,
   FormSection,
+  Metric,
+  MetricRow,
   Panel,
   SkeletonRows,
   StateBadge,
@@ -617,61 +619,42 @@ function BusinessRulesEditor() {
         {problem && <Alert tone="danger">{problem}</Alert>}
 
         {/*
-          The union half is true under both modes. The reassurance is not.
-          `remitFor` is every entitlement named by an ENABLED rule for this
-          target, and under `authoritative` `reconcile.ts` proposes revoking an
-          in-remit entitlement from every holder Provision did not grant it to.
-          So on an authoritative target, naming a group in a new rule is what
-          takes it away from everybody who holds it for some other reason —
-          which is the opposite of what a permanent banner saying "adding a rule
-          never removes access" prepares somebody for.
+          Only while it applies. `remitFor` is every entitlement named by an
+          ENABLED rule for this target, and under `authoritative`
+          `reconcile.ts` proposes revoking an in-remit entitlement from every
+          holder Provision did not grant it to — so naming a group in a new
+          rule takes it away from everybody who holds it for another reason.
         */}
-        <Alert tone={authoritative ? 'warning' : 'info'}>
-          A rule is evaluated against each of a person&apos;s active contracts
-          independently and the results are unioned, so a person holding two jobs
-          gets what either job grants.{' '}
-          {authoritative
-            ? 'This target is authoritative, so adding a rule can also remove access: naming an entitlement brings it into Provision’s remit, and the next run proposes revoking it from everybody holding it that Provision did not grant it to. Preview the impact before saving.'
-            : 'This target is additive, so adding a rule never removes access: Provision revokes only what it granted, and anything else it finds is reported as drift and left alone.'}
-        </Alert>
+        {authoritative && (
+          <Alert tone="warning">
+            Authoritative target: adding a rule can also remove access.
+          </Alert>
+        )}
 
         {pending && (
           <Alert
             tone="danger"
             title={`Delete “${pending.rule.name}”?`}
           >
-            <p>
-              Deleting a rule does not only stop it granting. The next run
-              revokes every entitlement this rule granted, from everybody it
-              granted it to — a grant Provision made stays Provision&apos;s to
-              take back even once the rule that asked for it is gone.
-            </p>
-            {pending.impact && (
-              // One string rather than numbers wrapped in `<strong>`: this is
-              // the sentence somebody has to read before pressing a red button,
-              // and it must be findable as one sentence.
-              <p className="mt-2 font-semibold">
-                {`${pending.impact.wouldRevoke} holding${
-                  pending.impact.wouldRevoke === 1 ? '' : 's'
-                } would be taken away, from the ${
-                  pending.impact.matchedPersons
-                } of ${pending.impact.totalPersons} persons this rule matches.`}
-              </p>
-            )}
-            {pending.impactProblem && (
-              <p className="mt-2">
-                What that would cost could not be worked out —{' '}
-                {pending.impactProblem}. Keep the rule and try Delete again
-                to obtain a fresh impact before removing it.
-              </p>
-            )}
-            {pending.rule.grantsAccount && (
-              <p className="mt-2">
-                This rule also grants an account. Anybody it matches who is
-                matched by no other account-granting rule walks the
-                deprovisioning ladder on the next run.
-              </p>
-            )}
+            <ul className="list-disc space-y-1 pl-5">
+              {pending.impact && (
+                // One string rather than numbers wrapped in `<strong>`: it
+                // must be findable as one line.
+                <li className="font-semibold">
+                  {`${pending.impact.wouldRevoke} holding${
+                    pending.impact.wouldRevoke === 1 ? '' : 's'
+                  } would be taken away (${pending.impact.matchedPersons} of ${
+                    pending.impact.totalPersons
+                  } persons matched)`}
+                </li>
+              )}
+              {pending.impactProblem && (
+                <li>Impact could not be worked out — {pending.impactProblem}</li>
+              )}
+              {pending.rule.grantsAccount && (
+                <li>Grants an account — people only it matches are deprovisioned</li>
+              )}
+            </ul>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button
                 variant="danger"
@@ -692,10 +675,7 @@ function BusinessRulesEditor() {
           {loading && <SkeletonRows rows={3} cols={2} />}
           {!loading && rules.length === 0 ? (
             <div className="p-6">
-              <Empty title="No rules yet">
-                Until a rule matches somebody, this target proposes nothing at
-                all.
-              </Empty>
+              <Empty title="No rules yet" />
             </div>
           ) : loading ? null : (
             <ul>
@@ -821,11 +801,7 @@ function BusinessRulesEditor() {
                 // talks to a domain controller for no reason.
                 <p className="text-muted">Reading the entitlement catalog…</p>
               ) : entitlements.length === 0 ? (
-                <p className="text-muted">
-                  This target&apos;s entitlement catalog is empty. Refresh it
-                  from the target, with the button at the top of this page,
-                  before a rule can name anything.
-                </p>
+                <p className="text-muted">The entitlement catalog is empty.</p>
               ) : (
                 <div className="space-y-2">
                   <Field
@@ -875,9 +851,7 @@ function BusinessRulesEditor() {
                               ) : null}
                               {entitlement.status !== 'present' && (
                                 <span className="ml-2 text-danger">
-                                  ({entitlement.status} — a rule naming it makes
-                                  every person it is evaluated against
-                                  unprocessable)
+                                  ({entitlement.status} — matched persons become unprocessable)
                                 </span>
                               )}
                             </>
@@ -906,11 +880,6 @@ function BusinessRulesEditor() {
             }
           >
             <div className="sm:col-span-2">
-              {impactStale && !impact && (
-                <p className="text-sm text-warning" role="status">
-                  The rule changed after the last preview. Preview again to see what it would do.
-                </p>
-              )}
               {impact && (
                 <div className="rounded-panel border border-border-subtle p-4">
                   {/* A rule whose blast radius is only visible after it is saved
@@ -919,35 +888,25 @@ function BusinessRulesEditor() {
                       empties a rule's entitlement list revokes everything that
                       rule ever granted, and that is the change most likely to be
                       made without meaning it. */}
-                  <p className="text-ink">
-                    This rule matches{' '}
-                    <strong className="font-semibold tabular-nums">
-                      {impact.matchedPersons}
-                    </strong>{' '}
-                    of {impact.totalPersons} persons.
-                  </p>
-                  <p className="mt-2 text-ink">
-                    Saving it would grant{' '}
-                    <strong className="font-semibold tabular-nums">
-                      {impact.wouldGrant}
-                    </strong>{' '}
-                    entitlement{impact.wouldGrant === 1 ? '' : 's'} and revoke{' '}
-                    <strong className="font-semibold tabular-nums">
-                      {impact.wouldRevoke}
-                    </strong>
-                    .
-                  </p>
+                  <MetricRow>
+                    <Metric
+                      label="Persons matched"
+                      value={`${impact.matchedPersons} of ${impact.totalPersons}`}
+                    />
+                    <Metric label="Would grant" value={impact.wouldGrant} />
+                    <Metric
+                      label="Would revoke"
+                      value={impact.wouldRevoke}
+                      tone="danger"
+                      quietWhenZero
+                    />
+                  </MetricRow>
                   {impact.wouldRevoke > 0 && (
                     <div className="mt-3">
-                      <Alert
-                        tone="warning"
-                        title={`${impact.wouldRevoke} holding${
+                      <Alert tone="warning">
+                        {`${impact.wouldRevoke} holding${
                           impact.wouldRevoke === 1 ? '' : 's'
                         } would be taken away`}
-                      >
-                        Revocations are what an edit to an existing rule usually
-                        does without meaning to. Removing an entitlement from a
-                        rule revokes it from everybody the rule granted it to.
                       </Alert>
                     </div>
                   )}

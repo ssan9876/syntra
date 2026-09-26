@@ -233,7 +233,7 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // one item resolved to nobody. Jo cannot review Jo's own membership of
   // Nurses, so that item has no reviewer and the screen says so instead of
   // quietly counting it as done.
-  await expect(page.getByText(/item\(s\) have no reviewer and no fallback/)).toBeVisible();
+  await expect(page.getByText(/item\(s\) have no reviewer or fallback/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Compute the revocation batch' }).click();
   await page.getByRole('link', { name: 'Open the batch' }).click();
@@ -248,7 +248,6 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   await expect(
     page.getByRole('alert').filter({ hasText: 'Nothing here has happened yet' }),
   ).toBeVisible();
-  await expect(page.getByText('This is the last point at which a mistake costs nothing.')).toBeVisible();
 });
 
 test('the segregation-of-duties screen refuses to be written over two groups', async ({ page }) => {
@@ -267,6 +266,6 @@ test('the segregation-of-duties screen refuses to be written over two groups', a
   await expect(page.getByLabel('Business function A')).toBeVisible();
   await expect(page.getByLabel('Business function B')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Show me who this would flag, before I save it' }),
+    page.getByRole('button', { name: 'Preview who this flags' }),
   ).toBeDisabled();
 });
