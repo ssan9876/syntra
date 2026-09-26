@@ -182,6 +182,7 @@ export * from './access/application-delete.js';
 export * from './access/catalog/index.js';
 export * from './access/assignment-service.js';
 export * from './access/resolve.js';
+export * from './access/effective-org-unit.js';
 export * from './access/claims/types.js';
 export * from './access/claims/resolve.js';
 export * from './access/claims/collect.js';

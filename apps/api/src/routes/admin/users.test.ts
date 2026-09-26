@@ -432,6 +432,54 @@ describe('org unit administration', () => {
  * to do with the account being looked at.
  */
 describe('GET /api/admin/users/:id', () => {
+  it('names the org unit app access resolves through, and whether it was inherited', async () => {
+    // The account's own unit is empty on a real install; its person's is not.
+    // Without this the screen says "no unit" for a login that is plainly
+    // getting that unit's applications.
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    const cookie = await authCookie('admin');
+
+    const { inherited, own } = await withTenant(ctx.tenantId, async (tx) => {
+      const it_ = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'IT' } });
+      const ops = await tx.orgUnit.create({ data: { tenantId: ctx.tenantId, name: 'Ops' } });
+      const person = await createPerson(tx, { givenName: 'Maya', familyName: 'Okafor' });
+      await tx.person.update({ where: { id: person.id }, data: { orgUnitId: it_.id } });
+      const inherited = await createUser(tx, {
+        login: 'mokafor',
+        email: 'maya@acme.test',
+        displayName: 'Maya Okafor',
+      });
+      const own = await createUser(tx, {
+        login: 'mokafor-ops',
+        email: 'maya.ops@acme.test',
+        displayName: 'Maya Okafor (ops)',
+        orgUnitId: ops.id,
+      });
+      await tx.user.updateMany({
+        where: { id: { in: [inherited.id, own.id] } },
+        data: { personId: person.id },
+      });
+      return { inherited, own };
+    });
+
+    const a = (await get(`/api/admin/users/${inherited.id}`, cookie)).json();
+    expect(a.orgUnitId).toBeNull();
+    expect(a.effectiveOrgUnit).toMatchObject({ name: 'IT', source: 'person' });
+
+    const b = (await get(`/api/admin/users/${own.id}`, cookie)).json();
+    expect(b.effectiveOrgUnit).toMatchObject({ name: 'Ops', source: 'account' });
+
+    const list = (await get('/api/admin/users?q=mokafor', cookie)).json();
+    const byLogin = new Map(
+      (list.users as { login: string; effectiveOrgUnit: unknown }[]).map((u) => [
+        u.login,
+        u.effectiveOrgUnit,
+      ]),
+    );
+    expect(byLogin.get('mokafor')).toMatchObject({ name: 'IT', source: 'person' });
+    expect(byLogin.get('mokafor-ops')).toMatchObject({ name: 'Ops', source: 'account' });
+  });
+
   it('returns the account with its lock state and the person behind it', async () => {
     await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
     const cookie = await authCookie('admin');

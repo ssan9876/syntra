@@ -4,6 +4,7 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import {
   ProductConfigurationError,
+  allSubjectAudienceFacts,
   automateSettings,
   createProduct,
   findVisibleProduct,
@@ -346,6 +347,38 @@ describe('subjectAudienceFacts', () => {
       subjectAudienceFacts(tx, annaPersonId, NOW),
     );
     expect(facts.entitlementIds).toContain(entitlementId);
+  });
+
+  it("takes a login with no unit of its own from the person's unit, in both readers", async () => {
+    // `user.orgUnit` in an audience and an application assigned to the same
+    // unit must agree about who is in it; app access follows the person's
+    // unit when the login has none, so the audience does too. Checked on the
+    // per-person reader AND the tenant-wide one, which must not drift.
+    const { itId, headId } = await withTenant(tenantId, async (tx) => {
+      const head = await tx.orgUnit.create({ data: { tenantId, name: 'Head Office' } });
+      const it_ = await tx.orgUnit.create({
+        data: { tenantId, name: 'IT', parentId: head.id },
+      });
+      await tx.person.update({ where: { id: annaPersonId }, data: { orgUnitId: it_.id } });
+      await tx.user.create({
+        data: {
+          tenantId,
+          login: 'anna',
+          email: 'anna@acme.test',
+          displayName: 'Anna Novak',
+          personId: annaPersonId,
+        },
+      });
+      return { itId: it_.id, headId: head.id };
+    });
+
+    const one = await withTenant(tenantId, (tx) => subjectAudienceFacts(tx, annaPersonId, NOW));
+    expect([...one.orgUnitChainIds].sort()).toEqual([itId, headId].sort());
+
+    const all = await withTenant(tenantId, (tx) => allSubjectAudienceFacts(tx, NOW));
+    expect([...all.get(annaPersonId)!.orgUnitChainIds].sort()).toEqual([itId, headId].sort());
+    // Bo has no login at all, so there is nothing to inherit through.
+    expect(all.get(boPersonId)!.orgUnitChainIds).toEqual([]);
   });
 });
 

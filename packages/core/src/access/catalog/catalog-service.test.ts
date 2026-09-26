@@ -188,6 +188,23 @@ describe('createFromCatalog', () => {
     expect(client.clientCredentialsEnabled).toBe(false);
   });
 
+  it("launches Snipe-IT at its SSO start page, since IdP-initiated sign-in is off", async () => {
+    // The tile of a SAML application with IdP-initiated sign-in off opens the
+    // launch address and relies on it to send an AuthnRequest. Snipe-IT's bare
+    // host shows its own password form; /login/saml redirects to the IdP.
+    const created = await withTenant(tenantId, (tx) =>
+      createFromCatalog(tx, { key: 'snipe-it', variables: { host: 'assets.acme.test' } }),
+    );
+    const application = await withTenant(tenantId, (tx) =>
+      tx.application.findUniqueOrThrow({ where: { id: created.applicationId } }),
+    );
+    expect(application.launchUrl).toBe('https://assets.acme.test/login/saml');
+    const config = await withTenant(tenantId, (tx) =>
+      tx.samlConfig.findUniqueOrThrow({ where: { applicationId: created.applicationId } }),
+    );
+    expect(config.allowIdpInitiated).toBe(false);
+  });
+
   it('gives a second instance of one application its own slug', async () => {
     await withTenant(tenantId, (tx) =>
       createFromCatalog(tx, { key: 'snipe-it', variables: { host: 'assets.acme.test' } }),

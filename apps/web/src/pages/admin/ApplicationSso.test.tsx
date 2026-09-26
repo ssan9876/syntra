@@ -77,6 +77,76 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * With IdP-initiated sign-in off the portal tile opens the application's
+ * launch address, so the panel shows it beside that switch and says so.
+ */
+describe('ApplicationSso launch address', () => {
+  const renderWith = (launchUrl: string | null, onApplicationSaved = () => {}) =>
+    render(
+      <MemoryRouter>
+        <ApplicationSso
+          applicationId="app-1"
+          launchUrl={launchUrl}
+          onApplicationSaved={onApplicationSaved}
+        />
+      </MemoryRouter>,
+    );
+
+  it('warns when IdP-initiated sign-in is off and there is no launch address', async () => {
+    mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
+    renderWith(null);
+    await screen.findByLabelText(/launch address/i);
+    expect(screen.getByText(/it is empty, so the tile cannot open this application/i)).toBeInTheDocument();
+  });
+
+  it('explains that the tile opens the address when one is set', async () => {
+    mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
+    renderWith('https://acme.slack.com');
+    expect(await screen.findByDisplayValue('https://acme.slack.com')).toBeInTheDocument();
+    expect(screen.getByText(/the portal tile opens this address\. It should be the application's SSO start page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/it is empty/i)).not.toBeInTheDocument();
+  });
+
+  it('says nothing about it when sign-in starts at Syntra', async () => {
+    mockApi({ saml: samlConfig({ allowIdpInitiated: true }) });
+    renderWith(null);
+    await screen.findByLabelText(/launch address/i);
+    expect(screen.queryByText(/the portal tile opens this address/i)).not.toBeInTheDocument();
+  });
+
+  it('saves a changed launch address on the application, after the SAML settings', async () => {
+    const user = userEvent.setup();
+    const saved = vi.fn();
+    const sent = mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
+    renderWith(null, saved);
+
+    await user.type(await screen.findByLabelText(/launch address/i), 'https://acme.slack.com/sso');
+    await user.click(screen.getByRole('button', { name: /save saml settings/i }));
+
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[0]!.url).toContain('/api/admin/applications/app-1/saml');
+    expect(sent[1]).toMatchObject({
+      url: '/api/admin/applications/app-1',
+      method: 'PUT',
+      body: { launchUrl: 'https://acme.slack.com/sso' },
+    });
+    await waitFor(() => expect(saved).toHaveBeenCalled());
+  });
+
+  it('refuses to empty a launch address rather than pretending to', async () => {
+    const user = userEvent.setup();
+    const sent = mockApi({ saml: samlConfig({ allowIdpInitiated: false }) });
+    renderWith('https://acme.slack.com');
+
+    await user.clear(await screen.findByDisplayValue('https://acme.slack.com'));
+    await user.click(screen.getByRole('button', { name: /save saml settings/i }));
+
+    expect(await screen.findAllByText(/can be changed but not removed/i)).not.toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+});
+
 describe('ApplicationSso', () => {
   it('says so plainly when the application uses neither protocol', async () => {
     mockApi({});

@@ -567,7 +567,10 @@ was thrown away.
 the copy. A deactivated group is left out of the applications a user resolves
 to and out of the group names asserted into SAML assertions and OIDC tokens;
 a deactivated org unit stops granting the applications assigned to it and
-stops any administrative role scoped to it from carrying authority.
+stops any administrative role scoped to it from carrying authority. A
+deactivated person stops passing their org unit down to a linked login that
+has none of its own, so an assignment on that unit no longer reaches the login
+through them.
 Deactivation without that is a control that reports success and revokes
 nothing.
 

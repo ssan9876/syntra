@@ -196,6 +196,23 @@ describe('previewCampaignScope', () => {
     expect(preview.sample[0]!.resourceName).toBe('Finance-Payments');
   });
 
+  it("scopes by org unit through the person's unit when the login has none", async () => {
+    // The seeded logins carry no unit, as on a real install where people are
+    // placed and logins are not. An org-scoped campaign read only
+    // `User.orgUnitId` and so covered nobody — and an empty review reads as
+    // a clean one.
+    const { finance, sales } = await withTenant(tenantId, async (tx) => {
+      const finance = await tx.orgUnit.create({ data: { tenantId, name: 'Finance' } });
+      const sales = await tx.orgUnit.create({ data: { tenantId, name: 'Sales' } });
+      await tx.person.update({ where: { id: subjectPersonId }, data: { orgUnitId: finance.id } });
+      return { finance: finance.id, sales: sales.id };
+    });
+    await buildSnapshot(tenantId, { now: NOW });
+    const scope = (orgUnitIds: string[]) => ({ resourceKinds: ['targetEntitlement'], orgUnitIds });
+    expect((await previewCampaignScope(tenantId, scope([finance]))).holdings).toBe(1);
+    expect((await previewCampaignScope(tenantId, scope([sales]))).holdings).toBe(0);
+  });
+
   it('covers nothing for a kind nobody holds', async () => {
     await buildSnapshot(tenantId, { now: NOW });
     expect(

@@ -489,7 +489,9 @@ model Person {
   /// container that unit is materialised at on each target.
   ///
   /// Separate from `User.orgUnitId`, which stays as it is and keeps feeding
-  /// access resolution. Placement is a property of a PERSON: in a
+  /// access resolution. Access falls back to THIS column for a login whose
+  /// own unit is null (`effectiveOrgUnit` in packages/core/src/access), so an
+  /// application assigned to a unit reaches the people placed in it. Placement is a property of a PERSON: in a
   /// Syntra-front-door deployment a provisioned person routinely has no User
   /// at all -- `passwordSource` is 'local' or 'upstream' and neither is
   /// satisfied by an account Provision just wrote -- so hanging placement off

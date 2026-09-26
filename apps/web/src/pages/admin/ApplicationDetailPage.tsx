@@ -59,6 +59,7 @@ export function ApplicationDetailPage() {
       name: string;
       status?: string;
       type?: string;
+      launchUrl?: string | null;
       icon?: ApplicationIconView;
     }[];
   }>('/api/admin/applications');
@@ -239,7 +240,13 @@ export function ApplicationDetailPage() {
       */}
       {id && (
         <div className="mt-4 space-y-4">
-          <ApplicationSso applicationId={id} />
+          <ApplicationSso
+            applicationId={id}
+            // Undefined until the application is read, so the SAML panel does
+            // not warn about an empty launch address it simply has not seen.
+            launchUrl={application ? (application.launchUrl ?? null) : undefined}
+            onApplicationSaved={reloadApplications}
+          />
         </div>
       )}
 

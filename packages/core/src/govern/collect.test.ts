@@ -55,6 +55,41 @@ describe('resolveApplicationPaths', () => {
     expect(paths[0]!.chain.map((c) => c.name)).toEqual(['Care', 'North region', 'Head Office']);
   });
 
+  it("follows a login with no unit to its person's unit, as resolve.ts does", async () => {
+    // The access review and the portal must agree: a login that sees the tile
+    // because its person is in IT holds the application, and says why.
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const root = await tx.orgUnit.create({ data: { tenantId, name: 'Head Office' } });
+      const it_ = await tx.orgUnit.create({ data: { tenantId, name: 'IT', parentId: root.id } });
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Anna', familyName: 'Novak', orgUnitId: it_.id },
+      });
+      const leaver = await tx.person.create({
+        data: { tenantId, givenName: 'Lea', familyName: 'Ver', orgUnitId: it_.id, status: 'inactive' },
+      });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'anna', email: 'a@acme.test', displayName: 'A', personId: person.id },
+      });
+      const gone = await tx.user.create({
+        data: { tenantId, login: 'lea', email: 'l@acme.test', displayName: 'L', personId: leaver.id },
+      });
+      const app = await tx.application.create({ data: { tenantId, name: 'Stats', slug: 'stats' } });
+      await tx.appAssignment.create({
+        data: { tenantId, applicationId: app.id, subjectType: 'orgUnit', orgUnitId: root.id },
+      });
+      return { userId: user.id, goneId: gone.id, applicationId: app.id };
+    });
+
+    const paths = await withTenant(tenantId, (tx) => resolveApplicationPaths(tx));
+    expect(paths.map((p) => p.userId)).toEqual([seeded.userId]);
+    expect(paths[0]!.chain.map((c) => c.name)).toEqual(['IT', 'Head Office']);
+
+    for (const userId of [seeded.userId, seeded.goneId]) {
+      const ids = await withTenant(tenantId, (tx) => resolveApplicationIdsForUser(tx, userId));
+      expect(ids.has(seeded.applicationId)).toBe(userId === seeded.userId);
+    }
+  });
+
   it('agrees with resolveApplicationIdsForUser about WHICH applications, on the same data', async () => {
     // The paths resolver is a second reader of the same rule, so the two must
     // not be allowed to drift. This is the assertion that catches it — and it

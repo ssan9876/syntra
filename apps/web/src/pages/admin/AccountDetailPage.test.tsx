@@ -104,6 +104,35 @@ describe('AccountDetailPage', () => {
     expect(screen.getByText('j@acme.test')).toBeInTheDocument();
   });
 
+  it("says when the org unit is inherited from the linked person", async () => {
+    // App access follows the person's unit when the account has none, and an
+    // administrator reading "None" would have no way to see why IT's
+    // applications apply.
+    mockApi({
+      ...ACCOUNT,
+      orgUnitId: null,
+      effectiveOrgUnit: { id: 'ou1', name: 'IT', source: 'person' },
+    });
+    renderPage();
+    expect(await screen.findByText('IT (from the linked person)')).toBeInTheDocument();
+  });
+
+  it("shows the account's own org unit plainly, and None when there is none", async () => {
+    mockApi({
+      ...ACCOUNT,
+      orgUnitId: 'ou2',
+      effectiveOrgUnit: { id: 'ou2', name: 'Ops', source: 'account' },
+    });
+    const { unmount } = renderPage();
+    expect(await screen.findByText('Ops')).toBeInTheDocument();
+    unmount();
+
+    mockApi({ ...ACCOUNT, orgUnitId: null, effectiveOrgUnit: null });
+    renderPage();
+    await screen.findByText('jdoe');
+    expect(screen.getByText('Org unit').parentElement).toHaveTextContent('None');
+  });
+
   /**
    * The cross-link that replaces the paragraph. Users is one screen showing two
    * subjects, and a person named here with no way to reach them would put the

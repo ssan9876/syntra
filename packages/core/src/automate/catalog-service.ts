@@ -7,6 +7,7 @@ import { assertReferenceInTenant } from '../tenant-reference.js';
 import { currentTenant } from '../tenant-context.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { activeContracts } from '../identity/contract-service.js';
+import { effectiveOrgUnit } from '../access/effective-org-unit.js';
 import type { ConditionFacts } from '../provision/condition.js';
 import {
   audienceAdmits,
@@ -353,7 +354,7 @@ export async function subjectAudienceFacts(
 ): Promise<SubjectAudienceFacts> {
   const person = await tx.person.findUnique({
     where: { id: personId },
-    select: { status: true },
+    select: { status: true, orgUnitId: true },
   });
   const contracts = await activeContracts(tx, personId, on);
   const users = await tx.user.findMany({
@@ -369,7 +370,13 @@ export async function subjectAudienceFacts(
       select: { groupId: true },
     });
     for (const membership of memberships) groupIds.add(membership.groupId);
-    for (const unit of await orgUnitChainFor(tx, user.orgUnitId)) {
+    // The login's EFFECTIVE unit — its own, else this person's — the same rule
+    // `resolveApplicationIdsForUser` applies, so `user.orgUnit` in an audience
+    // and an application assigned to the same unit agree about who is in it.
+    for (const unit of await orgUnitChainFor(
+      tx,
+      effectiveOrgUnit(user, person)?.orgUnitId ?? null,
+    )) {
       orgUnitChainIds.add(unit);
     }
   }
@@ -519,7 +526,9 @@ export async function allSubjectAudienceFacts(
   on: Date,
 ): Promise<Map<string, SubjectAudienceFacts>> {
   const persons = await tx.person.findMany({
-    select: { id: true, givenName: true, familyName: true, status: true },
+    // `orgUnitId` so a login's effective unit can be derived without an
+    // eighth query: see `effectiveOrgUnit`.
+    select: { id: true, givenName: true, familyName: true, status: true, orgUnitId: true },
     orderBy: [{ familyName: 'asc' }, { givenName: 'asc' }],
   });
   const contracts = await tx.contract.findMany({
@@ -592,7 +601,9 @@ export async function allSubjectAudienceFacts(
     const orgUnitChainIds = new Set<string>();
     for (const user of usersByPerson.get(person.id) ?? []) {
       for (const groupId of groupsByUser.get(user.id) ?? []) groupIds.add(groupId);
-      for (const unit of chainOf(user.orgUnitId)) orgUnitChainIds.add(unit);
+      for (const unit of chainOf(effectiveOrgUnit(user, person)?.orgUnitId ?? null)) {
+        orgUnitChainIds.add(unit);
+      }
     }
     out.set(person.id, {
       personStatus: person.status,
