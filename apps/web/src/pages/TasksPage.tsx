@@ -68,9 +68,6 @@ export function TasksPage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-8">
       <h1 className="text-xl font-semibold text-ink">Tasks</h1>
-      <p className="mt-1 max-w-[68ch] text-muted">
-        Things you can do here without needing an administrator.
-      </p>
 
       {error && (
         <div className="mt-4">
@@ -86,10 +83,7 @@ export function TasksPage() {
 
       {!loading && !error && tasks.length === 0 && (
         <div className="mt-6">
-          <Empty title="Nothing has been delegated to you">
-            When somebody gives your team a task — unlocking an account, sending
-            a reset link — it appears here.
-          </Empty>
+          <Empty title="Nothing has been delegated to you" />
         </div>
       )}
 

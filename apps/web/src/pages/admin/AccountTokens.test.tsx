@@ -109,7 +109,7 @@ describe('AccountTokens', () => {
     await userEvent.click(screen.getByRole('button', { name: /issue/i }));
 
     expect(await screen.findByText('syntra_pat_abcdef')).toBeInTheDocument();
-    expect(screen.getByText(/not shown again/i)).toBeInTheDocument();
+    expect(screen.getByText(/shown once/i)).toBeInTheDocument();
   });
 
   it('offers no issue or revoke control without token.manage', async () => {

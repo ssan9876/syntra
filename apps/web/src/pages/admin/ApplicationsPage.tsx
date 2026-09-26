@@ -125,9 +125,7 @@ function CatalogPicker({
         <div className="space-y-4 p-4">
           {/* A warning, not a grey caption: this is the one moment the secret
               can still be copied, and the step after it throws it away. */}
-          <Alert tone="warning" title="The secret is not shown again">
-            Paste both into the application now.
-          </Alert>
+          <Alert tone="warning">Shown once — copy it now.</Alert>
           <dl>
             <dt className="mb-1.5 font-medium text-ink">Client ID</dt>
             <dd>
@@ -187,10 +185,6 @@ function CatalogPicker({
               required
             />
           ))}
-          {chosen.variables.length === 0 && (
-            <p className="text-muted">Nothing else is needed.</p>
-          )}
-
           {/* The vendor's own page. An entry is a convenience and that page
               is the authority, so it is one click away at the moment somebody
               might doubt a value. */}
@@ -444,7 +438,7 @@ export function ApplicationsPage() {
                   // Only once they have typed one. An empty field has nothing
                   // to warn about, and a permanent caption under an empty box
                   // is the hint this replaced.
-                  slug ? 'This appears in URLs and cannot be changed after the application is created.' : undefined
+                  slug ? 'Used in URLs; cannot be changed later' : undefined
                 }
                 required
                 error={slugError ?? formFields.slug}
@@ -502,9 +496,7 @@ export function ApplicationsPage() {
                 Add an application
               </Button>
             }
-          >
-            Add one to give people a tile in their portal.
-          </Empty>
+          />
         )}
 
         {!loading && data && data.applications.length > 0 && (

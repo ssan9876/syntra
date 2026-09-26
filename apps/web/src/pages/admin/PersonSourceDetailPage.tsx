@@ -513,9 +513,6 @@ export function PersonSourceDetailPage() {
               {draft.feedMode === 'snapshot' && (
                 <p className="text-sm text-warning">People missing from the file are treated as leavers.</p>
               )}
-              {draft.feedMode === 'delta' && (
-                <p className="text-sm text-muted">People missing from the file are left alone.</p>
-              )}
             </fieldset>
           </FormSection>
 
@@ -540,8 +537,7 @@ export function PersonSourceDetailPage() {
               */}
             {hostKey?.status === 'unknown' && (
               <div className="sm:col-span-2">
-                <Alert tone="warning">
-                  <p>This server presented a host key Syntra has not seen before.</p>
+                <Alert tone="warning" title="Unknown host key">
                   <code>{hostKey.fingerprint}</code>
                   <div className="mt-2">
                     <Button type="button" onClick={acceptHostKey} disabled={busy}>
@@ -559,12 +555,7 @@ export function PersonSourceDetailPage() {
               */}
             {hostKey?.status === 'mismatch' && (
               <div className="sm:col-span-2">
-                <Alert tone="danger">
-                  <p>
-                    This server presented a different host key from the one this source is
-                    pinned to. Either the server was rebuilt, or the connection is being
-                    intercepted.
-                  </p>
+                <Alert tone="danger" title="Host key changed — server rebuilt, or connection being intercepted">
                   <code>{hostKey.fingerprint}</code>
                 </Alert>
               </div>
@@ -633,9 +624,7 @@ export function PersonSourceDetailPage() {
                 {(mappedContractId === undefined || mappedContractId === '') && (
                   <div className="sm:col-span-2">
                     <Alert tone="warning">
-                      Without a contract id, contracts are matched by position — so two contracts
-                      arriving in a different order are rewritten into each other. Map one if the
-                      file carries it.
+                      No contract id mapped: contracts are matched by position.
                     </Alert>
                   </div>
                 )}

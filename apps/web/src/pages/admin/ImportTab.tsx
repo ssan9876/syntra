@@ -80,10 +80,12 @@ export function ImportTab() {
               >
                 Import
               </Button>
-              <span className="text-sm text-muted">
-                Required columns: externalId, givenName, familyName, sequence,
-                startDate
-              </span>
+              <dl className="flex flex-wrap gap-x-2 text-sm">
+                <dt className="text-muted">Required columns</dt>
+                <dd className="font-mono text-ink">
+                  externalId, givenName, familyName, sequence, startDate
+                </dd>
+              </dl>
             </div>
           </form>
         </Panel>
@@ -98,23 +100,20 @@ export function ImportTab() {
           </Alert>
         )}
 
-        {result && (
+        {result && result.errors.length > 0 && (
           <Alert
-            tone={result.errors.length > 0 ? 'warning' : 'info'}
-            title={
-              result.errors.length > 0
-                ? `${result.created} created, ${result.updated} updated, ${result.errors.length} rejected`
-                : `${result.created} created, ${result.updated} updated`
-            }
+            tone="warning"
+            title={`${result.created} created, ${result.updated} updated, ${result.errors.length} rejected`}
           >
-            {result.errors.length > 0 ? (
-              // A partial import that quietly drops rows is the worst outcome
-              // here: the operator would believe people were provisioned who
-              // were not. Every rejected line is named.
-              <RejectedLines lines={result.errors} />
-            ) : (
-              <span>Every row in the file was imported.</span>
-            )}
+            {/* A partial import that quietly drops rows is the worst outcome
+                here: the operator would believe people were provisioned who
+                were not. Every rejected line is named. */}
+            <RejectedLines lines={result.errors} />
+          </Alert>
+        )}
+        {result && result.errors.length === 0 && (
+          <Alert tone="success">
+            {`${result.created} created, ${result.updated} updated`}
           </Alert>
         )}
       </div>
@@ -129,9 +128,6 @@ function RejectedLines({
 }) {
   return (
     <>
-      <p className="text-ink">
-        These rows were not imported and need correcting:
-      </p>
       <ul className="mt-2 space-y-1">
         {lines.map((entry) => (
           <li key={`${entry.line}-${entry.message}`} className="text-ink">

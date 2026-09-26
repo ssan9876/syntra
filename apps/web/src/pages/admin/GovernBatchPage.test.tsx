@@ -106,7 +106,7 @@ describe('GovernBatchPage', () => {
     expect(within(dispatchable).queryByText('Cora Clark')).toBeNull();
 
     const changes = screen
-      .getByRole('heading', { name: '1 that require a change somewhere else' })
+      .getByRole('heading', { name: '1 not removed — require a change elsewhere' })
       .closest('section') as HTMLElement;
     expect(within(changes).getByText(/Cora Clark/)).toBeInTheDocument();
     expect(

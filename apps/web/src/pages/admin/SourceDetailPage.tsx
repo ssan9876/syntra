@@ -374,9 +374,7 @@ export function SourceDetailPage() {
         // Put the question again with the truth in it, rather than reporting a
         // failure the administrator cannot act on.
         setConfirmDelete(false);
-        setProblem(
-          `${cause.problem.detail ?? 'The numbers changed.'} Read them again below before deleting.`,
-        );
+        setProblem(cause.problem.detail ?? 'The numbers changed.');
         reload();
       } else {
         fail(cause, 'The source could not be deleted.');
@@ -712,38 +710,26 @@ export function SourceDetailPage() {
               {/* The counts before the button, in words. Deleting a source
                   revokes real access, and an administrator should read the
                   size of that before deciding, not discover it from a 409. */}
-              <p className="text-ink">
-                {ownsSomething ? (
-                  <>
-                    This source owns{' '}
-                    <strong className="font-semibold">
-                      {owned.users} {owned.users === 1 ? 'user' : 'users'}
-                    </strong>
-                    ,{' '}
-                    <strong className="font-semibold">
-                      {owned.groups} {owned.groups === 1 ? 'group' : 'groups'}
-                    </strong>{' '}
-                    and{' '}
-                    <strong className="font-semibold">
-                      {owned.orgUnits}{' '}
-                      {owned.orgUnits === 1
-                        ? 'organizational unit'
-                        : 'organizational units'}
-                    </strong>
-                    . Deleting it deactivates every one of those users and
-                    groups — they lose access — and detaches all of them from
-                    any source. Nothing is deleted from the directory and
-                    nothing is deleted here: the accounts stay listed, labelled
-                    inactive, and can be reactivated by hand.
-                  </>
-                ) : (
-                  <>
-                    This source owns no users, groups or organizational units,
-                    so deleting it deactivates nothing. Its runs and attribute
-                    mappings go with it.
-                  </>
-                )}
-              </p>
+              {ownsSomething ? (
+                <Alert
+                  tone="warning"
+                  title={
+                    `This source owns ${owned.users} ${owned.users === 1 ? 'user' : 'users'}, ` +
+                    `${owned.groups} ${owned.groups === 1 ? 'group' : 'groups'} and ` +
+                    `${owned.orgUnits} ${owned.orgUnits === 1 ? 'organizational unit' : 'organizational units'}`
+                  }
+                >
+                  <ul className="list-disc space-y-0.5 pl-5">
+                    <li>Deactivates every one of those users and groups</li>
+                    <li>Detaches all of them from any source</li>
+                    <li>Deletes nothing from the directory</li>
+                  </ul>
+                </Alert>
+              ) : (
+                <p className="text-ink">
+                  Owns no users, groups or organizational units.
+                </p>
+              )}
 
               {ownsSomething && (
                 <Check
