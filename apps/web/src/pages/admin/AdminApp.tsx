@@ -68,6 +68,7 @@ const LifecycleSimulationPage = page(() => import('./LifecycleSimulationPage.js'
 const LifecyclePolicyPage = page(() => import('./LifecyclePolicyPage.js'), 'LifecyclePolicyPage');
 const PrivacyPage = page(() => import('./PrivacyPage.js'), 'PrivacyPage');
 const PrivacyCasePage = page(() => import('./PrivacyCasePage.js'), 'PrivacyCasePage');
+const DashboardPage = page(() => import('./DashboardPage.js'), 'DashboardPage');
 
 /** Quiet, like the boot screen: most pages arrive before it is noticed. */
 function PageLoading() {
@@ -95,6 +96,7 @@ export function AdminApp() {
           <HeldChangePrompt />
           <Suspense fallback={<PageLoading />}>
           <Routes>
+            <Route index element={<DashboardPage />} />
             <Route path="users" element={<UsersPage />} />
             {/* Declared before `users/:id` so a reader meets the static path
                 first. React Router ranks static segments above dynamic ones on
@@ -212,7 +214,7 @@ export function AdminApp() {
             <Route path="webhooks" element={<Navigate to="/admin/settings?tab=webhooks" replace />} />
             <Route path="incidents" element={<Navigate to="/admin/activity?tab=attention" replace />} />
             <Route path="updates" element={<UpdatesPage />} />
-            <Route path="*" element={<Navigate to="/admin/users" replace />} />
+            <Route path="*" element={<Navigate to="/admin" replace />} />
           </Routes>
           </Suspense>
       </div>

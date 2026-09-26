@@ -70,7 +70,7 @@ describe('the roles screen', () => {
   it('lists each role with its holder count', async () => {
     mockApi();
     renderPage();
-    expect(await screen.findByText('Owner')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Owner/ })).toBeInTheDocument();
     expect(screen.getByText(/1 holder/)).toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe('the roles screen', () => {
   it('offers a catalogue permission the role does not hold, and grants it', async () => {
     const sent = mockApi();
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
 
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     const editor = screen.getByRole('group', { name: 'Permissions' });
@@ -121,7 +121,7 @@ describe('the roles screen', () => {
       ),
     });
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
 
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -137,7 +137,7 @@ describe('the roles screen', () => {
   it('does not offer Delete for a built-in role', async () => {
     mockApi();
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 
@@ -185,7 +185,7 @@ describe('the roles screen', () => {
     });
   });
 
-  it('says so when everybody already holds the role', async () => {
+  it('offers no grant when everybody already holds the role', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = String(input);
@@ -196,12 +196,11 @@ describe('the roles screen', () => {
     });
     renderPage();
 
-    await screen.findByText('Owner');
-    // Disabled with the reason beside it, rather than a control that opens
-    // onto an empty picker.
-    expect(
-      screen.getByText(/everybody who can sign in already holds it/i),
-    ).toBeInTheDocument();
+    await screen.findByRole('heading', { name: /Owner/ });
+    // No control that opens onto an empty picker.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Grant to someone' })).not.toBeInTheDocument(),
+    );
     expect(user).toBeTruthy();
   });
 });
@@ -352,7 +351,7 @@ describe('a role description', () => {
     const user = userEvent.setup();
     const sent = mockApi();
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
 
     await user.click(screen.getByRole('button', { name: 'Edit' }));
     const description = screen.getByLabelText('Description');
@@ -401,7 +400,7 @@ describe('when the caller cannot read the directory', () => {
   it('does not claim everybody already holds the role', async () => {
     forbid();
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
 
     await waitFor(() =>
       expect(
@@ -413,7 +412,7 @@ describe('when the caller cannot read the directory', () => {
   it('names the permission the picker needs, so it can be asked for', async () => {
     forbid();
     renderPage();
-    await screen.findByText('Owner');
+    await screen.findByRole('heading', { name: /Owner/ });
 
     // Named, not merely refused. The reader cannot grant `directory.read` to
     // themselves, but they cannot ask for a thing they cannot name either —
@@ -589,5 +588,38 @@ describe('granting within one org unit', () => {
     // No query at all: the path alone has always meant every scope, and a
     // tenant-wide holder has exactly one.
     expect(sent[0]!.url).not.toContain('scopeOrgUnitId');
+  });
+});
+
+describe('role presets', () => {
+  it('offers a preset not yet added, and adds it', async () => {
+    const user = userEvent.setup();
+    const sent: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if ((init?.method ?? 'GET') === 'POST') {
+        sent.push(url);
+        return Promise.resolve(json({ id: 'r9' }, 201));
+      }
+      if (url.includes('/roles/presets')) {
+        return Promise.resolve(
+          json({
+            presets: [
+              { key: 'auditor', name: 'Auditor', permissions: ['audit.read'] },
+              { key: 'owner-copy', name: 'Owner', permissions: [] },
+            ],
+          }),
+        );
+      }
+      if (url.includes('/api/admin/roles')) return Promise.resolve(json({ catalog: CATALOG, roles }));
+      if (url.includes('/api/admin/users')) return Promise.resolve(json({ users: USERS }));
+      return Promise.resolve(json({}));
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /Auditor/ }));
+    // A preset whose name is already a role is not offered again.
+    expect(screen.queryByRole('button', { name: /^Owner$/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(sent).toEqual(['/api/admin/roles/presets/auditor']));
   });
 });

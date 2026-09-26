@@ -73,7 +73,7 @@ export function AppShell({
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             {session?.mayElevate && (
               <Link
-                to={session.scope === 'admin' ? '/admin/users' : '/elevate'}
+                to={session.scope === 'admin' ? '/admin' : '/elevate'}
                 className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
               >
                 {t('shell.administration')}

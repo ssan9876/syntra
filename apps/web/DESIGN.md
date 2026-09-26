@@ -210,6 +210,16 @@ whose every item is hidden by permission takes its heading with it. Both are
 asserted in `AdminNav.test.tsx`, along with a ceiling of twenty links: past
 roughly that many a reader stops reading the rail and starts searching it.
 
+**Overview sits above the groups.** The console's front page belongs to none
+of them, so it is the rail's first link and not a group called "Home" holding
+one item. It is also where the console lands: `/admin`, not the Users list.
+
+**Groups fold.** Each group heading is a button; folded groups are remembered
+in the reader's browser and are only a convenience, so blocked storage means
+every group starts open. The group holding the current page cannot fold — a
+rail that hides where you are has stopped answering the one question it is
+for — and a folded group still shows the Employee work badge on its heading.
+
 ### Tabs are locations, not widgets
 
 A merged destination puts its views in a tab strip, and the selection lives in
@@ -344,6 +354,30 @@ whose definition is assumed is a figure a reader cannot use.
 
 `quietWhenZero` for an outcome that did not happen. A campaign with no blocked
 items should not have a red zero on it.
+
+### The overview
+
+`DashboardPage`. Four blocks, in the order an administrator arriving at 8:40
+needs them: **Needs you** (a grid of linked items — overdue and blocked work,
+write stops, outages, stale connector tests, locked and orphaned accounts —
+each with its count, state and destination, or one `Nothing waiting` badge),
+the figures row, **Connected systems** (every target and source with its
+`StateBadge`), and **Recent activity** (the last eight audit events, named by
+actor, aged rather than timestamped). No figure is new: each is one another
+screen already reports, and each links there. Every block asks for its own
+permission and is absent without it, so a narrow role sees a shorter page, not
+a page of refusals.
+
+### Roles
+
+A list and a record side by side. The list carries each role's holders,
+permission count and a `Meter` of its share of the catalogue — the first thing
+anybody auditing roles asks. The record shows people as chips (initials, login,
+scope, revoke) and permissions as a grid by module, one chip per permission:
+filled with a check when held, dashed when not. **Edit uses the same grid**,
+with each chip a checkbox, so an edit is a change to what was just read rather
+than a second screen. The selected role is in the URL. Presets the tenant has
+not added yet are offered as dashed chips under the list.
 
 ## Destructive actions
 

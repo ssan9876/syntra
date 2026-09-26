@@ -25,7 +25,8 @@ export type IconName =
   | 'settings'
   | 'updates'
   | 'privacy'
-  | 'operations';
+  | 'operations'
+  | 'overview';
 
 const PATHS: Record<IconName, string> = {
   users: 'M5.5 7a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13.5c.4-2.3 2-3.75 4-3.75s3.6 1.45 4 3.75M10.5 2.75a2.25 2.25 0 0 1 0 4.25M11.75 9.9c1.4.4 2.4 1.6 2.75 3.6',
@@ -46,6 +47,7 @@ const PATHS: Record<IconName, string> = {
   updates: 'M8 2v8M4.75 6.75 8 10l3.25-3.25M2.5 12v1.75h11V12',
   privacy: 'M4.5 7V5a3.5 3.5 0 0 1 7 0v2M3.5 7h9v7h-9zM8 9.75v1.75',
   operations: 'M2.5 11.5a5.5 5.5 0 1 1 11 0M8 11.5l2.75-3.25M4.25 11.5h.01M11.75 11.5h.01M8 6h.01',
+  overview: 'M2 2.5h5v5H2zM9 2.5h5v3H9zM9 7.5h5v6H9zM2 9.5h5v4H2z',
 };
 
 export function Icon({ name, className = 'size-4' }: { name: IconName; className?: string }) {

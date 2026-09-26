@@ -1,8 +1,25 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminNav } from './AdminNav.js';
+
+const granted = new Set<string>();
+
+vi.mock('../../session/SessionProvider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../session/SessionProvider.js')>()),
+  useCan: () => (permission: string) => granted.has(permission),
+}));
+
+beforeEach(() => {
+  granted.clear();
+  try {
+    window.localStorage.clear();
+  } catch {
+    // jsdom always has storage; the guard mirrors the component's.
+  }
+});
 
 /**
  * The navigation stays short, and stays honest.
@@ -88,5 +105,44 @@ describe('the console navigation', () => {
     );
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByText('Directory')).not.toBeInTheDocument();
+  });
+
+  it('folds a group away and remembers it, but never the one you are in', async () => {
+    for (const p of ['directory.read', 'access.read', 'audit.read']) granted.add(p);
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/admin/applications']}>
+        <AdminNav />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'Overview' })).toBeInTheDocument();
+    const directory = screen.getByRole('button', { name: 'Directory' });
+    expect(directory).toHaveAttribute('aria-expanded', 'true');
+    await user.click(directory);
+    expect(directory).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Groups' })).not.toBeInTheDocument();
+
+    // The group holding the current page cannot be folded.
+    expect(screen.getByRole('button', { name: 'Access' })).toBeDisabled();
+    unmount();
+
+    render(
+      <MemoryRouter initialEntries={['/admin/applications']}>
+        <AdminNav />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: 'Directory' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('opens a folded group when you navigate into it', () => {
+    granted.add('directory.read');
+    window.localStorage.setItem('syntra.nav.collapsed', JSON.stringify(['Directory']));
+    render(
+      <MemoryRouter initialEntries={['/admin/groups']}>
+        <AdminNav />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'Groups' })).toBeInTheDocument();
   });
 });
