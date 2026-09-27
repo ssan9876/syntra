@@ -76,8 +76,8 @@ export async function registerAdminIncidentRoutes(
         incidents.unshift({
           kind: 'scheduler_unavailable',
           severity: 'critical',
-          title: 'Background work is unavailable',
-          detail: 'The job scheduler has not started. Automatic startup retries are in progress; check the server logs if this persists.',
+          title: 'Background jobs are not running',
+          detail: 'The job scheduler did not start. Retrying automatically; check the server log if this persists.',
           count: 1,
           lastAt: null,
           href: '/admin/operations',
@@ -150,8 +150,8 @@ export async function registerAdminIncidentRoutes(
         throw new ProblemError(
           409,
           'incident-not-resolvable',
-          'This clears when it is fixed',
-          'It is a condition that is still true, not an event that is over. Acknowledge it instead, and it goes when the cause is fixed.',
+          'Incident cannot be resolved',
+          'It clears when the cause is fixed. Acknowledge it instead.',
         );
       }
       const needed = RESOLVE_PERMISSION[kind]!;

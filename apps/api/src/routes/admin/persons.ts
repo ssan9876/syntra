@@ -253,8 +253,8 @@ export async function registerAdminPersonRoutes(
             throw new ProblemError(
               409,
               'possible-duplicate',
-              'Somebody here already looks like this',
-              'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+              'Possible duplicate',
+              'Check the matches before creating a new record. Records cannot be merged later.',
               { candidates },
             );
           }
@@ -370,8 +370,8 @@ export async function registerAdminPersonRoutes(
           throw new ProblemError(
             409,
             'service-account-person',
-            'A service account belongs to no person',
-            `${user.login} is a service account. Mark it as a person account first if it really is somebody's.`,
+            'Service accounts cannot be linked',
+            `${user.login} is a service account. Change it to a person account first.`,
           );
         }
 
@@ -583,10 +583,10 @@ export async function registerAdminPersonRoutes(
             throw new ProblemError(
               409,
               'source-owned',
-              'This person is maintained by a person source',
+              'Fields set by a person source',
               `${clashing.join(', ')} ${clashing.length === 1 ? 'is' : 'are'} ` +
-                `maintained by the person source "${source?.name ?? existing.sourceId}"; ` +
-                `an edit here is reverted by its next run`,
+                `set by the person source "${source?.name ?? existing.sourceId}". ` +
+                `Change ${clashing.length === 1 ? 'it' : 'them'} in the source.`,
               {
                 errors: clashing.map((path) => ({
                   path,

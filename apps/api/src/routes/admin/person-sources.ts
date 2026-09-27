@@ -129,7 +129,7 @@ export async function registerAdminPersonSourceRoutes(
       throw new ProblemError(
         400,
         'unassignable-field',
-        'A mapping may not write that field',
+        'Field cannot be mapped',
         cause.message,
         { errors: cause.fields.map((path) => ({ path, message: 'not writable by a source' })) },
       );
@@ -141,8 +141,8 @@ export async function registerAdminPersonSourceRoutes(
       throw new ProblemError(
         503,
         'job-not-queued',
-        'The run was recorded but not queued',
-        `${cause.message}. The run is marked failed; start it again once the job queue is healthy.`,
+        'Run not queued',
+        `${cause.message}. The run is marked failed. Start it again when the job queue is back.`,
       );
     }
     if (cause instanceof PersonSourceOwnsPersonsError) {
@@ -432,10 +432,9 @@ export async function registerAdminPersonSourceRoutes(
           throw new ProblemError(
             409,
             'host-key-mismatch',
-            'This source is pinned to a different host key',
-            `it is pinned to ${pinned}; a server presenting ${fingerprint} is ` +
-              `either rebuilt or being impersonated, and changing the pin is an ` +
-              `edit of the source rather than a confirmation`,
+            'Host key does not match',
+            `The source is pinned to ${pinned}; the server presented ${fingerprint}. ` +
+              `If the server was rebuilt, edit the source to change the pin.`,
           );
         }
 
@@ -496,8 +495,8 @@ export async function registerAdminPersonSourceRoutes(
         throw new ProblemError(
           503,
           'scheduler-unavailable',
-          'The job queue is not running',
-          'a run is a background job, and the queue this installation uses is not up',
+          'Background jobs are not running',
+          'The run was not started. Check the API log.',
         );
       }
       // Looked up first: another tenant's source, which RLS hides, is a 404

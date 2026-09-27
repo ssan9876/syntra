@@ -164,7 +164,7 @@ export async function registerAdminTenantRoutes(
           brand = await setBrand(tx, body);
         } catch (cause) {
           if (cause instanceof BrandRefusedError) {
-            throw new ProblemError(400, 'brand-refused', 'That branding cannot be used', cause.message);
+            throw new ProblemError(400, 'brand-refused', 'Branding refused', cause.message);
           }
           throw cause;
         }

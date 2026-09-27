@@ -91,7 +91,7 @@ export async function registerAdminCredentialPickupRoutes(
           403,
           'step-up-required',
           'Confirm it is you first',
-          `Sending somebody's sign-in details needs a console session started in the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
+          `Sending sign-in details needs a console session from the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
         );
       }
 
@@ -122,10 +122,10 @@ export async function registerAdminCredentialPickupRoutes(
             409,
             cause instanceof NoInitialSecretError ? 'no-initial-secret' : 'no-delivery-address',
             cause instanceof NoInitialSecretError
-              ? 'There is no initial password to send'
-              : 'There is nowhere to send it',
+              ? 'No initial password to send'
+              : 'No delivery address',
             cause instanceof NoInitialSecretError
-              ? 'Syntra holds no initial password for this account. It was not created by Provision, or it was created before initial passwords were kept.'
+              ? 'This account was not created by Provision, or was created before Syntra kept initial passwords.'
               : cause.message,
           );
         }

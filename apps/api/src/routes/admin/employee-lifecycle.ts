@@ -266,8 +266,8 @@ export async function registerEmployeeLifecycleRoutes(app: FastifyInstance, opti
       // Serialize confirmation and persist the start before making external writes.
       await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${id}::uuid FOR UPDATE`;
       const current = await snapshot(tx, id);
-      if (current.revision !== revision) throw new ProblemError(409, 'preview-stale', 'The employee changed', 'Refresh the offboarding preview before continuing.');
-      if (current.accounts.some((a) => a.id === request.session.userId)) throw new ProblemError(409, 'self-offboarding', 'Another administrator must end your employment');
+      if (current.revision !== revision) throw new ProblemError(409, 'preview-stale', 'Employee changed since preview', 'Refresh the preview and try again.');
+      if (current.accounts.some((a) => a.id === request.session.userId)) throw new ProblemError(409, 'self-offboarding', 'You cannot offboard yourself', 'Ask another administrator.');
       const departure = current.person.departureOverride ?? new Date();
       await tx.person.update({ where: { id }, data: { status: 'inactive', departureOverride: departure, departureOverrideBy: request.session.userId, departureOverrideNote: reason } });
       await recordEvent(tx, { actorUserId: request.session.userId, action: 'person.offboarding.started', targetType: 'Person', targetId: id, outcome: 'success', sourceIp: request.ip, payload: { attemptId, reason, departure: departure.toISOString(), accountIds: current.accounts.map((a) => a.id), targetIds: current.targets.map((a) => a.target.id) } });

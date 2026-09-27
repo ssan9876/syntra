@@ -251,7 +251,7 @@ export async function registerAdminGroupRoutes(
             409,
             'source-owned',
             'Managed by a directory source',
-            'This group is read from a directory source, and the next sync run would overwrite the change. Edit it where it comes from.',
+            'This group is synced from a directory source. Edit it in the directory.',
           );
         }
 

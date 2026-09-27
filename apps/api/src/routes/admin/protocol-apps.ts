@@ -120,10 +120,8 @@ export async function registerAdminProtocolRoutes(
     throw new ProblemError(
       409,
       'saml-entity-id-taken',
-      'That service provider entity ID is already registered',
-      `The application "${owner?.name ?? clash.applicationId}" is registered for ` +
-        `${spEntityId}. An entity ID identifies one service provider, and an ` +
-        `AuthnRequest carrying it has to resolve to exactly one configuration.`,
+      'Entity ID already registered',
+      `"${owner?.name ?? clash.applicationId}" already uses ${spEntityId}.`,
       {
         spEntityId,
         applicationId: clash.applicationId,
@@ -196,7 +194,7 @@ export async function registerAdminProtocolRoutes(
             throw new ProblemError(
               502,
               'metadata-fetch-failed',
-              'That metadata address could not be read',
+              'Metadata URL could not be read',
               cause instanceof Error ? cause.message : undefined,
             );
           });
@@ -208,7 +206,7 @@ export async function registerAdminProtocolRoutes(
       throw new ProblemError(
         400,
         'metadata-unreadable',
-        'That is not a service provider metadata document this can read',
+        'Metadata could not be parsed',
         cause instanceof Error ? cause.message : undefined,
       );
     }
@@ -235,8 +233,8 @@ export async function registerAdminProtocolRoutes(
       throw new ProblemError(
         409,
         'metadata-has-no-signing-certificate',
-        'That metadata publishes no signing certificate',
-        'This application requires signed authentication requests, and there is nothing to check a signature against. Send wantAuthnRequestsSigned: false with the import if this service provider does not sign its requests.',
+        'No signing certificate in metadata',
+        'This application requires signed requests. If the service provider does not sign them, import with wantAuthnRequestsSigned: false.',
       );
     }
 
@@ -272,8 +270,8 @@ export async function registerAdminProtocolRoutes(
       throw new ProblemError(
         409,
         'metadata-has-no-encryption-certificate',
-        'That metadata publishes no encryption certificate',
-        'This application encrypts its assertions and the imported document leaves nothing to encrypt to.',
+        'No encryption certificate in metadata',
+        'This application encrypts assertions and needs one.',
       );
     }
 

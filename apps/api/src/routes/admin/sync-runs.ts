@@ -161,9 +161,8 @@ export async function registerAdminSyncRunRoutes(
           throw new ProblemError(
             409,
             'change-not-proposed',
-            'Change is not proposed',
-            `this change is already ${change.status}; only a proposed change ` +
-              `can be skipped, so that a run's record of what it did stays true`,
+            'Change cannot be skipped',
+            `This change is already ${change.status}. Only proposed changes can be skipped.`,
           );
         }
 

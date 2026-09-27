@@ -82,8 +82,7 @@ export async function registerAdminUpdateRoutes(
           409,
           'updates-not-configured',
           'Updates are not configured',
-          'This deployment has no release repository or token configured, so it ' +
-            'cannot look for or install new versions.',
+          'No release repository or token is configured.',
         );
       }
 
@@ -105,8 +104,7 @@ export async function registerAdminUpdateRoutes(
           422,
           'not-newer',
           'That version is not newer',
-          `This deployment is running ${availability.current}, and ${version} is ` +
-            'not newer than it. Downgrading is not something this button does.',
+          `Running ${availability.current}; ${version} is not newer.`,
         );
       }
 
@@ -166,8 +164,7 @@ export async function registerAdminUpdateRoutes(
           409,
           'updates-not-configured',
           'Updates are not configured',
-          'This deployment has no release configuration, so it has no release ' +
-            'history to roll back through.',
+          'No release configuration, so there is nothing to roll back to.',
         );
       }
 

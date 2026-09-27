@@ -170,11 +170,11 @@ function bindBrowser(request: FastifyRequest, reply: FastifyReply): string {
 /** What the user is told when their identity provider produced no account. */
 const REFUSAL_DETAIL: Record<ProvisionRefusal, string> = {
   no_local_user:
-    'You signed in successfully, but this organization has no account for you. Ask an administrator to create one.',
+    'You have no account in this organization. Ask an administrator to create one.',
   incomplete_profile:
-    'That identity provider did not send enough information to identify you.',
+    'The identity provider did not send enough information to identify you.',
   link_conflict:
-    'Another identity from that provider already uses this account. Ask an administrator to sort it out before signing in again.',
+    'Another identity from this provider is linked to this account. Ask an administrator to fix it.',
   // THE SAME SENTENCE, TWICE, and that is the point.
   //
   // The two refusals differ in a way the caller must not learn: one means "a
@@ -185,9 +185,9 @@ const REFUSAL_DETAIL: Record<ProvisionRefusal, string> = {
   // distinct where it belongs — in the audit trail and the logs — and the
   // person at the browser gets one answer for both.
   adoption_not_allowed:
-    'You signed in successfully, but this organization has no account for you. Ask an administrator to create one.',
+    'You have no account in this organization. Ask an administrator to create one.',
   adoption_refused_privileged:
-    'You signed in successfully, but this organization has no account for you. Ask an administrator to create one.',
+    'You have no account in this organization. Ask an administrator to create one.',
 };
 
 export async function registerFederationRoutes(
@@ -360,7 +360,7 @@ export async function registerFederationRoutes(
         502,
         'federation-upstream-unreachable',
         'That identity provider could not be reached',
-        'Syntra could not read the identity provider’s configuration. An administrator should check the issuer address.',
+        'Its configuration could not be read. An administrator should check the issuer URL.',
       );
     }
   };

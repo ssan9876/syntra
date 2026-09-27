@@ -76,8 +76,8 @@ export async function holdPrivilegedChange(
     throw new ProblemError(
       409,
       'change-approval-required',
-      'A second administrator must approve this change',
-      `${label} are held for approval in this organization. Give a reason and it will be sent to another administrator; nothing has changed yet.`,
+      'Approval required',
+      `${label}: nothing has changed. Add a reason to send it to another administrator for approval.`,
       { changeClass, summary: input.summary },
     );
   }

@@ -378,8 +378,8 @@ export async function registerAdminGovernRoutes(
         throw new ProblemError(
           503,
           'scheduler-unavailable',
-          'The job scheduler is not running',
-          'Nothing was enqueued. Govern never reads a source itself, so there is no fallback.',
+          'Background jobs are not running',
+          'Nothing was queued. Check the API log.',
         );
       }
       // The source is looked up in THIS tenant before a job is queued for it.

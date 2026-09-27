@@ -240,8 +240,8 @@ export async function registerMfaRoutes(
         throw new ProblemError(
           400,
           'code-already-used-for-setup',
-          'That code completed your setup',
-          'It cannot be used again to sign in. Wait for your app to show the next code.',
+          'Code already used',
+          'That code finished your setup. Wait for the next code.',
         );
       }
       // Everything else collapses into one response. A bad code, an unknown
@@ -626,7 +626,7 @@ export async function registerMfaRoutes(
           409,
           'no-factor-to-recover',
           'Set up a second factor first',
-          'Recovery codes are a way back in when you lose your authenticator app or security key, so there has to be one to lose.',
+          'Add an authenticator app or security key, then create recovery codes.',
         );
       }
 

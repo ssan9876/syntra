@@ -137,7 +137,7 @@ export async function registerAdminAutomateRoutes(
       throw new ProblemError(
         400,
         'form-missing-input',
-        'The form does not ask for what the action needs',
+        'Form is missing an input',
         cause.message,
       );
     }
@@ -508,7 +508,7 @@ export async function registerAdminAutomateRoutes(
           403,
           'no-person',
           'Forbidden',
-          'Deciding a request requires an account linked to a person.',
+          'Your account is not linked to a person.',
         );
       }
       try {

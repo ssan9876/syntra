@@ -156,8 +156,8 @@ export async function registerAdminProfileRoutes(app: FastifyInstance): Promise<
         throw new ProblemError(
           404,
           'not-found',
-          'No container to preview',
-          'this target has no account profile, so there is no template to render',
+          'Nothing to preview',
+          'This target has no account profile.',
         );
       }
       return preview;

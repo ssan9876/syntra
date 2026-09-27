@@ -247,11 +247,8 @@ export async function registerPortalRoutes(
           409,
           'not-launchable',
           'That application has no launch address configured',
-          'This application only accepts sign-ins that start at the application ' +
-            'itself (IdP-initiated sign-in is off), so its tile has to open the ' +
-            "application's own sign-in page. An administrator needs to set the " +
-            "application's launch address to its SSO start page, or enable " +
-            'IdP-initiated sign-in in its SAML settings.',
+          'IdP-initiated sign-in is off for this application. An administrator ' +
+            'must set its launch address to its SSO start page, or turn on IdP-initiated sign-in.',
         );
       }
 

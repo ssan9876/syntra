@@ -278,7 +278,7 @@ export async function registerAdminOrgUnitRoutes(
       if (!outcome.ok) {
         switch (outcome.reason) {
           case 'no_such_row':
-            throw new ProblemError(404, 'not-found', 'This org unit is not materialised on that target');
+            throw new ProblemError(404, 'not-found', 'Org unit not created on that target');
           case 'dn_taken':
             throw new ProblemError(409, 'dn-taken', 'That container belongs to another unit', outcome.message);
           default:
@@ -305,7 +305,7 @@ export async function registerAdminOrgUnitRoutes(
         throw new ProblemError(
           404,
           'not-found',
-          'This org unit is not materialised on that target',
+          'Org unit not created on that target',
         );
       }
       reply.code(204);
@@ -346,30 +346,30 @@ export async function registerAdminOrgUnitRoutes(
             throw new ProblemError(
               409,
               'org-unit-not-empty',
-              'This unit is not empty',
-              `it still holds ${holds}; move them before deleting it. A deactivated user still occupies the unit, and deleting a unit people are assigned to would move every one of their accounts back to the account profile's container on the next run`,
+              'Org unit not empty',
+              `It still holds ${holds}, counting deactivated users. Move them, then delete it.`,
             );
           }
           case 'delete_not_enabled':
             throw new ProblemError(
               409,
               'delete-not-enabled',
-              'This unit cannot be deleted',
-              `${outcome.sourceName} is not configured to let Syntra delete objects in it, and removing only the Syntra record would leave the next sync run free to create the unit again`,
+              'Org unit cannot be deleted',
+              `Deletes are not enabled on ${outcome.sourceName}.`,
             );
           case 'no_credential':
             throw new ProblemError(
               409,
               'no-credential',
-              'This unit cannot be deleted',
-              `the bind credential for ${outcome.sourceName} could not be unsealed`,
+              'Org unit cannot be deleted',
+              `The bind credential for ${outcome.sourceName} could not be unsealed.`,
             );
           case 'directory_failed':
             throw new ProblemError(
               502,
               'directory-failed',
-              'The directory refused the delete',
-              `${outcome.message}; nothing was changed in Syntra either`,
+              'Directory refused the delete',
+              `${outcome.message}. Nothing was changed.`,
             );
         }
       }
@@ -425,7 +425,7 @@ export async function registerAdminOrgUnitRoutes(
             409,
             'source-owned',
             'Managed by a directory source',
-            'This unit is read from a directory source, and the next sync run would overwrite the change. Edit it where it comes from.',
+            'This unit is synced from a directory source. Edit it in the directory.',
           );
         }
 
@@ -440,7 +440,7 @@ export async function registerAdminOrgUnitRoutes(
                 {
                   path: 'parentId',
                   message:
-                    'That would put the unit inside itself. Choose a parent that is not below it.',
+                    'A unit cannot be inside itself. Choose a parent outside it.',
                 },
               ],
             });

@@ -59,8 +59,8 @@ export function requireSession(required: SessionScope) {
           throw new ProblemError(
             403,
             'token-not-accepted',
-            'This route does not accept an API token',
-            'Sign in as a person. Tokens cannot reach authentication, the portal, or another account’s password.',
+            'API tokens not accepted here',
+            'Sign in with a user account to use this route.',
           );
         }
         request.session = principal;
@@ -82,7 +82,7 @@ export function requireSession(required: SessionScope) {
         403,
         'admin-session-required',
         'Administrative session required',
-        'Re-authenticate at /api/auth/elevate to obtain an administrative session.',
+        'Elevate at /api/auth/elevate, then retry.',
       );
     }
 
