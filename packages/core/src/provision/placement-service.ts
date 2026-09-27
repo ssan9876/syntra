@@ -30,7 +30,7 @@ import { AdapterWritesBlockedError, adapterWriteContext } from './adapter-rollou
 export class ContainerNotInTargetError extends Error {
   constructor(readonly container: string) {
     super(
-      `the container ${container} does not exist in this target, and Provision does not create one`,
+      `Container ${container} does not exist on this target.`,
     );
     this.name = 'ContainerNotInTargetError';
   }
@@ -45,7 +45,7 @@ export class ContainerNotInTargetError extends Error {
 export class TargetHasNoContainersError extends Error {
   constructor() {
     super(
-      'this target has no containers: it keeps accounts in one flat directory, so an account cannot be moved within it',
+      'This target has no containers to move an account to.',
     );
     this.name = 'TargetHasNoContainersError';
   }
@@ -54,8 +54,7 @@ export class TargetHasNoContainersError extends Error {
 export class NoCorrelationKeyError extends Error {
   constructor() {
     super(
-      'this account has not been created in the target yet, so there is nothing there to move. ' +
-        'The container is recorded, and the account will be created there.',
+      'Account not created yet. It will be created in the chosen container.',
     );
     this.name = 'NoCorrelationKeyError';
   }
@@ -222,14 +221,14 @@ export async function targetContainers(
   targetSystemId: string,
 ): Promise<string[]> {
   const target = await withTenant(tenantId, (tx) =>
-    tx.targetSystem.findUnique({ where: { id: targetSystemId }, select: { type: true } }),
+    tx.targetSystem.findUnique({ where: { id: targetSystemId }, select: { type: true, name: true } }),
   );
-  if (target === null) throw new Error('no such target');
+  if (target === null) throw new Error(`No such target: ${targetSystemId}.`);
 
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, targetSystemId),
   );
-  if (!config) throw new Error('target configuration or credential missing');
+  if (!config) throw new Error(`Target "${target.name}" has no configuration or credential.`);
 
   const connector = targetConnectorFor(target.type);
   // Declared by the connector, never inferred from an empty list below: an
@@ -317,6 +316,7 @@ export async function moveAccount(
       where: { id: input.targetSystemId },
       select: {
         id: true,
+        name: true,
         type: true,
         config: true,
         externalWritesPausedAt: true,
@@ -344,7 +344,7 @@ export async function moveAccount(
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, input.targetSystemId),
   );
-  if (!config) throw new Error('target configuration or credential missing');
+  if (!config) throw new Error(`Target "${target.name}" has no configuration or credential.`);
 
   // Phase 2: the directory. No transaction is held — this is network I/O.
   //
@@ -403,6 +403,6 @@ export async function moveAccount(
     message: result.ok
       ? `moved to ${canonical}`
       : // The placement stands regardless, so the next run will try again.
-        `${result.message}. The move is recorded and the next run will retry it.`,
+        `${result.message}. The next run retries the move.`,
   };
 }

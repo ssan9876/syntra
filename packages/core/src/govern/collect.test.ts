@@ -293,7 +293,7 @@ describe('collectTenant', () => {
     const collected = await collectTenant(tenantId, { asOf: NOW });
     const gap = collected.gaps.find((g) => g.kind === 'resource_unreadable');
     expect(gap!.reason).toContain('Domain Admins');
-    expect(gap!.reason).toContain('not necessarily the run that failed the read');
+    expect(gap!.reason).toContain("target's latest run");
     expect(collected.holdings.find((h) => h.resourceKind === 'targetEntitlement')!.state).toBe('unknown');
     expect(collected.sources.find((s) => s.sourceKind === 'targetSystem')!.completeness).toBe('partial');
   });

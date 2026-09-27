@@ -246,7 +246,7 @@ export async function queueTargetWork(
 ) {
   if (targetIds.length === 0) {
     return transitionLifecycleStep(tenantId, operationId, TARGET_STEP_KEY, 'skipped', {
-      message: 'No enabled target system is in scope for this operation.',
+      message: 'No enabled targets in scope.',
       responseCategory: 'no_change_required',
     });
   }
@@ -257,14 +257,14 @@ export async function queueTargetWork(
   } as Prisma.InputJsonValue;
   if (receipts.some((receipt) => ['failed', 'blocked'].includes(receipt.status))) {
     return transitionLifecycleStep(tenantId, operationId, TARGET_STEP_KEY, 'failed', {
-      message: 'One or more target operations failed or are blocked.',
+      message: `${receipts.filter((receipt) => ['failed', 'blocked'].includes(receipt.status)).length} of ${receipts.length} targets failed or blocked.`,
       responseCategory: receipts.some((receipt) => receipt.status === 'blocked') ? 'blocked' : 'unavailable',
       evidence,
     });
   }
   if (receipts.every((receipt) => ['applied', 'no_match'].includes(receipt.status))) {
     return transitionLifecycleStep(tenantId, operationId, TARGET_STEP_KEY, 'succeeded', {
-      message: 'All requested target operations reached their resolved state.',
+      message: 'All target operations finished.',
       responseCategory: 'confirmed',
       evidence,
     });
@@ -312,7 +312,7 @@ export async function applyMover(
   scheduler: Scheduler,
   actor: { userId: string | null; publicUrl?: string } = { userId: null },
 ) {
-  if (preview.tenantId !== tenantId) throw new Error('Mover preview belongs to another tenant');
+  if (preview.tenantId !== tenantId) throw new Error('Preview belongs to another tenant.');
   if ((await moverRevision(tenantId, preview.personId)) !== preview.revision) {
     throw new Error('The employee changed since this preview. Review the changes again.');
   }
@@ -401,7 +401,7 @@ export async function resumeLifecycleOperation(
 ) {
   const operation = await getLifecycleOperation(tenantId, operationId);
   if (!approvalGateOpen(operation)) {
-    throw new Error('This operation is still awaiting approval');
+    throw new Error('Operation is still waiting for approval.');
   }
   const targets = operation.steps.find((step) => step.key === TARGET_STEP_KEY);
   if (!targets || targets.status !== 'pending') return operation;
@@ -418,7 +418,7 @@ export async function resumeLifecycleOperation(
     }
     const failed = results.filter((result) => !result.ok).length;
     return transitionLifecycleStep(tenantId, operation.id, TARGET_STEP_KEY, failed === results.length && results.length > 0 ? 'failed' : 'succeeded', {
-      message: `${results.length - failed} of ${results.length} operations were requeued.`,
+      message: `Requeued ${results.length - failed} of ${results.length} operations.`,
       responseCategory: failed === results.length && results.length > 0 ? 'unavailable' : 'confirmed',
       evidence: { results } as Prisma.InputJsonValue,
     });
@@ -799,7 +799,7 @@ export async function retryOperationWithReceipts(
     const targetStep = updated.steps.find((step) => step.key === TARGET_STEP_KEY);
     if (targetStep && retried.some((receipt) => receipt.status === 'pending')) {
       updated = await transitionLifecycleStep(tenantId, operationId, TARGET_STEP_KEY, 'running', {
-        message: 'Saved target receipts were requeued for execution and verification.',
+        message: 'Target work requeued.',
         evidence: { receiptIds: retried.map((receipt) => receipt.id) },
       });
     }

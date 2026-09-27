@@ -77,8 +77,7 @@ export async function assertOutboundUrl(
   // door rather than stored and leaked.
   if (url.username !== '' || url.password !== '') {
     throw new Error(
-      'put the credential in a header at the receiving end, not in the URL — ' +
-        'a URL is shown on every settings screen and nothing here treats it as a secret',
+      'put the credential in a header at the receiving end, not in the URL',
     );
   }
 
@@ -98,8 +97,8 @@ export async function assertOutboundUrl(
       // the network turns the settings form into the reconnaissance tool this
       // check exists to prevent.
       throw new Error(
-        `${url.hostname} resolves inside this deployment's own network. ` +
-          'Set OUTBOUND_ALLOW_PRIVATE=true if that is intended.',
+        `${url.hostname} resolves to a private network address. ` +
+          'Set OUTBOUND_ALLOW_PRIVATE=true to allow it.',
       );
     }
   }
@@ -158,8 +157,8 @@ export async function fetchExternalDocument(
     for (const entry of resolved) {
       if (classifyAddress(entry.address) === 'blocked') {
         throw new Error(
-          `${url.hostname} resolves to ${entry.address}, which is inside this deployment's own network. ` +
-            'Set OUTBOUND_ALLOW_PRIVATE=true if that is intended.',
+          `${url.hostname} resolves to ${entry.address}, a private network address. ` +
+            'Set OUTBOUND_ALLOW_PRIVATE=true to allow it.',
         );
       }
     }
@@ -186,7 +185,7 @@ export async function fetchExternalDocument(
         const status = res.statusCode ?? 0;
         if (status >= 300 && status < 400) {
           res.destroy();
-          reject(new Error(`${url.href} answered with a redirect, which is not followed`));
+          reject(new Error(`${url.href} answered with a redirect; redirects are not followed`));
           return;
         }
         if (status < 200 || status >= 300) {

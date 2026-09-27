@@ -155,7 +155,7 @@ export class ClaimMappingSetProtocolMismatchError extends Error {
     readonly applicationProtocol: string,
   ) {
     super(
-      `that set is for ${setProtocol} and this application uses ${applicationProtocol}`,
+      `Claim set is for ${setProtocol}; this application uses ${applicationProtocol}.`,
     );
     this.name = 'ClaimMappingSetProtocolMismatchError';
   }

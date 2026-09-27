@@ -111,7 +111,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'role_assignment_change_required',
       explanation:
-        'this is a Syntra role assignment. Govern does not write RoleAssignment; a holder of rbac.manage has to remove it.',
+        'Syntra role assignment. Remove it in Roles (needs rbac.manage).',
       notRemoved: [...kinds],
     };
   }
@@ -128,7 +128,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'syntra_user_change_required',
       explanation:
-        'this is a Syntra login. Govern does not deactivate accounts in Syntra itself; a holder of rbac.manage has to do it in user administration, and a departure is normally handled by Provision’s leaver ladder rather than by a campaign.',
+        'Syntra login. Deactivate it in Users (needs rbac.manage).',
       notRemoved: [...kinds],
     };
   }
@@ -144,7 +144,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'rule_change_required',
       explanation:
-        'this access comes from the person’s job: a business rule grants it, and removing it means changing either the rule or the job. Provision would grant it back tonight.',
+        'Granted by a business rule. Change the rule or the person’s job.',
       notRemoved: [...kinds],
     };
   }
@@ -158,7 +158,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'directory_source_change_required',
       explanation:
-        'this membership comes from a directory source, which rewrites that membership every run. It has to change at the source.',
+        'Synced from a directory source. Change it at the source.',
       notRemoved: [...kinds],
     };
   }
@@ -170,7 +170,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: true,
       remediationKind: null,
       explanation:
-        'Automate holds a grant for this. Ending the grant removes its term from desired state, and Provision plans and applies the removal under its own guard.',
+        'Ending the Automate grant. Provision removes the access on its next run.',
       notRemoved: [...kinds].filter((k) => !GRANT_KINDS.has(k)),
     };
   }
@@ -183,7 +183,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'direct_assignment_change_required',
       explanation:
-        'an administrator assigned this directly in Syntra and no grant stands behind it. Govern does not write AppAssignment or GroupMembership.',
+        'Assigned directly in Syntra. Remove the assignment by hand.',
       notRemoved: [...kinds],
     };
   }
@@ -199,7 +199,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: false,
       remediationKind: 'account_removal_required',
       explanation:
-        'this is an account at a target system, not an entitlement within one. Govern dispatches entitlement removals; removing the account itself belongs to Provision’s leaver ladder, which disables first and deletes only after the retention window.',
+        'Target account. Accounts are removed by offboarding, not by a campaign.',
       notRemoved: [...kinds],
     };
   }
@@ -214,7 +214,7 @@ export function routeRevocation(input: RouteInput): RouteDecision {
       dispatchable: true,
       remediationKind: null,
       explanation:
-        'nothing in desired state wants this holding, so a one-shot revocation order carrying the deciding human is written for Provision to plan.',
+        'Revocation order sent to Provision.',
       notRemoved: [],
     };
   }

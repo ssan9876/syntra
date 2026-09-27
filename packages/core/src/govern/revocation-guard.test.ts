@@ -145,7 +145,7 @@ describe('the four conditions no confirmation can fix', () => {
     );
     expect(verdict.outcome).toBe('refused');
     if (verdict.outcome !== 'refused') throw new Error('unreachable');
-    expect(verdict.reasons[0]).toContain('30% fewer');
+    expect(verdict.reasons[0]).toContain('fell 30%');
   });
 
   it('does NOT refuse a drop at exactly the limit', () => {
@@ -174,7 +174,7 @@ describe('the first batch in a tenant', () => {
     );
     expect(verdict.outcome).toBe('requires_confirmation');
     if (verdict.outcome !== 'requires_confirmation') throw new Error('unreachable');
-    expect(verdict.reasons[0]).toContain('first revocation batch');
+    expect(verdict.reasons[0]).toContain('First revocation batch');
   });
 });
 

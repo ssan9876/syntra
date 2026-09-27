@@ -151,7 +151,7 @@ export async function previewRuleImpact(
   // turns it into a 400 naming the reason.
   if (rule.outcome === 'federate') {
     throw new Error(
-      'a federate rule has no authorization impact to preview: it decides which identity provider a login goes to, and authorize() still runs when the user comes back',
+      'Federate rules have no impact preview. They only choose the identity provider.',
     );
   }
 

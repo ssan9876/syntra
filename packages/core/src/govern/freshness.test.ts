@@ -210,6 +210,6 @@ describe('the two clocks, and which one a refusal names', () => {
     const verdict = checkSourceFreshness([]);
     expect(verdict.ok).toBe(false);
     if (verdict.ok) throw new Error('unreachable');
-    expect(verdict.message).toContain('no source');
+    expect(verdict.message).toContain('No source');
   });
 });

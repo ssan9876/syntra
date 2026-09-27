@@ -5,12 +5,12 @@ export class SnapshotNotReadableError extends Error {
   constructor(readonly reason: 'not_found' | 'building' | 'failed' | 'no_sources') {
     super(
       reason === 'not_found'
-        ? 'no complete snapshot exists'
+        ? 'No complete snapshot yet.'
         : reason === 'building'
-          ? 'this snapshot is still being built; a half-built snapshot is indistinguishable from a small organization'
+          ? 'Snapshot is still building.'
           : reason === 'failed'
-            ? 'this snapshot failed to build and describes nothing'
-            : 'this snapshot recorded no source, so nothing in it has been shown to have been read',
+            ? 'Snapshot failed to build.'
+            : 'Snapshot has no sources.',
     );
     this.name = 'SnapshotNotReadableError';
   }

@@ -119,8 +119,8 @@ async function rejectUnassignable(
     data: {
       status: 'failed',
       message:
-        `refusing to write ${rejected.join(', ')}: a mapping may not set ` +
-        `these fields on a ${objectType}`,
+        `Mapping cannot set ${rejected.join(', ')} ` +
+        `on a ${objectType}.`,
     },
   });
   return { outcome: 'failure', extra: { rejectedFields: rejected } };
@@ -363,7 +363,7 @@ async function performChange(
           where: { id: change.id },
           data: {
             status: 'failed',
-            message: 'group or member not found after applying earlier changes',
+            message: 'Group or member not found after earlier changes.',
           },
         });
         return { outcome: 'failure', extra: { missing } };
@@ -394,7 +394,7 @@ async function performChange(
           where: { id: change.id },
           data: {
             status: 'failed',
-            message: 'group or member not found; cannot confirm the membership was removed',
+            message: 'Group or member not found. Membership removal not confirmed.',
           },
         });
         return { outcome: 'failure', extra: { missing } };

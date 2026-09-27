@@ -62,7 +62,7 @@ export function correlate(
         object,
         existing: candidate,
         reason:
-          'matches a locally managed object; adopt it explicitly if they are the same',
+          'Matches a locally managed object. Adopt it if they are the same.',
       };
     }
 
@@ -79,8 +79,8 @@ export function correlate(
         object,
         existing: candidate,
         reason:
-          'matches an object this source already owns under a different ' +
-          'identifier; the directory entry was probably deleted and recreated',
+          'Matches an object this source owns under a different ID. ' +
+          'The directory entry was likely deleted and recreated.',
       };
     }
 
@@ -88,7 +88,7 @@ export function correlate(
       kind: 'conflict',
       object,
       existing: candidate,
-      reason: 'matches an object owned by another source',
+      reason: 'Matches an object owned by another source.',
     };
   });
 }

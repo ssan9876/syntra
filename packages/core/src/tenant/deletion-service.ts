@@ -185,34 +185,34 @@ async function runPreflight(
 ): Promise<DeletionPreflight> {
   const { inventory, blockers } = await countOffboardingInventory(tx);
   if (blockers.activeLegalHolds > 0) {
-    refuse('legal-hold-active', `${blockers.activeLegalHolds} active legal hold(s) must be released before this tenant can be deleted`);
+    refuse('legal-hold-active', `${blockers.activeLegalHolds} active legal hold(s). Release them before deleting this tenant.`);
   }
   if (blockers.unresolvedLifecycleOperations > 0) {
-    refuse('lifecycle-work-unresolved', `${blockers.unresolvedLifecycleOperations} lifecycle operation(s) are unresolved; complete or cancel them first`);
+    refuse('lifecycle-work-unresolved', `${blockers.unresolvedLifecycleOperations} lifecycle operation(s) still open. Complete or cancel them first.`);
   }
 
   const assessment = await findEvidence(tx, 'tenant.offboarding.assessed', binding.assessmentDigest);
-  if (!assessment) return refuse('assessment-not-found', 'No offboarding assessment with that digest exists for this tenant');
+  if (!assessment) return refuse('assessment-not-found', 'No offboarding assessment has that digest.');
   const assessed = payloadOf(assessment);
   if (assessed.deletionReady !== true) {
-    refuse('assessment-not-ready', 'That assessment reported the tenant as not ready for deletion; resolve the blockers and assess again');
+    refuse('assessment-not-ready', 'Assessment says the tenant is not ready for deletion. Resolve the blockers and assess again.');
   }
   const current = await computeTenantDataRevision(tx, tenantId);
   if (typeof assessed.dataRevision !== 'string' || assessed.dataRevision !== current ||
       !sameInventory(assessed.inventory as Record<string, number>, inventory)) {
-    refuse('assessment-stale', 'Tenant data has changed since that assessment; assess and export again');
+    refuse('assessment-stale', 'Tenant data changed since the assessment. Assess and export again.');
   }
 
   const exported = await findEvidence(tx, 'tenant.offboarding.exported', binding.exportDigest);
-  if (!exported) return refuse('export-not-found', 'No export with that digest exists for this tenant');
+  if (!exported) return refuse('export-not-found', 'No export has that digest.');
   if (exported.sequence <= assessment.sequence) {
-    refuse('export-predates-assessment', 'The export must be taken after the assessment it accompanies');
+    refuse('export-predates-assessment', 'Export is older than the assessment. Export again.');
   }
   if (payloadOf(exported).dataRevision !== current) {
-    refuse('export-stale', 'Tenant data has changed since that export; export again');
+    refuse('export-stale', 'Tenant data changed since the export. Export again.');
   }
   if (binding.expectedRevision !== undefined && binding.expectedRevision !== current) {
-    refuse('assessment-stale', 'Tenant data has changed since this deletion was requested');
+    refuse('assessment-stale', 'Tenant data changed since this deletion was requested.');
   }
   return { dataRevision: current, assessmentAuditEventId: assessment.id, exportAuditEventId: exported.id };
 }
@@ -220,7 +220,7 @@ async function runPreflight(
 function assertFreshStepUp(stepUpAt: Date, now: Date): void {
   const age = now.getTime() - stepUpAt.getTime();
   if (!(age >= 0 && age <= TENANT_DELETION_STEP_UP_MAX_AGE_MS)) {
-    refuse('step-up-required', 'Sign in to the console again to confirm this deletion step');
+    refuse('step-up-required', 'Sign in to the console again to confirm.');
   }
 }
 
@@ -305,11 +305,11 @@ export async function requestTenantDeletion(
     withTenant(tenantId, async (tx) => {
       const reason = input.reason.trim();
       if (reason.length < TENANT_DELETION_REASON_MIN_LENGTH) {
-        refuse('reason-required', `Give a reason of at least ${TENANT_DELETION_REASON_MIN_LENGTH} characters`);
+        refuse('reason-required', `Reason must be at least ${TENANT_DELETION_REASON_MIN_LENGTH} characters.`);
       }
       const open = await tx.tenantDeletionRequest.findFirst({ where: { status: { in: ['pending_approval', 'approved', 'executing'] } } });
       if (open && !(await expireIfLapsed(tx, open, now))) {
-        refuse('request-open', 'A deletion request for this tenant is already open; cancel it first');
+        refuse('request-open', 'A deletion request is already open. Cancel it first.');
       }
       const preflight = await runPreflight(tx, tenantId, input);
       const created = await tx.tenantDeletionRequest.create({
@@ -349,11 +349,11 @@ export async function approveTenantDeletion(
       const request = await tx.tenantDeletionRequest.findFirst({ where: { id: requestId } });
       if (!request) return refuse('not-found', 'Deletion request not found');
       if (request.status === 'pending_approval' && request.approvalExpiresAt <= now) {
-        refuse('approval-expired', 'This request was not approved in time; request deletion again');
+        refuse('approval-expired', 'Approval window expired. Request deletion again.');
       }
-      if (request.status !== 'pending_approval') refuse('not-pending', `This request is ${request.status}, not awaiting approval`);
+      if (request.status !== 'pending_approval') refuse('not-pending', `Request is ${request.status}, not awaiting approval.`);
       if (request.requestedByUserId === input.actorUserId) {
-        refuse('four-eyes-required', 'A different administrator must approve a deletion');
+        refuse('four-eyes-required', 'Another administrator must approve this deletion.');
       }
       assertFreshStepUp(input.stepUpAt, now);
       await runPreflight(tx, tenantId, {
@@ -370,7 +370,7 @@ export async function approveTenantDeletion(
           approverStepUpAt: input.stepUpAt, executeNotBefore, executeBefore,
         },
       });
-      if (count !== 1) refuse('not-pending', 'This request is no longer awaiting approval');
+      if (count !== 1) refuse('not-pending', 'Request is no longer awaiting approval.');
       await recordEvent(tx, {
         actorUserId: input.actorUserId, action: 'tenant.deletion.approved', targetType: 'Tenant', targetId: tenantId,
         outcome: 'success', sourceIp: null,
@@ -399,7 +399,7 @@ export async function cancelTenantDeletion(
       where: { id: requestId, status: { in: ['pending_approval', 'approved'] } },
       data: { status: 'cancelled', cancelledByUserId: actorUserId, cancelledAt: now, closedReason: 'cancelled' },
     });
-    if (count !== 1) refuse('not-pending', `This request is ${request.status} and cannot be cancelled`);
+    if (count !== 1) refuse('not-pending', `Request is ${request.status} and cannot be cancelled.`);
     await recordEvent(tx, {
       actorUserId, action: 'tenant.deletion.cancelled', targetType: 'Tenant', targetId: tenantId,
       outcome: 'success', sourceIp: null, payload: { requestId, previousStatus: request.status },
@@ -550,13 +550,13 @@ export async function executeTenantDeletion(
       if (!request) return refuse('not-found', 'Deletion request not found');
       if (request.status !== 'approved' || !request.approvedByUserId || !request.approvedAt ||
           !request.executeNotBefore || !request.executeBefore) {
-        return refuse('not-approved', `This request is ${request.status}; only an approved request can be executed`);
+        return refuse('not-approved', `Request is ${request.status}. Only an approved request can be executed.`);
       }
       if (now < request.executeNotBefore) {
-        refuse('cooling-off', `The cooling-off period ends at ${request.executeNotBefore.toISOString()}`);
+        refuse('cooling-off', `Cooling-off period ends at ${request.executeNotBefore.toISOString()}.`);
       }
       if (now >= request.executeBefore) {
-        refuse('execution-window-closed', 'The approval has lapsed; request deletion again');
+        refuse('execution-window-closed', 'Approval expired. Request deletion again.');
       }
       assertFreshStepUp(input.stepUpAt, now);
       await runPreflight(tx, tenantId, {

@@ -294,7 +294,7 @@ export async function updateCredentialMetadata(
   ) {
     throw new CredentialRefusedError(
       'not_declarable',
-      'this credential carries its own expiry; a declared date would contradict it',
+      'This credential has its own expiry date and cannot take a declared one.',
     );
   }
   if (patch.ownerUserId) {

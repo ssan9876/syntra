@@ -189,7 +189,7 @@ describe('generating and downloading', () => {
     expect(await runExportJob(tenantId, created.id, provider)).toBe('failed');
     const row = await withTenant(tenantId, (tx) => tx.dataExport.findUniqueOrThrow({ where: { id: created.id } }));
     expect(row).toMatchObject({ status: 'failed', ciphertext: null });
-    expect(row.error).toMatch(/no longer holds/);
+    expect(row.error).toMatch(/no longer has the permission/);
     expect((await actions()).at(-1)).toBe('export.fail:failure');
   });
 

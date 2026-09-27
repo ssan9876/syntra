@@ -687,7 +687,7 @@ describe('the slice-2 admin surface — campaigns, batches and SoD', () => {
     // size: every denominator is zero and no percentage can say anything.
     expect(batch.status).toBe('previewed');
     expect(batch.requiresConfirmation).toBe(true);
-    expect(batch.blockedReason).toContain('first revocation batch');
+    expect(batch.blockedReason).toContain('First revocation batch');
 
     const detail = await get(`/api/admin/govern/batches/${batch.batchId}`, cookie);
     expect(detail.statusCode).toBe(200);

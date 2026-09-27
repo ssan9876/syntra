@@ -425,7 +425,7 @@ export async function runExportJob(
     exportAuthority(tx, row.requestedByUserId, kind),
   );
   if (!authority.allowed || authority.fingerprint === null) {
-    return fail('the requester no longer holds the permission this export needs', 'forbidden');
+    return fail('Requester no longer has the permission this export needs.', 'forbidden');
   }
 
   const generatedAt = clock();
@@ -478,7 +478,7 @@ export async function runExportJob(
     if (cause instanceof ExportRevokedMidway) return 'revoked';
     if (cause instanceof ExportTooLargeError) {
       return fail(
-        `the export would exceed ${EXPORT_MAX_BYTES / (1024 * 1024)} MiB; narrow the filters and request it again`,
+        `Export would exceed ${EXPORT_MAX_BYTES / (1024 * 1024)} MiB. Narrow the filters and request it again.`,
         'too_large',
       );
     }
@@ -789,7 +789,7 @@ const REFUSAL_MESSAGES: Record<ExportRefusal, string> = {
   expired: 'This export has expired and its file has been erased.',
   revoked: 'This export was revoked and its file has been erased.',
   authority_changed:
-    'Your access has changed since this export was generated, so it can no longer be handed to you. Request it again.',
+    'Your access changed since this export was generated. Request it again.',
   state: 'This export is not in a state that allows that.',
 };
 
@@ -840,7 +840,7 @@ export async function revokeExport(
       },
     });
     if (updated.count !== 1) {
-      throw new ExportRefusedError('state', 'This export changed state while it was being revoked.');
+      throw new ExportRefusedError('state', 'Export changed state while being revoked. Reload and try again.');
     }
     await recordEvent(tx, {
       actorUserId: input.actorUserId,
@@ -922,7 +922,7 @@ export async function sweepExports(
         data: {
           status: 'failed',
           completedAt: now,
-          error: 'abandoned: no worker finished this export within two hours; request it again',
+          error: 'abandoned: export did not finish within two hours. Request it again.',
         },
       });
       if (closed.count !== 1) continue;

@@ -595,7 +595,7 @@ describe('extending is an act', () => {
     await startCampaign(tenantId, actorUserId, id, { now: NOW });
     await expect(
       extendCampaign(tenantId, actorUserId, id, new Date(DUE.getTime() - 86_400_000)),
-    ).rejects.toThrow(/backwards/i);
+    ).rejects.toThrow(/later than the current/i);
   });
 });
 

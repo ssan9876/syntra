@@ -108,10 +108,7 @@ type _SettingsBodyMatches = MutuallyAssignable<
 export class UnknownSettingError extends Error {
   constructor(readonly keys: readonly string[]) {
     super(
-      `these are not Govern settings and cannot be written here: ${keys.join(', ')}. ` +
-        `lastAppliedBatchAt and personsWithActiveContractAtLastBatch are written only by ` +
-        `confirmRevocationBatch, because they are the denominator the population-collapse ` +
-        `refusal compares against.`,
+      `Not editable Govern settings: ${keys.join(', ')}.`,
     );
     this.name = 'UnknownSettingError';
   }
@@ -185,7 +182,7 @@ export async function upsertSourcePolicy(
   },
 ): Promise<void> {
   if (input.freshnessSlaHours <= 0) {
-    throw new Error('a freshness SLA must be a positive number of hours');
+    throw new Error('Freshness limit must be a positive number of hours.');
   }
   await withTenant(tenantId, async (tx) => {
     await tx.governSourcePolicy.upsert({

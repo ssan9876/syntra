@@ -73,7 +73,7 @@ describe('CancelRunButton', () => {
           type: 'https://syntra.dev/problems/run-not-cancellable',
           title: 'This run has already finished',
           status: 409,
-          detail: 'run r1 is applied, which has nothing left to cancel',
+          detail: 'Run r1 is already applied. Nothing to cancel.',
         },
         409,
       ),
@@ -92,7 +92,7 @@ describe('CancelRunButton', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel this sync run' }));
 
     expect(
-      await screen.findByText('run r1 is applied, which has nothing left to cancel'),
+      await screen.findByText('Run r1 is already applied. Nothing to cancel.'),
     ).toBeInTheDocument();
   });
 });

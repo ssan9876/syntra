@@ -57,12 +57,12 @@ describe('readDelimited', () => {
    */
   it('refuses a row with more cells than the header', () => {
     expect(() => readDelimited('id,name\n1,Ada,extra', options)).toThrow(
-      /row 2 has 3 cells but the header has 2/,
+      /Row 2 has 3 cells but the header has 2/,
     );
   });
 
   it('refuses a duplicate column name', () => {
-    expect(() => readDelimited('id,id\n1,2', options)).toThrow(/duplicate column "id"/);
+    expect(() => readDelimited('id,id\n1,2', options)).toThrow(/duplicate column "id"/i);
   });
 
   /**

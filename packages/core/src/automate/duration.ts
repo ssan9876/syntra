@@ -33,14 +33,14 @@ export function resolveRequestedDuration(
   if (policy.durationMode === 'fixed') return { ok: true, days: policy.defaultDurationDays };
 
   const days = requestedDays ?? policy.defaultDurationDays;
-  if (days === null) return { ok: false, message: 'Say how long this is needed for' };
+  if (days === null) return { ok: false, message: 'Enter how many days this is needed for.' };
   if (!Number.isInteger(days) || days <= 0) {
-    return { ok: false, message: 'Ask for a whole number of days, at least one' };
+    return { ok: false, message: 'Enter a whole number of days, at least 1.' };
   }
   if (policy.maxDurationDays !== null && days > policy.maxDurationDays) {
     return {
       ok: false,
-      message: `This product may be held for at most ${policy.maxDurationDays} days`,
+      message: `Maximum is ${policy.maxDurationDays} days.`,
     };
   }
   return { ok: true, days };
@@ -59,16 +59,16 @@ export function applyShortening(
 ): DurationOutcome {
   if (shortenedToDays === null) return { ok: true, days };
   if (!Number.isInteger(shortenedToDays) || shortenedToDays <= 0) {
-    return { ok: false, message: 'A shortened duration is a whole number of days' };
+    return { ok: false, message: 'Enter a whole number of days.' };
   }
   if (days === null) {
     return {
       ok: false,
-      message: 'This product grants permanent access; you can approve it or refuse it',
+      message: 'Access is permanent and cannot be shortened. Approve or refuse it.',
     };
   }
   if (shortenedToDays > days) {
-    return { ok: false, message: 'An approver may shorten a request, never lengthen it' };
+    return { ok: false, message: 'You can shorten the duration, not lengthen it.' };
   }
   return { ok: true, days: shortenedToDays };
 }

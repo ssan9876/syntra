@@ -82,7 +82,7 @@ describe('renderMessage', () => {
     expect(message.text).toContain('203.0.113.9');
     // The sentence that makes it worth sending: a factor added by whoever
     // stole the password outlives the password change.
-    expect(message.text).toMatch(/survives a password change/);
+    expect(message.text).toMatch(/remove this factor/);
   });
 
   it('uses each tenant own name', async () => {

@@ -114,7 +114,7 @@ export function decodeAppIconDataUri(dataUri: string): DecodedAppIcon {
   const head = DATA_URI_HEAD.exec(dataUri);
   if (!head) {
     throw new ApplicationIconRefusedError(
-      `A logo must be uploaded as an image file (${ALLOWED}). A link to a logo on another site cannot be shown here: the portal only displays pictures it hosts itself.`,
+      `Logo must be uploaded as an image file (${ALLOWED}), not linked by URL.`,
     );
   }
   const [, meta = ''] = head as unknown as [string, string];
@@ -125,32 +125,32 @@ export function decodeAppIconDataUri(dataUri: string): DecodedAppIcon {
   // reason is not obvious: an SVG is a document, and can carry script.
   if (mediaType === 'image/svg+xml') {
     throw new ApplicationIconRefusedError(
-      `SVG logos are not accepted: an SVG can carry script, and this picture is shown to everyone in your organisation. Export it as ${ALLOWED} instead.`,
+      `SVG logos are not accepted. Export it as ${ALLOWED}.`,
     );
   }
   if (!(APP_ICON_IMAGE_TYPES as readonly string[]).includes(mediaType)) {
     throw new ApplicationIconRefusedError(
-      `A logo may be ${ALLOWED}. ${mediaType ? `That file is ${mediaType}.` : 'That file did not say what type it is.'}`,
+      `Logo must be ${ALLOWED}. ${mediaType ? `This file is ${mediaType}.` : 'This file has no type.'}`,
     );
   }
   const declared = mediaType as AppIconImageType;
 
   if (!parameters.slice(1).includes('base64')) {
     throw new ApplicationIconRefusedError(
-      'The logo must be sent base64-encoded. Choose the file again; if this keeps happening, the page that sent it is out of date.',
+      'Logo was not base64-encoded. Choose the file again, or reload the page.',
     );
   }
 
   const payload = dataUri.slice(head[0].length);
   if (payload.length === 0) {
-    throw new ApplicationIconRefusedError('That file is empty.');
+    throw new ApplicationIconRefusedError('File is empty.');
   }
   // Strict, because `Buffer.from(…, 'base64')` is not: it skips characters it
   // does not recognise, so a payload with junk in it would decode to
   // something, and the size and signature checks would be checking that.
   if (payload.length % 4 !== 0 || !BASE64.test(payload)) {
     throw new ApplicationIconRefusedError(
-      'The logo could not be read: its encoding is damaged. Choose the file again.',
+      'Logo could not be read. Choose the file again.',
     );
   }
 
@@ -159,7 +159,7 @@ export function decodeAppIconDataUri(dataUri: string): DecodedAppIcon {
   // refusing at the encoded length would turn away a logo within the limit.
   if (bytes.length > MAX_APP_ICON_BYTES) {
     throw new ApplicationIconRefusedError(
-      `That logo is ${Math.ceil(bytes.length / 1024)} KB. The limit is ${MAX_APP_ICON_BYTES / 1024} KB — a tile draws it at 40 pixels, so a small square image is plenty.`,
+      `Logo is ${Math.ceil(bytes.length / 1024)} KB. The limit is ${MAX_APP_ICON_BYTES / 1024} KB.`,
     );
   }
 
@@ -167,11 +167,11 @@ export function decodeAppIconDataUri(dataUri: string): DecodedAppIcon {
   if (actual === null) {
     if (looksLikeMarkup(bytes)) {
       throw new ApplicationIconRefusedError(
-        `That file is not a ${TYPE_NAMES[declared]} image: it contains markup, like an SVG or a web page. Upload a ${ALLOWED} image instead.`,
+        `File is not a ${TYPE_NAMES[declared]} image; it contains markup. Upload a ${ALLOWED} image.`,
       );
     }
     throw new ApplicationIconRefusedError(
-      `That file is labelled ${TYPE_NAMES[declared]} but is not one. Open it in an image editor and export it as ${ALLOWED}.`,
+      `File is labelled ${TYPE_NAMES[declared]} but is not one. Export it as ${ALLOWED}.`,
     );
   }
   // Refused rather than silently relabelled. A mismatch is usually a renamed
@@ -180,7 +180,7 @@ export function decodeAppIconDataUri(dataUri: string): DecodedAppIcon {
   // were told — only works if the two agree.
   if (actual !== declared) {
     throw new ApplicationIconRefusedError(
-      `That file is labelled ${TYPE_NAMES[declared]} but is actually a ${TYPE_NAMES[actual]}. Rename it with the right extension, or export it again, and upload it once more.`,
+      `File is labelled ${TYPE_NAMES[declared]} but is a ${TYPE_NAMES[actual]}. Fix the extension and upload it again.`,
     );
   }
 

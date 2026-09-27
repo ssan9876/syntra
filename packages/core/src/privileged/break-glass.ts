@@ -119,7 +119,7 @@ function sameDigest(a: string, b: string): boolean {
 function assertFreshStepUp(stepUpAt: Date, now: Date, what: string): void {
   const age = now.getTime() - stepUpAt.getTime();
   if (!(age >= 0 && age <= BREAK_GLASS_STEP_UP_MAX_AGE_MS)) {
-    refuse('step-up-required', `${what} needs a console session started in the last ${BREAK_GLASS_STEP_UP_MAX_AGE_MS / MINUTE_MS} minutes. Elevate again, then retry.`);
+    refuse('step-up-required', `${what} needs a console sign-in from the last ${BREAK_GLASS_STEP_UP_MAX_AGE_MS / MINUTE_MS} minutes. Elevate again, then retry.`);
   }
 }
 
@@ -223,9 +223,9 @@ export interface AdminActor { actorUserId: string; stepUpAt: Date; sourceIp: str
 async function usableAccount(tx: TenantClient, userId: string) {
   const user = await tx.user.findUnique({ where: { id: userId } });
   if (!user) return refuse('not-found', 'Account not found');
-  if (user.status !== 'active') refuse('account-unusable', 'Only an active account can be an emergency account');
+  if (user.status !== 'active') refuse('account-unusable', 'Account is not active.');
   if (user.passwordSource !== 'local') {
-    refuse('account-unusable', 'An emergency account must sign in with a password Syntra holds; an upstream provider may be the thing that is down');
+    refuse('account-unusable', 'An emergency account must use a password held by Syntra, not an upstream provider.');
   }
   return user;
 }
@@ -241,11 +241,11 @@ export async function designateBreakGlassAccount(
   now: Date = new Date(),
 ): Promise<{ credential: string; userId: string }> {
   return withTenant(tenantId, async (tx) => {
-    if (userId === actor.actorUserId) refuse('self-not-allowed', 'A different administrator must designate your account for emergency access');
+    if (userId === actor.actorUserId) refuse('self-not-allowed', 'Another administrator must designate your account.');
     assertFreshStepUp(actor.stepUpAt, now, 'Designating an emergency account');
     await usableAccount(tx, userId);
     if (await tx.breakGlassAccount.findFirst({ where: { userId } })) {
-      refuse('already-designated', 'That account is already an emergency account; rotate its credential instead');
+      refuse('already-designated', 'Account is already an emergency account. Rotate its credential instead.');
     }
     const { credential, hash } = mintCredential();
     await tx.breakGlassAccount.create({
@@ -266,7 +266,7 @@ export async function rotateBreakGlassCredential(
   now: Date = new Date(),
 ): Promise<{ credential: string; userId: string }> {
   return withTenant(tenantId, async (tx) => {
-    if (userId === actor.actorUserId) refuse('self-not-allowed', 'A different administrator must rotate your emergency credential');
+    if (userId === actor.actorUserId) refuse('self-not-allowed', 'Another administrator must rotate your emergency credential.');
     assertFreshStepUp(actor.stepUpAt, now, 'Rotating an emergency credential');
     const account = await tx.breakGlassAccount.findFirst({ where: { userId } });
     if (!account) return refuse('not-designated', 'That account is not an emergency account');
@@ -307,7 +307,7 @@ export async function setBreakGlassActivationDelay(
   now: Date = new Date(),
 ): Promise<number> {
   if (!Number.isInteger(minutes) || minutes < BREAK_GLASS_DELAY_BOUNDS.min || minutes > BREAK_GLASS_DELAY_BOUNDS.max) {
-    refuse('invalid-delay', `The activation delay must be ${BREAK_GLASS_DELAY_BOUNDS.min}–${BREAK_GLASS_DELAY_BOUNDS.max} minutes`);
+    refuse('invalid-delay', `Activation delay must be ${BREAK_GLASS_DELAY_BOUNDS.min}–${BREAK_GLASS_DELAY_BOUNDS.max} minutes.`);
   }
   assertFreshStepUp(actor.stepUpAt, now, 'Changing the activation delay');
   const tenantId = await currentTenant(tx);
@@ -382,11 +382,11 @@ export async function requestBreakGlassActivation(
 ): Promise<ActivationNotice> {
   const reason = input.reason.trim();
   if (reason.length < BREAK_GLASS_REASON_MIN_LENGTH) {
-    refuse('reason-required', `Give a reason of at least ${BREAK_GLASS_REASON_MIN_LENGTH} characters`);
+    refuse('reason-required', `Reason must be at least ${BREAK_GLASS_REASON_MIN_LENGTH} characters.`);
   }
   if (!Number.isInteger(input.durationMinutes) ||
       input.durationMinutes < BREAK_GLASS_DURATION_BOUNDS.min || input.durationMinutes > BREAK_GLASS_DURATION_BOUNDS.max) {
-    refuse('invalid-duration', `An activation lasts ${BREAK_GLASS_DURATION_BOUNDS.min}–${BREAK_GLASS_DURATION_BOUNDS.max} minutes`);
+    refuse('invalid-duration', `Duration must be ${BREAK_GLASS_DURATION_BOUNDS.min}–${BREAK_GLASS_DURATION_BOUNDS.max} minutes.`);
   }
 
   const denied = async (userId: string | null, why: string) => {
@@ -394,7 +394,7 @@ export async function requestBreakGlassActivation(
       actorUserId: userId, action: 'break_glass.activation_refused', targetType: 'User', targetId: userId,
       outcome: 'failure', sourceIp: input.sourceIp, payload: { reason: why },
     }));
-    return refuse('invalid-credentials', 'Those emergency credentials were not accepted');
+    return refuse('invalid-credentials', 'Emergency credentials not accepted.');
   };
 
   const identified = await withTenant(tenantId, async (tx) => {
@@ -413,7 +413,7 @@ export async function requestBreakGlassActivation(
   return withTenant(tenantId, async (tx) => {
     await advance(tx, { userId: identified.userId }, now);
     if (await openActivation(tx, identified.userId)) {
-      refuse('activation-open', 'An activation for this account is already pending or active');
+      refuse('activation-open', 'This account already has a pending or active activation.');
     }
     const tenant = await tx.tenant.findUniqueOrThrow({
       where: { id: tenantId }, select: { breakGlassActivationDelayMinutes: true },
@@ -450,7 +450,7 @@ export async function approveBreakGlassActivation(
   return withTenant(tenantId, async (tx) => {
     await advance(tx, {}, now);
     const row = await findActivation(tx, activationId);
-    if (row.userId === actor.actorUserId) refuse('self-not-allowed', 'A different administrator must approve an emergency activation');
+    if (row.userId === actor.actorUserId) refuse('self-not-allowed', 'Another administrator must approve this activation.');
     if (row.status !== 'pending') refuse('not-pending', `This activation is ${row.status}, not pending`);
     assertFreshStepUp(actor.stepUpAt, now, 'Approving an emergency activation');
     const expiresAt = new Date(now.getTime() + row.durationMinutes * MINUTE_MS);
@@ -490,7 +490,7 @@ export async function endBreakGlassActivation(
         where: { id: activationId, status: 'pending' },
         data: { status: 'cancelled', endedAt: now, endedByUserId: actor.actorUserId },
       });
-      if (count !== 1) refuse('not-pending', 'This activation changed while you were looking at it');
+      if (count !== 1) refuse('not-pending', 'Activation changed while you were viewing it. Reload and try again.');
       await recordEvent(tx, {
         actorUserId: actor.actorUserId, action: 'break_glass.activation_cancelled', targetType: 'User', targetId: row.userId,
         outcome: 'success', sourceIp: actor.sourceIp, payload: { activationId },
@@ -500,7 +500,7 @@ export async function endBreakGlassActivation(
         where: { id: activationId, status: 'active' },
         data: { status: 'ended', endedAt: now, endedByUserId: actor.actorUserId, reviewStatus: 'pending' },
       });
-      if (count !== 1) refuse('not-pending', 'This activation changed while you were looking at it');
+      if (count !== 1) refuse('not-pending', 'Activation changed while you were viewing it. Reload and try again.');
       await tx.session.updateMany({ where: { breakGlassActivationId: activationId, revokedAt: null }, data: { revokedAt: now } });
       await recordEvent(tx, {
         actorUserId: actor.actorUserId, action: 'break_glass.ended', targetType: 'User', targetId: row.userId,
@@ -527,11 +527,11 @@ export async function reviewBreakGlassActivation(
   return withTenant(tenantId, async (tx) => {
     await advance(tx, {}, now);
     const row = await findActivation(tx, activationId);
-    if (row.userId === input.actorUserId) refuse('self-not-allowed', 'A different administrator must review an emergency activation');
+    if (row.userId === input.actorUserId) refuse('self-not-allowed', 'Another administrator must review this activation.');
     if (row.reviewStatus !== 'pending') refuse('not-reviewable', 'This activation has no review outstanding');
     const notes = input.notes.trim();
     if (notes.length < BREAK_GLASS_REVIEW_MIN_LENGTH) {
-      refuse('reason-required', `Record findings of at least ${BREAK_GLASS_REVIEW_MIN_LENGTH} characters`);
+      refuse('reason-required', `Findings must be at least ${BREAK_GLASS_REVIEW_MIN_LENGTH} characters.`);
     }
     assertFreshStepUp(input.stepUpAt, now, 'Completing a break-glass review');
     const windowEnd = row.endedAt ?? row.expiresAt ?? now;
@@ -542,7 +542,7 @@ export async function reviewBreakGlassActivation(
       where: { id: activationId, reviewStatus: 'pending' },
       data: { reviewStatus: 'completed', reviewedByUserId: input.actorUserId, reviewedAt: now, reviewerStepUpAt: input.stepUpAt, reviewNotes: notes },
     });
-    if (count !== 1) refuse('not-reviewable', 'This review was completed by somebody else');
+    if (count !== 1) refuse('not-reviewable', 'Review was already completed by another administrator.');
     await recordEvent(tx, {
       actorUserId: input.actorUserId, action: 'break_glass.reviewed', targetType: 'User', targetId: row.userId,
       outcome: 'success', sourceIp: input.sourceIp,

@@ -111,7 +111,7 @@ describe('sync run cancellation', () => {
     expect(after.filter((c) => c.status === 'applied')).toHaveLength(2);
     const abandoned = after.filter((c) => c.status === 'skipped');
     expect(abandoned).toHaveLength(proposed.length - 2);
-    expect(abandoned.every((c) => c.message === 'not applied: the run was cancelled')).toBe(true);
+    expect(abandoned.every((c) => c.message === 'Not applied: run cancelled.')).toBe(true);
     expect(after.some((c) => c.status === 'proposed')).toBe(false);
 
     // What committed to the directory is exactly what the run says applied.

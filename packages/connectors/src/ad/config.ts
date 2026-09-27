@@ -95,7 +95,7 @@ export const adTargetConfigSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['tlsMode'],
-        message: `an ldaps:// URL is implicit TLS, so it cannot also be "${config.tlsMode}"; use an ldap:// URL for starttls`,
+        message: `tlsMode "${config.tlsMode}" does not work with an ldaps:// URL. Use an ldap:// URL for starttls.`,
       });
     }
     if (!isLdapsUrl(config.url) && config.tlsMode === 'ldaps') {

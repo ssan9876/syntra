@@ -300,7 +300,7 @@ describe('who has access to this system', () => {
     });
     await expect(
       whoHasAccessToSystem(tenantId, { snapshotId: building, systemId: 'sys-1' }),
-    ).rejects.toThrow(/still being built/i);
+    ).rejects.toThrow(/still building/i);
   });
 });
 
@@ -336,7 +336,7 @@ describe('snapshotInForceOn — Ruling G-4', () => {
     expect(result.covered).toBe(false);
     if (!result.covered) {
       expect(result.nearest).toEqual(NOW);
-      expect(result.statement).toContain('no snapshot covers 2026-01-01');
+      expect(result.statement).toContain('No snapshot covers 2026-01-01');
     }
   });
 
@@ -373,7 +373,7 @@ describe('snapshotInForceOn — Ruling G-4', () => {
     expect(result.covered).toBe(false);
     if (!result.covered) {
       expect(result.nearest).toEqual(NOW);
-      expect(result.statement).toContain('a gap of 30 days');
+      expect(result.statement).toContain('30-day gap');
     }
   });
 });

@@ -133,8 +133,8 @@ export async function readRangedAttribute(
     if (!rangedKey) {
       if (requested > 1) {
         throw new Error(
-          `the directory stopped returning ${attribute} on ${dn} partway through a ranged ` +
-            `read; ${collected.length} values were collected and the enumeration is incomplete`,
+          `Incomplete read: the directory stopped returning ${attribute} on ${dn} partway ` +
+            `through a ranged read, after ${collected.length} values.`,
         );
       }
       return collected;
@@ -148,8 +148,7 @@ export async function readRangedAttribute(
     const next = `${attribute};range=${parsed.high + 1}-${parsed.high + options.pageStep}`;
     if (next === previousSpec || next === spec) {
       throw new Error(
-        `the directory returned the same range window twice for ${attribute} on ${dn}; ` +
-          `the enumeration did not advance and would not terminate`,
+        `Incomplete read: the directory returned the same range window twice for ${attribute} on ${dn}.`,
       );
     }
     previousSpec = spec;

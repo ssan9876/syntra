@@ -132,7 +132,7 @@ describe('CSV', () => {
       },
       { rows: [], holderCount: { known: true, value: 0 } },
     );
-    await expect(exportReportCsv(tenantId, actorUserId, live, {})).rejects.toThrow(/no as-of time/);
+    await expect(exportReportCsv(tenantId, actorUserId, live, {})).rejects.toThrow(/cannot be exported as evidence/);
   });
 
   it('records an audit event naming the actor, the scope and the row count', async () => {
@@ -482,7 +482,7 @@ it('audits a REFUSED export as well as a successful one', async () => {
 
   await expect(
     exportReportCsv(tenantId, actorUserId, live, { systemId: 'sys-1' }),
-  ).rejects.toThrow(/no as-of time/);
+  ).rejects.toThrow(/cannot be exported as evidence/);
 
   const event = await withTenant(tenantId, (tx) =>
     tx.auditEvent.findFirstOrThrow({ where: { action: 'govern.report.export' } }),

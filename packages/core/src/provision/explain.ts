@@ -883,11 +883,11 @@ export async function previewAccountProfile(
         attributes[name] = rendered.value;
         const domain = isAddressAttribute(name) ? addressedDomain(rendered.value) : null;
         if (domain !== null && !domainIsCovered(domain, verifiedDomains)) {
-          problems.push(`"${name}" is an address in ${domain}, which is not a verified email domain for this organisation`);
+          problems.push(`"${name}" is an address in ${domain}, which is not a verified domain`);
         }
       } else {
         problems.push(
-          `the template for "${name}" references ${rendered.missing.join(', ')}, which resolves to nothing for this person`,
+          `the template for "${name}" uses ${rendered.missing.join(', ')}, which is empty for this person`,
         );
       }
     }
@@ -955,8 +955,8 @@ export async function previewAccountProfile(
       // entirely of whitespace.
       problems.push(
         containerRendered.ok
-          ? 'the container template resolves to nothing for this person, and the profile has no fallback container'
-          : `the container template references ${containerRendered.missing.join(', ')}, which resolves to nothing for this person, and the profile has no fallback container`,
+          ? 'the container template is empty for this person and there is no fallback container'
+          : `the container template uses ${containerRendered.missing.join(', ')}, which is empty for this person, and there is no fallback container`,
       );
     }
 
@@ -989,12 +989,12 @@ export async function previewAccountProfile(
     if (!unique.ok) {
       problems.push(
         unique.reason === 'exhausted'
-          ? `no unique account name could be generated within ${profile.maxUniquenessAttempts} attempts`
+          ? `no unique account name after ${profile.maxUniquenessAttempts} attempts`
           : unique.reason === 'domain_unverified'
-            ? `the account name template renders an address in ${unique.domain}, which is not a verified email domain for this organisation`
+            ? `the account name template renders an address in ${unique.domain}, which is not a verified domain`
           : unique.reason === 'malformed'
             ? `the account name template ${unique.message}`
-            : `the account name template references ${unique.missing.join(', ')}, which resolves to nothing for this person`,
+            : `the account name template uses ${unique.missing.join(', ')}, which is empty for this person`,
       );
     }
 
@@ -1019,7 +1019,7 @@ export async function previewAccountProfile(
         userPrincipalName = named.upn;
         const domain = named.upn.slice(named.upn.lastIndexOf('@') + 1);
         if (!domainIsCovered(domain, verifiedDomains)) {
-          problems.push(`the userPrincipalName domain ${domain} is not a verified email domain for this organisation`);
+          problems.push(`userPrincipalName domain ${domain} is not a verified domain`);
         }
       } else problems.push(named.message);
     }

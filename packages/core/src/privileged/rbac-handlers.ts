@@ -86,7 +86,7 @@ const guardRbac = async (tx: TenantClient) => {
   if ((await countHoldersOf(tx, PERMISSIONS.RBAC_MANAGE)) > 0) return;
   throw new RoleRefusedError(
     'would-strand-rbac',
-    'That would leave nobody able to administer roles, and there is no way back from it but a database client. Give somebody else rbac.manage first.',
+    'Nobody would be left with rbac.manage. Give it to another administrator first.',
   );
 };
 

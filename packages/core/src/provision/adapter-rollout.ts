@@ -74,7 +74,7 @@ export class AdapterVersionChangedError extends Error {
     readonly currentVersion: string,
   ) {
     super(
-      `run ${runId} was planned for adapter ${plannedVersion}, but the target now runs ${currentVersion}; preview a new run`,
+      `Run ${runId} was planned on adapter ${plannedVersion}; the target now runs ${currentVersion}. Preview a new run.`,
     );
     this.name = 'AdapterVersionChangedError';
   }
@@ -147,12 +147,12 @@ export function adapterWriteContext(
   const overrideActive = deprecationOverrideActive(target, release.adapterVersion, now);
   const writesBlockedReason =
     pastDeprecation && !overrideActive
-      ? `${target.type} adapter ${release.adapterVersion} passed its deprecation date (${release.deprecationDate}); new writes are blocked until the target moves to a supported release or an administrator records a time-bounded override`
+      ? `${target.type} adapter ${release.adapterVersion} passed its deprecation date (${release.deprecationDate}). Writes are blocked. Move to a supported release or add an override.`
       : null;
   const warnings = releaseReadinessWarnings(target.type, release, now);
   if (pastDeprecation && overrideActive) {
     warnings.push(
-      `writes continue under a deprecation override until ${target.deprecationOverrideExpiresAt!.toISOString()}: ${target.deprecationOverrideReason ?? ''}`,
+      `Deprecation override until ${target.deprecationOverrideExpiresAt!.toISOString()}: ${target.deprecationOverrideReason ?? ''}`,
     );
   }
   return {
@@ -278,7 +278,7 @@ function assertSelectable(type: string, release: ConnectorAdapterRelease) {
   }
   if (!releaseIsCertified(release)) {
     throw new AdapterSelectionError(
-      `${type} adapter ${release.adapterVersion} has no passing certification (${release.certification.status}) and cannot be selected`,
+      `${type} adapter ${release.adapterVersion} is not certified (${release.certification.status}).`,
     );
   }
 }
@@ -393,11 +393,11 @@ export async function rollbackTargetAdapter(
     if (!target) throw new AdapterRolloutNotFoundError('Target not found');
     const rollbackVersion = target.adapterRollbackVersion;
     if (rollbackVersion === null) {
-      throw new AdapterSelectionError('This target has no previous certified adapter release to roll back to');
+      throw new AdapterSelectionError('No earlier certified adapter release to roll back to.');
     }
     const release = catalog(target.type).releases.find((r) => r.adapterVersion === rollbackVersion);
     if (!release) {
-      throw new AdapterSelectionError(`${target.type} adapter ${rollbackVersion} is no longer in this build's catalog`);
+      throw new AdapterSelectionError(`${target.type} adapter ${rollbackVersion} is not in this build.`);
     }
     assertSelectable(target.type, release);
     let from: string | null;
@@ -468,7 +468,7 @@ export async function grantDeprecationOverride(
     }
     if (context.release.deprecationDate === null) {
       throw new AdapterSelectionError(
-        `${target.type} adapter ${context.release.adapterVersion} is not deprecated; there is nothing to override`,
+        `${target.type} adapter ${context.release.adapterVersion} is not deprecated. Nothing to override.`,
       );
     }
     const updated = await tx.targetSystem.update({

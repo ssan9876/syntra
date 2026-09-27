@@ -176,7 +176,7 @@ export class ProvisionRunNotAppliableError extends Error {
     readonly status: string,
   ) {
     super(
-      `run ${runId} is ${status}, which is not a state an apply may act on; only a previewed or blocked run can be applied`,
+      `Run ${runId} is ${status}. Only a previewed or blocked run can be applied.`,
     );
     this.name = 'ProvisionRunNotAppliableError';
   }
@@ -189,7 +189,7 @@ export class ProvisionRunNotConfirmableError extends Error {
     readonly blockedReason: string | null,
   ) {
     super(
-      `run ${runId} was refused outright and cannot be confirmed: ${blockedReason ?? 'no reason recorded'}`,
+      `Run ${runId} was refused by the safety guard and cannot be confirmed: ${blockedReason ?? 'no reason recorded'}`,
     );
     this.name = 'ProvisionRunNotConfirmableError';
   }
@@ -542,7 +542,7 @@ export async function applyProvisionRun(
       }
       if (!confirmed) {
         throw new Error(
-          `this run is blocked and has not been confirmed: ${run.blockedReason ?? ''}`,
+          `Run is blocked until confirmed: ${run.blockedReason ?? 'no reason recorded'}`,
         );
       }
     }
@@ -607,7 +607,7 @@ export async function applyProvisionRun(
       });
     }
     const config = await targetWithCredential(tx, provider, run.targetSystemId);
-    if (!config) throw new Error('target configuration or credential missing');
+    if (!config) throw new Error(`Target "${target.name}" has no configuration or credential.`);
     const profile = await tx.accountProfile.findFirst({
       where: { targetSystemId: run.targetSystemId },
     });
@@ -811,7 +811,7 @@ export async function applyProvisionRun(
         where: { runId, id: { in: deferredIds }, status: 'proposed' },
         data: {
           message:
-            'not attempted: this action requires an explicit confirmation and this run was not confirmed',
+            'Not attempted: requires confirmation.',
         },
       });
     }
@@ -1073,8 +1073,8 @@ async function applyContainerAction(
       ok: false,
       message:
         action.actionType === 'move_container'
-          ? 'this action names no container to move'
-          : 'this action names no container to create',
+          ? 'No container given to move.'
+          : 'No container given to create.',
       failure: 'rejected',
     });
   }
@@ -1154,7 +1154,7 @@ async function applyContainerAction(
       action.id,
       result.ok || result.failure !== 'conflict'
         ? result
-        : { ok: true, message: `${dn} already existed at the target` },
+        : { ok: true, message: `${dn} already exists at the target.` },
       { attempts: action.attempts + 1 },
     );
   }
@@ -1187,7 +1187,7 @@ async function applyContainerAction(
     return finish(
       tenantId,
       action.id,
-      { ok: true, message: `${dn} already existed at the target and was adopted` },
+      { ok: true, message: `${dn} already existed at the target. Adopted it.` },
       { attempts: action.attempts + 1 },
     );
   }
@@ -1225,7 +1225,7 @@ async function applyOneAction(
     // first account at the target, which is somebody else's.
     return finish(tenantId, action.id, {
       ok: false,
-      message: 'this action names no account row at this target, so there is nothing to apply it to',
+      message: 'No account at this target for this action.',
       failure: 'rejected',
     });
   }
@@ -1247,7 +1247,7 @@ async function applyOneAction(
   if (operation === null) {
     return finish(tenantId, action.id, {
       ok: false,
-      message: 'this action could not be expressed as a write operation',
+      message: 'Could not turn this action into a write operation.',
       failure: 'rejected',
     });
   }
@@ -1307,7 +1307,7 @@ async function applyOneAction(
       result = {
         ok: false,
         message:
-          'the target reported the account was created and returned no anchor for it, so Syntra cannot address the object again',
+          'Target created the account but returned no anchor for it.',
         failure: 'transient',
       };
     }
@@ -1333,9 +1333,9 @@ async function applyOneAction(
         // picks it up provided the plan still wants it.
         result = {
           ok: false,
-          message: `the target throttled this action ${throttledAttempts} times over ${Math.round(
+          message: `Target throttled this action ${throttledAttempts} times over ${Math.round(
             throttledForMs / 1000,
-          )}s and did not accept it; the next run for this target picks it up`,
+          )}s. The next run retries it.`,
           failure: 'transient',
         };
         break;
@@ -1423,7 +1423,7 @@ async function recordActionUnresolved(
       where: { id: actionId },
       // The STATUS IS NOT TOUCHED. It is `in_flight` and stays `in_flight`.
       data: {
-        message: `this apply could not record the outcome of this action, so whether it landed at the target is unknown until the next run resolves it: ${message}`,
+        message: `Outcome not recorded: ${message}. The next run checks whether it landed.`,
       },
     });
     await recordEvent(tx, {
@@ -1852,9 +1852,9 @@ async function finish(
           forcedChange: meta.forcedChange ?? false,
         };
       } else if (address.to !== null && meta.transport === undefined) {
-        deliveryNote = `${address.reason}, but no message transport was configured for this apply; the password is in the vault and no link was sent`;
+        deliveryNote = `No link sent to the ${address.reason}: no mail transport is configured. The password is in the vault.`;
       } else if (address.to !== null) {
-        deliveryNote = `${address.reason}, but no public URL was given to this apply, so there was no link to send; the password is in the vault`;
+        deliveryNote = `No link sent to the ${address.reason}: PUBLIC_URL is not set. The password is in the vault.`;
       }
 
       await recordEvent(tx, {
@@ -1957,7 +1957,7 @@ export async function resolveInFlightActions(
     if (actions.length === 0) return { config: null, actions, targetType: null };
     const target = await tx.targetSystem.findUniqueOrThrow({ where: { id: targetSystemId } });
     const config = await targetWithCredential(tx, provider, targetSystemId);
-    if (!config) throw new Error('target configuration or credential missing');
+    if (!config) throw new Error(`Target "${target.name}" has no configuration or credential.`);
     return { config, actions, targetType: target.type };
   });
 
@@ -2036,7 +2036,7 @@ export async function resolveInFlightActions(
             status: 'applied',
             appliedAt: new Date(),
             message:
-              'resolved after an interrupted apply: the write had landed, but the initial password it generated was lost with the process and could not be sealed',
+              'Recovered after an interrupted apply: the write landed, but its initial password was lost.',
           },
         });
         // By id, never by correlation key. Phase 7 fills `accountId` for every
@@ -2059,7 +2059,7 @@ export async function resolveInFlightActions(
               // enabled, and nobody can sign in to it. Silence here is a
               // support call with no starting point.
               statusReason:
-                'created by an apply that was interrupted before its initial password could be sealed; the password must be reset before this account can be used',
+                'Created by an interrupted apply. Its initial password was lost. Reset the password before use.',
               createdActionId: action.id,
             },
           });
@@ -2071,7 +2071,7 @@ export async function resolveInFlightActions(
           where: { id: action.id },
           data: {
             status: 'proposed',
-            message: 'resolved after an interrupted apply: the write had not landed',
+            message: 'Recovered after an interrupted apply: the write had not landed.',
           },
         });
       }

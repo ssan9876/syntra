@@ -121,10 +121,10 @@ describe('attention summary', () => {
 
   it('says what a held run is waiting on', () => {
     expect(runAttentionSummary({ ...counters, status: 'blocked', requiresConfirmation: true, blockedReason: 'would create 1 of 2 accounts (50.0%), above the 20% threshold; x' }))
-      .toBe('Held for confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold');
+      .toBe('Needs confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold');
     expect(runAttentionSummary({ ...counters, status: 'blocked', requiresConfirmation: false, blockedReason: 'the target returned no accounts at all' }))
-      .toBe('Refused by the safety guard: the target returned no accounts at all');
+      .toBe('Blocked by the safety guard: the target returned no accounts at all');
     expect(runAttentionSummary({ ...counters, status: 'previewed', requiresConfirmation: false, blockedReason: null }))
-      .toBe('Waiting to be applied: no changes planned');
+      .toBe('Ready to apply: no changes');
   });
 });

@@ -101,7 +101,7 @@ describe('evaluatePersonGuard', () => {
       }),
     );
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
-    if (verdict.blocked) expect(verdict.reason).toMatch(/broken HR feed/);
+    if (verdict.blocked) expect(verdict.reason).toMatch(/Check the HR feed/);
   });
 
   it('blocks when nobody would hold an active contract at all', () => {
@@ -131,7 +131,7 @@ describe('evaluatePersonGuard', () => {
     expect(verdict).toMatchObject({ blocked: true });
     if (verdict.blocked) {
       expect(verdict.reason).toMatch(/50 of 100 people/);
-      expect(verdict.reason).toMatch(/broken HR feed/);
+      expect(verdict.reason).toMatch(/Check the HR feed/);
     }
   });
 
@@ -146,6 +146,6 @@ describe('evaluatePersonGuard', () => {
     );
     if (!verdict.blocked) throw new Error('expected a block');
     expect(verdict.reason).toContain('has fallen from 100 to 40');
-    expect(verdict.reason).toContain('every action in this import is downstream of that count');
+    expect(verdict.reason).toContain('Check the HR feed before confirming this import');
   });
 });

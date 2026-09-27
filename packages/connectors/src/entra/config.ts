@@ -209,7 +209,7 @@ export function entraUserPrincipalName(
   correlationKey: string,
 ): { upn: string } | { message: string } {
   const key = correlationKey.trim();
-  if (key === '') return { message: 'the correlation key is blank' };
+  if (key === '') return { message: 'Correlation key is blank.' };
   if (key.includes('@')) return { upn: key };
   const domain = config.userPrincipalDomain?.trim();
   if (domain !== undefined && domain !== '') return { upn: `${key}@${domain}` };
@@ -217,8 +217,8 @@ export function entraUserPrincipalName(
   if (tenantIsDomain(tenantId)) return { upn: `${key}@${tenantId}` };
   return {
     message:
-      `the correlation key "${key}" has no domain, no userPrincipalDomain is set and tenantId is a directory id, not a domain; ` +
-      'set userPrincipalDomain (User principal name domain) to a verified domain of the tenant, such as contoso.com',
+      `Correlation key "${key}" has no domain. ` +
+      'Set userPrincipalDomain to a verified domain of the tenant, such as contoso.com.',
   };
 }
 

@@ -163,7 +163,7 @@ function splitKey(sanitised: string, charset: CorrelationKeyCharset): SplitKey {
   if (parts.length > 2) {
     return {
       ok: false,
-      message: `renders "${sanitised}", which has more than one @; a username on this target may hold one address at most`,
+      message: `renders "${sanitised}", which has more than one @`,
     };
   }
   // Separators are trimmed from the ends of the local part as `sam` trims
@@ -177,7 +177,7 @@ function splitKey(sanitised: string, charset: CorrelationKeyCharset): SplitKey {
   if (local === '' || domain === '') {
     return {
       ok: false,
-      message: `renders "${sanitised}", which has nothing on one side of its @; an address needs both a name and a domain`,
+      message: `renders "${sanitised}", with nothing before or after the @`,
     };
   }
   return { ok: true, local, domain: `@${domain}` };
@@ -289,7 +289,7 @@ export function generateCorrelationKey(
     return {
       ok: false,
       reason: 'malformed',
-      message: `renders an address whose domain "${domain.slice(1)}" alone leaves no room under this target's ${input.maxLength}-character limit`,
+      message: `renders an address whose domain "${domain.slice(1)}" alone exceeds this target's ${input.maxLength}-character limit`,
     };
   }
 

@@ -53,14 +53,14 @@ describe('PersonProvisionReceipts', () => {
   });
 
   it('marks a read-back that gave up as needing a person', () => {
-    renderWith(state([row('Mail', 'verification_pending', 'Target read-back remained incomplete after 3 observations. Manual verification is required.')]));
+    renderWith(state([row('Mail', 'verification_pending', 'Read-back incomplete after 3 observations. Manual verification is required.')]));
     const target = screen.getByRole('row', { name: /Mail/ });
     expect(within(target).getByText('Manual verification required')).toBeInTheDocument();
     expect(within(target).queryByText('Waiting for directory read-back')).not.toBeInTheDocument();
   });
 
   it('keeps a failure on its target with the exact run and a retry', async () => {
-    const value = state([row('Mail', 'failed', 'Some actions failed. Review the run and retry unfinished work.')]);
+    const value = state([row('Mail', 'failed', 'Some actions failed. Review the run and retry.')]);
     renderWith(value);
     const target = screen.getByRole('row', { name: /Mail/ });
     expect(within(target).getByText('Failed')).toBeInTheDocument();

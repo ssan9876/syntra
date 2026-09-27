@@ -152,7 +152,7 @@ export async function openPrivacyCase(tenantId: string, input: OpenPrivacyCaseIn
     refuse('invalid', `Verification method must be one of: ${PRIVACY_VERIFICATION_METHODS.join(', ')}`);
   }
   if (input.reason.trim().length < PRIVACY_TEXT_MIN_LENGTH || input.verificationAttestation.trim().length < PRIVACY_TEXT_MIN_LENGTH) {
-    refuse('invalid', `The reason and the identity-verification attestation each need at least ${PRIVACY_TEXT_MIN_LENGTH} characters`);
+    refuse('invalid', `Reason and identity check each need at least ${PRIVACY_TEXT_MIN_LENGTH} characters`);
   }
   const dueInDays = input.dueInDays ?? PRIVACY_CASE_DEFAULT_DUE_DAYS;
   if (!Number.isInteger(dueInDays) || dueInDays < 1 || dueInDays > PRIVACY_CASE_MAX_DUE_DAYS) {
@@ -458,7 +458,7 @@ export async function liftPersonRestriction(
       assertOpen(row);
       const person = await tx.person.findUniqueOrThrow({ where: { id: row.personId } });
       if (person.erasedAt !== null) {
-        refuse('erased-permanently-restricted', 'An erased person stays restricted, so a source that still holds them cannot write them back');
+        refuse('erased-permanently-restricted', 'Erased people stay restricted permanently');
       }
       if (person.processingRestrictedAt === null) refuse('not-restricted', 'Processing of this person is not restricted');
       await tx.person.update({

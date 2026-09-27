@@ -21,7 +21,7 @@ const runItem = (over: Record<string, unknown> = {}) => ({
   blockedReason: 'would create 1 of 2 accounts (50.0%), above the 20% threshold',
   plannedChanges: 1,
   planned: 'would create 1 account',
-  summary: 'Held for confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold',
+  summary: 'Needs confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold',
   startedAt: '2026-09-24T12:00:00.000Z',
   href: '/admin/targets/target-1/runs/run-1',
   ...over,

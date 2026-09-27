@@ -388,7 +388,7 @@ async function grantMembership(
     // wondering what was wrong with the request.
     return {
       ok: false,
-      message: `${group.displayName} is a dynamic group; Entra computes its membership from a rule and this connector does not manage dynamic groups`,
+      message: `${group.displayName} is a dynamic group. Its membership cannot be changed here.`,
       failure: 'rejected',
     };
   }
@@ -528,7 +528,7 @@ export interface EntraTargetConnector extends TargetConnector<Config> {
 }
 
 const UNVERIFIED_DETAIL =
-  'Graph does not publish effective application permissions; record admin consent in the readiness check';
+  'Not verified: Graph does not publish application permissions. Record admin consent in the readiness check.';
 
 const unverifiedRights = (): ConnectorRight[] =>
   (['createUser', 'modifyUser', 'moveUser', 'modifyMembership'] as const).map((right) => ({
@@ -563,7 +563,7 @@ export const entraTargetConnector: EntraTargetConnector = {
         }
         if (response.status === 403) {
           return {
-            message: `consent missing on ${path}: ${graphFailureMessage(403, response.body)}; grant admin consent for User.ReadWrite.All, GroupMember.ReadWrite.All and Group.Read.All`,
+            message: `Admin consent missing on ${path}: ${graphFailureMessage(403, response.body)}. Grant admin consent for User.ReadWrite.All, GroupMember.ReadWrite.All and Group.Read.All.`,
           };
         }
         if (response.status >= 400) {
@@ -578,7 +578,7 @@ export const entraTargetConnector: EntraTargetConnector = {
       if ('message' in groups) return { ok: false, message: groups.message };
       return {
         ok: true,
-        message: `reachable: Microsoft Graph at ${connection.graphBaseUrl} for tenant ${connection.tenantId}`,
+        message: `Connected to Microsoft Graph at ${connection.graphBaseUrl} for tenant ${connection.tenantId}`,
         sampleCounts: { user: users.count, group: groups.count, orgUnit: 0 },
         rights: unverifiedRights(),
       };
@@ -765,7 +765,7 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
           return {
             ok: false,
             message:
-              'Microsoft Entra ID has no organizational units or containers: accounts are not placed anywhere, so there is nothing for a container to be materialised at',
+              'Microsoft Entra ID has no organizational units or containers. Nothing to create.',
             failure: 'rejected',
           };
 
@@ -779,7 +779,7 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
           if (existing.anchor !== null) {
             return {
               ok: true,
-              message: 'an account carrying this action\'s correlation marker already exists and was adopted',
+              message: 'Account already created by this action; adopted it.',
               anchor: existing.anchor,
             };
           }
@@ -813,7 +813,7 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
             ) {
               const adopted = await findConflictCreate(connection, named.upn, marker);
               if (adopted !== null) {
-                return { ok: true, message: 'an account carrying this action\'s correlation marker became visible and was adopted', anchor: adopted };
+                return { ok: true, message: 'Account created by this action became visible and was adopted.', anchor: adopted };
               }
               return { ...result, failure: 'conflict', message: `${result.message}: userPrincipalName ${named.upn} is taken` };
             }
@@ -833,7 +833,7 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
           // can only name a property in `ENTRA_ATTRIBUTE_MAP`.
           const body = managedBody(connection, op.attributes);
           if (Object.keys(body).length === 0) {
-            return { ok: true, message: 'nothing among the managed attributes to update' };
+            return { ok: true, message: 'No managed attributes to update.' };
           }
           return patchUser(connection, op.anchor, body, 'account updated');
         }

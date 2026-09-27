@@ -232,7 +232,7 @@ export async function recordCampaignDecision(
   if (facts.campaignStatus !== 'open') {
     throw new CampaignDecisionRefusedError(
       'campaign_not_open',
-      `this campaign is ${facts.campaignStatus}`,
+      `Campaign is ${facts.campaignStatus}.`,
     );
   }
   // `pending`, and ONLY `pending`. §11's item table has no
@@ -245,7 +245,7 @@ export async function recordCampaignDecision(
   if (facts.itemStatus !== 'pending') {
     throw new CampaignDecisionRefusedError(
       'item_not_pending',
-      `this item is already ${facts.itemStatus}`,
+      `Item is already ${facts.itemStatus}.`,
     );
   }
 
@@ -255,16 +255,16 @@ export async function recordCampaignDecision(
   if (facts.itemPersonId !== null && facts.itemPersonId === input.deciderPersonId) {
     throw new CampaignDecisionRefusedError(
       'self_review',
-      'no person may record a decision on an item whose subject is themselves',
+      'You cannot decide on your own access.',
     );
   }
   if (!facts.isReviewer) {
-    throw new CampaignDecisionRefusedError('not_reviewer', 'this item is not assigned to you');
+    throw new CampaignDecisionRefusedError('not_reviewer', 'Item is not assigned to you.');
   }
   if (facts.reviewerInvalid !== null) {
     throw new CampaignDecisionRefusedError(
       'reviewer_invalid',
-      `you may no longer decide: ${facts.reviewerInvalid}`,
+      `You can no longer decide: ${facts.reviewerInvalid}`,
     );
   }
 
@@ -281,7 +281,7 @@ export async function recordCampaignDecision(
         data: {
           status: 'moot',
           statusReason:
-            "the subject's contracts have all ended. A certification is a signed statement about somebody's access; signing one for a person who left would be false assurance.",
+            'Person has left. Their access cannot be certified.',
         },
       });
       await recordEvent(tx, {
@@ -296,7 +296,7 @@ export async function recordCampaignDecision(
     });
     throw new CampaignDecisionRefusedError(
       'subject_departed',
-      'this person has left; the item is now moot and cannot be certified. Revoking is still available.',
+      'Person has left, so this cannot be certified. You can still revoke.',
     );
   }
 
@@ -304,7 +304,7 @@ export async function recordCampaignDecision(
   if (input.decision === 'revoke' && (input.comment ?? '').trim().length === 0) {
     throw new CampaignDecisionRefusedError(
       'comment_required',
-      'a revoke decision requires a comment',
+      'Add a comment to revoke.',
     );
   }
   // An unattributable holding is excluded from bulk certify AND given a
@@ -316,7 +316,7 @@ export async function recordCampaignDecision(
   ) {
     throw new CampaignDecisionRefusedError(
       'comment_required',
-      'this holding has no recorded cause; certifying it requires a comment saying who said it was fine and why',
+      'No recorded reason for this access. Add a comment to certify it.',
     );
   }
 
@@ -356,7 +356,7 @@ export async function recordCampaignDecision(
       });
       throw new CampaignDecisionRefusedError(
         'item_not_pending',
-        `this item is already ${current.status}`,
+        `Item is already ${current.status}.`,
       );
     }
 
@@ -502,20 +502,20 @@ export async function bulkCertify(
     if (campaign.status !== 'open') {
       throw new CampaignDecisionRefusedError(
         'campaign_not_open',
-        `this campaign is ${campaign.status}`,
+        `Campaign is ${campaign.status}.`,
       );
     }
     if (!campaign.allowBulkCertify) {
       throw new CampaignDecisionRefusedError(
         'bulk_not_allowed',
-        'this campaign does not permit bulk certify',
+        'Bulk certify is off for this campaign.',
       );
     }
     const settings = await governSettings(tx);
     if (input.itemIds.length > settings.bulkCertifyLimit) {
       throw new CampaignDecisionRefusedError(
         'bulk_too_large',
-        `a bulk certify is capped at ${settings.bulkCertifyLimit} items per action for this tenant`,
+        `Bulk certify is limited to ${settings.bulkCertifyLimit} items at a time.`,
       );
     }
 
@@ -523,7 +523,7 @@ export async function bulkCertify(
     if (invalid !== null) {
       throw new CampaignDecisionRefusedError(
         'reviewer_invalid',
-        `you may no longer decide: ${invalid}`,
+        `You can no longer decide: ${invalid}`,
       );
     }
 
@@ -561,11 +561,11 @@ export async function bulkCertify(
 
     for (const item of items) {
       if (item.status !== 'pending') {
-        refused.push({ itemId: item.id, reason: `this item is already ${item.status}` });
+        refused.push({ itemId: item.id, reason: `Item is already ${item.status}.` });
         continue;
       }
       if (item.personId === input.deciderPersonId) {
-        refused.push({ itemId: item.id, reason: 'you are the subject of this item' });
+        refused.push({ itemId: item.id, reason: 'This is your own access.' });
         continue;
       }
       // A DEPARTED SUBJECT, refused AND mooted, exactly as the single path does
@@ -582,17 +582,17 @@ export async function bulkCertify(
           data: {
             status: 'moot',
             statusReason:
-              "the subject's contracts have all ended. A certification is a signed statement about somebody's access; signing one for a person who left would be false assurance.",
+              'Person has left. Their access cannot be certified.',
           },
         });
         refused.push({
           itemId: item.id,
-          reason: 'this person has left; the item is now moot and cannot be certified',
+          reason: 'Person has left, so this cannot be certified.',
         });
         continue;
       }
       if (!item.reviewers.some((r) => r.personId === input.deciderPersonId)) {
-        refused.push({ itemId: item.id, reason: 'this item is not assigned to you' });
+        refused.push({ itemId: item.id, reason: 'Item is not assigned to you.' });
         continue;
       }
       if (!isBulkCertifiable(item)) {
@@ -604,8 +604,7 @@ export async function bulkCertify(
         refused.push({
           itemId: item.id,
           reason:
-            `this item is high-risk (${named.join(', ')}) ` +
-            `and must be decided one at a time, with a comment`,
+            `High-risk item (${named.join(', ')}). Decide it on its own, with a comment.`,
         });
         continue;
       }
@@ -637,7 +636,7 @@ export async function bulkCertify(
         data: { status: 'certified' },
       });
       if (moved.count !== 1) {
-        refused.push({ itemId: item.id, reason: 'somebody else decided this item first' });
+        refused.push({ itemId: item.id, reason: 'Another reviewer decided this item first.' });
         continue;
       }
 

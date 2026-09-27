@@ -77,7 +77,7 @@ export function evaluateGuard(input: GuardInput): GuardVerdict {
     return {
       blocked: true,
       requiresConfirmation: false,
-      reason: 'the source returned no records',
+      reason: 'Source returned no records.',
     };
   }
 

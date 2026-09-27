@@ -122,7 +122,7 @@ export function gapsForSources(sources: readonly ClassifiedSource[]): SourceGapD
         kind: 'source_unread',
         sourceKind: s.sourceKind,
         sourceId: s.sourceId,
-        reason: `${s.sourceName} has never been read successfully; nothing it holds is described by this snapshot`,
+        reason: `${s.sourceName} has never been read. This snapshot has none of its data.`,
         sourceRunId: s.lastRunId,
       });
       continue;
@@ -133,8 +133,7 @@ export function gapsForSources(sources: readonly ClassifiedSource[]): SourceGapD
         sourceKind: s.sourceKind,
         sourceId: s.sourceId,
         reason:
-          `${s.sourceName} was last read ${Math.round(s.ageHours ?? 0)} hours ago, ` +
-          `against a freshness SLA of ${s.freshnessSlaHours} hours`,
+          `${s.sourceName} was last read ${Math.round(s.ageHours ?? 0)} hours ago (limit ${s.freshnessSlaHours} hours).`,
         sourceRunId: s.lastRunId,
       });
     }
@@ -164,9 +163,7 @@ export function checkSnapshotAge(
     ageDays,
     clock: 'snapshot',
     message:
-      `this snapshot was assembled ${ageDays} days ago, past the limit of ` +
-      `${maxSnapshotAgeDays} days. Re-base onto a fresh snapshot; re-basing ` +
-      `re-opens only the items whose holding actually changed.`,
+      `Snapshot is ${ageDays} days old (limit ${maxSnapshotAgeDays}). Re-base onto a new snapshot.`,
   };
 }
 
@@ -193,7 +190,7 @@ export function checkSourceFreshness(
       clock: 'source',
       offending: [],
       message:
-        'no source contributes to this scope, so nothing here has been shown to have been read',
+        'No source covers this scope.',
     };
   }
 
@@ -209,8 +206,8 @@ export function checkSourceFreshness(
     message: offending
       .map((s) =>
         s.lastSuccessfulReadAt === null
-          ? `${s.sourceName} has never been read successfully`
-          : `${s.sourceName} was last read ${Math.round(s.ageHours ?? 0)} hours ago, against a ${s.freshnessSlaHours}-hour SLA`,
+          ? `${s.sourceName} has never been read`
+          : `${s.sourceName} was last read ${Math.round(s.ageHours ?? 0)} hours ago (limit ${s.freshnessSlaHours} hours)`,
       )
       .join('; '),
   };

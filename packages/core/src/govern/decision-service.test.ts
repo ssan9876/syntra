@@ -350,7 +350,7 @@ describe('a departed subject', () => {
       tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
     );
     expect(item.status).toBe('moot');
-    expect(item.statusReason).toContain('contracts have all ended');
+    expect(item.statusReason).toContain('Person has left');
 
     // And a second attempt refuses on the item's status rather than repeating
     // the departure refusal, because the moot really happened.
@@ -572,7 +572,7 @@ describe('bulk certify', () => {
       [privileged, unattributable, stale, mover, partial].sort(),
     );
     // Refused IN WORDS, not as a disabled button with no explanation.
-    expect(result.refused[0]!.reason).toContain('one at a time');
+    expect(result.refused[0]!.reason).toContain('on its own');
   });
 
   it('records viaBulk and the SIZE on every decision it produces', async () => {

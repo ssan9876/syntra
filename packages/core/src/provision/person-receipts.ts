@@ -62,7 +62,7 @@ async function enqueueReceipt(tenantId: string, receiptId: string, scheduler: Sc
     const jobId = startAfterSeconds === undefined
       ? await scheduler.enqueue(PERSON_PROVISION_JOB, { tenantId, receiptId })
       : await scheduler.enqueue(PERSON_PROVISION_JOB, { tenantId, receiptId }, { startAfterSeconds });
-    if (!jobId) throw new Error('The scheduler did not accept this request. Retry this saved receipt.');
+    if (!jobId) throw new Error('The scheduler did not accept this request. Retry it.');
     await withTenant(tenantId, tx => tx.personProvisionReceipt.update({ where: { id: receiptId }, data: { jobId } }));
   } catch (error) {
     await withTenant(tenantId, tx => tx.personProvisionReceipt.updateMany({ where: { id: receiptId, status: { in: ['pending', 'deferred'] } }, data: { status: 'failed', message: error instanceof Error ? error.message : 'Could not queue provisioning' } }));
@@ -145,13 +145,13 @@ async function reconcileLifecycleTargetStep(tenantId: string, requestKey: string
     });
   } else if (state.receipts.length > 0 && state.receipts.every((receipt) => ['applied', 'no_match'].includes(receipt.status))) {
     await transitionLifecycleStep(tenantId, state.operationId, 'targets', 'succeeded', {
-      message: 'All requested target operations reached their resolved state.',
+      message: 'All target operations finished.',
       responseCategory: state.receipts.every((receipt) => receipt.status === 'no_match') ? 'no_change_required' : 'confirmed',
       evidence,
     });
   } else {
     await transitionLifecycleStep(tenantId, state.operationId, 'targets', 'running', {
-      message: 'Waiting for target execution or manual read-back verification.',
+      message: 'Waiting for the target or for manual verification.',
       responseCategory: state.receipts.some((receipt) => receipt.status === 'verification_pending') ? 'read_back_incomplete' : null,
       evidence,
     });
@@ -204,7 +204,7 @@ async function verifyReceiptAtTarget(
     return { receipt, target, account, config };
   });
   if (!prepared.account?.anchor || !prepared.config) {
-    return { matched: false, message: 'Target identity or credential is unavailable for read-back. Manual verification is required.' };
+    return { matched: false, message: 'Read-back not possible: target identity or credential unavailable. Manual verification is required.' };
   }
   const connector = (options.connector ?? targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
   const expected = {
@@ -219,14 +219,14 @@ async function verifyReceiptAtTarget(
     readBack.attempts === undefined ? {} : { attempts: readBack.attempts },
   );
   if (result.matched) {
-    return { matched: true, message: `Target account and entitlement state were confirmed by read-back after ${result.attempts} observation${result.attempts === 1 ? '' : 's'}.` };
+    return { matched: true, message: `Confirmed by read-back after ${result.attempts} observation${result.attempts === 1 ? '' : 's'}.` };
   }
   const complete = result.readBack.complete && result.readBack.enabled !== null;
   return {
     matched: false,
     message: complete
-      ? `Target state still did not match after ${result.attempts} observations. Manual verification is required.`
-      : `Target read-back remained incomplete after ${result.attempts} observations. Manual verification is required.`,
+      ? `Target state did not match after ${result.attempts} observations. Manual verification is required.`
+      : `Read-back incomplete after ${result.attempts} observations. Manual verification is required.`,
   };
 }
 
@@ -250,7 +250,7 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
       where: { id: receiptId },
       data: {
         status: 'deferred',
-        message: `Deferred: this tenant already has ${saturation.inFlight} of ${saturation.cap} target operations in flight. Retrying in ${DEFERRAL_SECONDS} seconds (deferral ${deferrals}).`,
+        message: `Deferred: ${saturation.inFlight} of ${saturation.cap} target operations in flight. Retrying in ${DEFERRAL_SECONDS} seconds (deferral ${deferrals}).`,
         evidence: { ...evidence, deferrals, lastDeferredAt: new Date().toISOString() },
       },
     }));
@@ -293,13 +293,13 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
      */
     const gate = await withTenant(tenantId, async tx => {
       const target = await tx.targetSystem.findUnique({ where: { id: receipt.targetSystemId } });
-      if (!target?.enabled) return { refusal: 'This target is disabled or has been removed.' } as const;
+      if (!target?.enabled) return { refusal: 'Target is disabled or removed.' } as const;
       const active = await tx.provisionRun.findFirst({ where: { targetSystemId: receipt.targetSystemId, status: { in: ['running', 'applying', 'previewed', 'blocked'] } }, orderBy: { startedAt: 'desc' } });
       return { active, verdict: activeRunGate(active) } as const;
     });
     if ('refusal' in gate) { await finish('blocked', gate.refusal); return; }
     if (gate.verdict === 'held') {
-      await finish('blocked', `A run on this target is held for confirmation${gate.active?.blockedReason ? ` (${gate.active.blockedReason})` : ''}. Confirm or cancel that run, then retry; this request does not replace a decision that is waiting for a person.`);
+      await finish('blocked', `A run on this target is held for confirmation${gate.active?.blockedReason ? ` (${gate.active.blockedReason})` : ''}. Apply or cancel that run, then retry.`);
       return;
     }
     if (gate.verdict === 'wait') {
@@ -334,13 +334,13 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     // exactly as it was, for a person to apply or for the next run to
     // supersede.
     if (run.status === 'previewed') {
-      await closeEmptyPreviewedRun(tenantId, run.id, 'A person provisioning request found nothing to change on this target.');
+      await closeEmptyPreviewedRun(tenantId, run.id, 'Receipt found nothing to change on this target.');
     }
-    if ((evidence?.exceptions?.length ?? 0) > 0) { await finish('blocked', 'This person has planning exceptions. Review the linked run.'); return; }
+    if ((evidence?.exceptions?.length ?? 0) > 0) { await finish('blocked', 'Planning exceptions for this person. Review the linked run.'); return; }
     if (!plan.actions.length) {
-      if (evidence?.notYetStarted) await finish('pending', 'The start date is outside the provisioning window. Retry when due.');
-      else if (!evidence?.evaluated) await finish('blocked', 'This person was not evaluated by the target.');
-      else if (!evidence.accountRequired) await finish('no_match', 'No account is required by the evaluated rules. No access-completion claim is made.');
+      if (evidence?.notYetStarted) await finish('pending', 'Start date is outside the provisioning window. Retry when due.');
+      else if (!evidence?.evaluated) await finish('blocked', 'Target did not evaluate this person.');
+      else if (!evidence.accountRequired) await finish('no_match', 'No rule requires an account.');
       else {
         // Nothing to change is a claim about the plan, not about the target:
         // the account may have been created or adopted by a different run,
@@ -351,13 +351,13 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
         const verification = await verifyReceiptAtTarget(tenantId, receiptId, provider, options, { attempts: 1 })
           .catch((error: unknown) => ({
             matched: false,
-            message: `Target read-back failed (${error instanceof Error ? error.message : 'unknown error'}). Manual verification is required.`,
+            message: `Read-back failed (${error instanceof Error ? error.message : 'unknown error'}). Manual verification is required.`,
           }));
         await finish(
           verification.matched ? 'applied' : 'verification_pending',
           verification.matched
-            ? 'The target plan needed no changes, and the existing account and entitlement state were confirmed by read-back.'
-            : `The target plan needed no changes. ${verification.message}`,
+            ? 'No changes needed; confirmed by read-back.'
+            : `No changes needed. ${verification.message}`,
         );
       }
       return;
@@ -368,8 +368,8 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     const observed = await withTenant(tenantId, tx => tx.provisionAction.findMany({ where: { runId: run.id, personId: receipt.personId } }));
     const failed = observed.some(action => ['failed', 'conflict'].includes(action.status));
     const unfinished = observed.some(action => action.status !== 'applied');
-    if (failed) await finish('failed', 'Some actions failed. Review the run and retry unfinished work.');
-    else if (unfinished) await finish('blocked', 'Some actions require review or confirmation on the run.');
+    if (failed) await finish('failed', 'Some actions failed. Review the run and retry.');
+    else if (unfinished) await finish('blocked', 'Some actions need confirmation on the run.');
     else {
       const verification = await verifyReceiptAtTarget(tenantId, receiptId, provider, options);
       await finish(verification.matched ? 'applied' : 'verification_pending', verification.message);

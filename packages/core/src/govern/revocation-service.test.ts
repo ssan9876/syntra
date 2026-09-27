@@ -305,7 +305,7 @@ describe('computeRevocationBatch', () => {
     const result = await computeRevocationBatch(tenantId, actorUserId, campaignId, { now: NOW });
     expect(result.status).toBe('previewed');
     expect(result.requiresConfirmation).toBe(true);
-    expect(result.blockedReason).toContain('first revocation batch');
+    expect(result.blockedReason).toContain('First revocation batch');
 
     const dispatches = await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.findMany({ orderBy: { sequence: 'asc' } }),
@@ -529,7 +529,7 @@ describe('confirmRevocationBatch', () => {
     );
     // The revocation is not DROPPED because the account is gone.
     expect(dispatch.status).toBe('dispatched');
-    expect(dispatch.message).toContain('holds no active Syntra account');
+    expect(dispatch.message).toContain('has no active Syntra account');
     // It fell back to the confirming administrator rather than to nobody.
     expect(revokeGrantMock.mock.calls[0]![1]).toBe(actorUserId);
   });
@@ -595,7 +595,7 @@ describe('confirmRevocationBatch', () => {
 
     const second = await computeRevocationBatch(tenantId, actorUserId, campaignId, { now: later });
     expect(second.status).toBe('blocked');
-    expect(second.blockedReason).toMatch(/fewer persons/i);
+    expect(second.blockedReason).toMatch(/active contract fell/i);
     await expect(
       confirmRevocationBatch(tenantId, actorUserId, second.batchId, {
         now: later,
@@ -827,7 +827,7 @@ describe('the RevocationOrder’s constraints', () => {
     const dispatch = await withTenant(tenantId, (tx) =>
       tx.revocationDispatch.findFirstOrThrow({ where: { route: 'revocation_order' } }),
     );
-    expect(dispatch.message).toContain('a rule or a live grant still wants');
+    expect(dispatch.message).toContain('an active grant still gives this access');
   });
 
   it('CANCELS an existing open order for the same holding rather than colliding', async () => {

@@ -32,7 +32,7 @@ export async function checkEligibility(
     return {
       ok: false,
       reason: 'subject_inactive',
-      message: 'The person this was for is no longer active.',
+      message: 'Person is no longer active.',
     };
   }
 
@@ -41,7 +41,7 @@ export async function checkEligibility(
     return {
       ok: false,
       reason: 'subject_departed',
-      message: `${person.givenName} ${person.familyName} holds no contract in force.`,
+      message: `${person.givenName} ${person.familyName} has no active contract.`,
     };
   }
 
@@ -50,7 +50,7 @@ export async function checkEligibility(
     return {
       ok: false,
       reason: 'product_withdrawn',
-      message: 'That catalog entry has been withdrawn.',
+      message: 'Catalog item has been withdrawn.',
     };
   }
 
@@ -90,9 +90,8 @@ export async function checkEligibility(
       ok: false,
       reason: 'sod_violation',
       message:
-        `granting this would create a critical segregation-of-duties violation of ` +
-        `"${named[0]!.ruleName}", against ${named[0]!.otherSideHoldings.join(', ') || 'access already held'}. ` +
-        `An approved exception is required first.`,
+        `Conflicts with "${named[0]!.ruleName}" (critical) because of ${named[0]!.otherSideHoldings.join(', ') || 'access already held'}. ` +
+        `Needs an approved exception first.`,
     };
   }
 

@@ -214,7 +214,7 @@ export async function submitRequest(
     if (!product.workflow.enabled) {
       return refuse(
         'workflow_disabled',
-        'The approval workflow for this product has been switched off. An administrator has to turn it back on.',
+        'Approval workflow for this product is turned off. Ask an administrator to turn it on.',
       );
     }
 
@@ -223,7 +223,7 @@ export async function submitRequest(
     if (stages.length > 0 && (input.justification ?? '').trim() === '') {
       return refuse(
         'invalid_form',
-        'Say why this is needed. An approver asked to decide with no stated reason will decide badly or not at all.',
+        'Add a reason for this request.',
       );
     }
 
@@ -291,7 +291,7 @@ export async function submitRequest(
       if (users === 0) {
         return refuse(
           'no_user_account',
-          'That person holds no active Syntra account, so there is nothing to grant this to.',
+          'Person has no active Syntra account.',
         );
       }
     }
@@ -319,7 +319,7 @@ export async function submitRequest(
     if (input.replacesGrantId != null && replaced === null) {
       return refuse(
         'already_held',
-        'That grant is no longer live; ask for it again instead of extending it.',
+        'Grant has ended. Request it again instead of extending.',
       );
     }
     const excluded =
@@ -459,7 +459,7 @@ export async function submitRequest(
           data: {
             status,
             statusReason:
-              'stage 1 resolved to nobody who can decide it, and so did its fallback',
+              'Stage 1 has no approver, and its fallback has none either.',
           },
         });
         const owners =
@@ -477,7 +477,7 @@ export async function submitRequest(
               productName: product.name,
               subjectName,
               droppedNote:
-                'Everybody the stage resolved to was the subject, the submitter, or unable to sign in.',
+                'Every approver found was the requester, the person it is for, or unable to sign in.',
               requestUrl: requestUrl(publicUrl, request.id),
             },
             requestId: request.id,

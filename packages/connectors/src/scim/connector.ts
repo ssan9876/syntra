@@ -27,7 +27,7 @@ function normalise(config: Config): Resolved {
   const { bearerToken, bindPassword, ...rest } = config;
   const token = bearerToken ?? bindPassword;
   if (token === undefined || token === '') {
-    throw new Error('no SCIM bearer token was supplied');
+    throw new Error('No SCIM bearer token is set.');
   }
   return { ...scim2TargetConfigSchema.parse(rest), bearerToken: token };
 }
@@ -179,7 +179,7 @@ export const scimTargetConnector: TargetConnector<Config> = {
         `${config.userResourcePath}?startIndex=1&count=1`,
       );
       if (usersResult.status === 401 || usersResult.status === 403) {
-        return { ok: false, message: `the server refused the bearer token (HTTP ${usersResult.status})` };
+        return { ok: false, message: `Bearer token refused (HTTP ${usersResult.status}).` };
       }
       if (usersResult.status >= 400) {
         return { ok: false, message: `${config.userResourcePath} answered HTTP ${usersResult.status}` };
@@ -193,7 +193,7 @@ export const scimTargetConnector: TargetConnector<Config> = {
         ok: groupsResult.status < 400,
         message:
           groupsResult.status < 400
-            ? 'connected; users and groups are both reachable'
+            ? 'Connected; users and groups are readable.'
             : `${config.groupResourcePath} answered HTTP ${groupsResult.status}`,
       };
     } catch (cause) {
@@ -273,7 +273,7 @@ export const scimTargetConnector: TargetConnector<Config> = {
             }
             return {
               ok: false,
-              message: `an account named ${op.correlationKey} already exists and was not created by this action`,
+              message: `Account ${op.correlationKey} already exists and was not created by Syntra.`,
               failure: 'conflict',
             };
           }
@@ -328,8 +328,7 @@ export const scimTargetConnector: TargetConnector<Config> = {
           return {
             ok: false,
             message:
-              'this target has no containers: SCIM addresses resources by id, ' +
-              'so there is nothing for an org unit to be materialised at',
+              'This target has no containers. Nothing to create.',
             failure: 'rejected',
           };
         case 'grant_entitlement':

@@ -487,7 +487,7 @@ describe('the placement control', () => {
       put: () =>
         json({
           moved: false,
-          message: 'the server is unwilling to perform. The move is recorded and the next run will retry it.',
+          message: 'the server is unwilling to perform. The next run retries the move.',
         }) as unknown as Response,
     });
     renderPage();
@@ -503,7 +503,7 @@ describe('the placement control', () => {
     // Not an error. The decision is stored and the next run retries it, and
     // saying "that failed" would tell the administrator their decision was
     // lost when it was not.
-    expect(await screen.findByText(/next run will retry it/i)).toBeVisible();
+    expect(await screen.findByText(/next run retries the move/i)).toBeVisible();
   });
 
   it('offers to hand the person back to the rule', async () => {

@@ -345,9 +345,9 @@ describe('adTargetConnector — test and discovery', () => {
     const result = await adTargetConnector.test(config);
     const byRight = new Map(result.rights!.map((r) => [r.right, r]));
     expect(byRight.get('modifyUser')!.status).toBe('unverified');
-    expect(byRight.get('modifyUser')!.detail).toContain('holds no account yet');
+    expect(byRight.get('modifyUser')!.detail).toContain('has no accounts yet');
     expect(byRight.get('modifyMembership')!.status).toBe('unverified');
-    expect(byRight.get('modifyMembership')!.detail).toContain('offers no group yet');
+    expect(byRight.get('modifyMembership')!.detail).toContain('has no groups yet');
   });
 
   it('excludes a configured primary group from the catalog', async () => {
@@ -418,7 +418,7 @@ describe('adTargetConnector — test and discovery', () => {
       'modifyUser:denied',
       'moveUser:denied',
     ]);
-    expect(result.rights![0]!.detail).toContain('this bind cannot perform this operation');
+    expect(result.rights![0]!.detail).toContain('Applies that need it will fail');
     expect(result.message).toContain('4 of 4 write rights not confirmed');
   });
 

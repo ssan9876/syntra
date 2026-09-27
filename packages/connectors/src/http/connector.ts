@@ -213,7 +213,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
       }
       return {
         ok: true,
-        message: `reached ${document.name}`,
+        message: `Connected to ${document.name}`,
         sampleCounts: { user: items.length, group: 0, orgUnit: 0 },
         // The rights this connector needs cannot be read from a REST API that
         // does not publish them, and `unverified` is deliberately not a polite
@@ -349,7 +349,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
       // entitlement from everybody who holds it. Throwing marks the
       // entitlement `unreadable`, which makes every rule naming it
       // unresolvable rather than silently destructive.
-      throw new Error('this target does not describe how to read a membership');
+      throw new Error('The connector document does not describe how to read memberships.');
     }
 
     const members: string[] = [];
@@ -381,9 +381,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
         return {
           ok: false,
           message:
-            'this target has no containers: its document describes account and ' +
-            'entitlement operations only, so there is nothing for an org unit ' +
-            'to be materialised at',
+            'This target has no containers. Nothing to create.',
           failure: 'rejected',
         };
 
@@ -396,7 +394,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
           return {
             ok: false,
             message:
-              'this target cannot safely create an account: its document must declare create, correlationAt, and provenance read-back',
+              'Cannot create accounts: the connector document must declare create, correlationAt and provenance read-back.',
             failure: 'rejected',
           };
         }
@@ -413,7 +411,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
             }
             return {
               ok: false,
-              message: `an account named ${op.correlationKey} already exists and was not created by this action`,
+              message: `Account ${op.correlationKey} already exists and was not created by Syntra.`,
               failure: 'conflict',
             };
           }

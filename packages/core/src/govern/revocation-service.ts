@@ -318,7 +318,7 @@ async function createRevocationOrder(
 ): Promise<string> {
   if (input.liveAttribution) {
     throw new Error(
-      'a revocation order may not be created for a holding a rule or a live grant still wants',
+      'Cannot revoke: a rule or an active grant still gives this access.',
     );
   }
   // The escape hatch for `govern_revocation_order_one_open`: an existing open
@@ -383,11 +383,11 @@ export async function confirmRevocationBatch(
     if (batch.status === 'blocked') {
       throw new RevocationRefusedError(
         'blocked',
-        `this batch is blocked and cannot be confirmed: ${batch.blockedReason ?? 'no reason recorded'}`,
+        `Batch is blocked and cannot be confirmed: ${batch.blockedReason ?? 'no reason recorded'}`,
       );
     }
     if (batch.status !== 'previewed') {
-      throw new RevocationRefusedError('not_previewed', `this batch is ${batch.status}`);
+      throw new RevocationRefusedError('not_previewed', `Batch is ${batch.status}.`);
     }
     // `requiresConfirmation` needs an EXPLICIT confirmation from the caller.
     // Defaulting it to true would make the second axis of §13's guard a
@@ -395,7 +395,7 @@ export async function confirmRevocationBatch(
     if (batch.requiresConfirmation && options.confirmed !== true) {
       throw new RevocationRefusedError(
         'confirmation_required',
-        `this batch requires an explicit confirmation: ${batch.blockedReason ?? ''}`,
+        `Batch needs confirmation: ${batch.blockedReason ?? ''}`,
       );
     }
 
@@ -480,7 +480,7 @@ export async function confirmRevocationBatch(
         payload: { refusedAtExecution: true, reasons: prepared.refusedReasons },
       });
     });
-    throw new RevocationRefusedError('blocked', `this batch is refused at execution: ${reasons}`);
+    throw new RevocationRefusedError('blocked', `Batch blocked at execution: ${reasons}`);
   }
 
   let dispatched = 0;
@@ -525,7 +525,7 @@ export async function confirmRevocationBatch(
     });
     const noAccountNote =
       decision !== null && deciderUserId === null
-        ? 'the deciding person holds no active Syntra account, so this was dispatched with no actor recorded against it'
+        ? 'Sent with no actor recorded: the reviewer has no active Syntra account.'
         : null;
 
     const reason = `${prepared.campaignName}: ${decision?.comment ?? 'revoked by decision'}`;
@@ -562,7 +562,7 @@ export async function confirmRevocationBatch(
               data: {
                 status: 'failed',
                 message:
-                  'the grant behind this holding was already ended between the preview and the confirmation; nothing was dispatched',
+                  'Grant had already ended. Nothing was sent.',
               },
             });
             await recordEvent(tx, {
@@ -642,7 +642,7 @@ export async function confirmRevocationBatch(
             // and a revocation order against an arbitrary account is worse than
             // none.
             throw new Error(
-              `campaign item ${item.id} names neither a person nor an account, so no target account can be resolved for its revocation`,
+              `Campaign item ${item.id} has no person or account, so there is nothing to revoke.`,
             );
           }
           const account = await tx.targetAccount.findFirstOrThrow({
@@ -974,7 +974,7 @@ export async function reflectRevocationOutcomes(
           ageHours: Math.round(ageHours),
           dispatchSlaHours: settings.dispatchSlaHours,
           statement:
-            'this revocation was dispatched and the owning subsystem has not reported it applied within its SLA',
+            'Revocation sent but not reported applied in time.',
         },
       });
     }
@@ -1035,7 +1035,7 @@ export async function reflectRevocationOutcomes(
         confirmedAt: dispatch.confirmedAt?.toISOString() ?? null,
         observedInSnapshotId: snapshotId,
         statement:
-          'the owning subsystem reported this removal applied, and the next snapshot still shows the holding as held',
+          'Reported removed, but the next snapshot still shows the access.',
       },
     });
   }

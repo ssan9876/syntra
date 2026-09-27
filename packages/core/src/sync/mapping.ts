@@ -132,7 +132,7 @@ export function mapRecord(
     return {
       failed: true,
       anchor: record.anchor,
-      reason: 'the correlation attribute is missing from this record',
+      reason: 'Correlation attribute missing from this record.',
     };
   }
 

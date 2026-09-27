@@ -52,7 +52,7 @@ describe('lifecycleVerdict', () => {
   });
 
   it('requires intervention when read-back handed the check to a person', () => {
-    const manual = receipt('ad', 'verification_pending', 'Target read-back remained incomplete after 3 observations. Manual verification is required.');
+    const manual = receipt('ad', 'verification_pending', 'Read-back incomplete after 3 observations. Manual verification is required.');
     expect(lifecycleVerdict({ ...active, receipts: [manual] }).verdict).toBe('intervention');
     const noReadBack = receipt('hr', 'verification_pending', 'The target plan needed no changes. Confirm the observed account and entitlement state before completing this work.');
     expect(lifecycleVerdict({ ...active, receipts: [noReadBack] }).verdict).toBe('intervention');

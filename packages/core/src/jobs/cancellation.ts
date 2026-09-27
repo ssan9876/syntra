@@ -94,7 +94,7 @@ export class RunNotCancellableError extends Error {
     readonly runId: string,
     readonly status: string,
   ) {
-    super(`run ${runId} is ${status}, which has nothing left to cancel`);
+    super(`Run ${runId} is already ${status}. Nothing to cancel.`);
     this.name = 'RunNotCancellableError';
   }
 }
@@ -110,7 +110,7 @@ export class RunNotAppliableError extends Error {
     readonly runId: string,
     readonly status: string,
   ) {
-    super(`run ${runId} is ${status}, which is not a state an apply may act on`);
+    super(`Run ${runId} is ${status} and cannot be applied.`);
     this.name = 'RunNotAppliableError';
   }
 }

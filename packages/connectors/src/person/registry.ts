@@ -17,7 +17,7 @@ export type PersonSourceType = (typeof PERSON_SOURCE_TYPES)[number];
 export class UnknownPersonSourceTypeError extends Error {
   constructor(readonly type: string) {
     super(
-      `no person source connector implements type "${type}"; known types are ` +
+      `Unknown person source type "${type}". Known types: ` +
         PERSON_SOURCE_TYPES.join(', '),
     );
     this.name = 'UnknownPersonSourceTypeError';

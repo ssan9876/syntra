@@ -234,8 +234,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
         ok: false,
         failure: 'unauthorized',
         message:
-          'this directory source is configured without TLS, and a password is ' +
-          'never sent over an unencrypted connection',
+          'Password not sent: this directory source is configured without TLS.',
       };
     }
 
@@ -300,8 +299,7 @@ export const ldapWriteback: SourceWriteback<Config> = {
           ok: false,
           failure: 'unsupported',
           message:
-            'this directory does not report userAccountControl, so an account ' +
-            'cannot be enabled or disabled through it',
+            'Cannot enable or disable: this directory does not report userAccountControl.',
         };
       }
 

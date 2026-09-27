@@ -216,7 +216,7 @@ describe('runWebhookJob', () => {
     await runWebhookJob(provider, { tenantId }, { poster: poster({ status: 500 }) });
     const row = await withTenant(tenantId, (tx) => tx.webhookDelivery.findFirstOrThrow());
     expect(row.lastStatus).toBe(500);
-    expect(row.lastError).toBe('the receiver answered 500');
+    expect(row.lastError).toBe('Receiver returned HTTP 500.');
   });
 
   it('waits as long as a throttled receiver asked', async () => {

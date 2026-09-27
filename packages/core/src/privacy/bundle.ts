@@ -41,10 +41,10 @@ export async function writeSubjectBundle(
   const built = await withTenant(tenantId, async (tx) => {
     const privacyCase = await tx.privacyCase.findFirst({ where: { id: params.caseId } });
     if (privacyCase === null || privacyCase.personId !== params.personId) {
-      throw new Error('the privacy case this bundle was requested for no longer names this person');
+      throw new Error('Privacy case no longer refers to this person.');
     }
     const ids = await resolveSubjectIds(tx, params.personId);
-    if (ids === null) throw new Error('the person this bundle was requested for does not exist');
+    if (ids === null) throw new Error('Person for this bundle does not exist.');
     const sections = await collectSubjectData(tx, ids);
     return { privacyCase, ids, sections };
   }, { timeoutMs: 120_000 });

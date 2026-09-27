@@ -344,7 +344,7 @@ export function percentOf(
 ): Tri<{ percent: number; numerator: number; denominator: number }> {
   if (!denominator.known) return denominator;
   if (denominator.value === 0) {
-    return unknownValue('no denominator: this scope contains nothing to be a share of');
+    return unknownValue('Scope is empty.');
   }
   return known({
     percent: Math.round((numerator / denominator.value) * 1000) / 10,

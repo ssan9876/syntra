@@ -200,7 +200,7 @@ export function assertPermissionNames(values: readonly string[]): Permission[] {
   if (unknown.length > 0) {
     throw new RoleRefusedError(
       'unknown-permission',
-      `not permissions this product has: ${unknown.join(', ')}`,
+      `Unknown permissions: ${unknown.join(', ')}`,
     );
   }
   return values as Permission[];
@@ -340,14 +340,14 @@ export async function deleteRole(tx: TenantClient, roleId: string): Promise<void
   if (role.builtIn) {
     throw new RoleRefusedError(
       'built-in-role',
-      `"${role.name}" is a built-in role: it is what the seed created and what the permission backfill targets, so it cannot be deleted. Change its permissions instead.`,
+      `"${role.name}" is a built-in role and cannot be deleted. Change its permissions instead.`,
     );
   }
   const holders = new Set(role.assignments.map((a) => a.userId)).size;
   if (holders > 0) {
     throw new RoleRefusedError(
       'role-in-use',
-      `${holders} ${holders === 1 ? 'person holds' : 'people hold'} "${role.name}". Deleting it would revoke that authority with no record of what it was; take the role off them first.`,
+      `${holders} ${holders === 1 ? 'person holds' : 'people hold'} "${role.name}". Remove the role from them first.`,
     );
   }
 

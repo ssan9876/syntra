@@ -269,7 +269,7 @@ describe('runTask', () => {
     expect(result.ok).toBe(false);
     // Nothing about the database. The runner holds no administrative
     // permission, which is the whole point of the feature.
-    expect(result.message).toBe('That could not be completed. Ask an administrator.');
+    expect(result.message).toBe('The task failed. Ask an administrator.');
 
     const record = await withTenant(tenantId, (tx) =>
       tx.delegatedTaskRun.findFirstOrThrow(),
@@ -277,7 +277,7 @@ describe('runTask', () => {
     expect(record.outcome).toBe('failure');
     // The real reason is on the record, which only an administrator reads.
     expect(record.message.length).toBeGreaterThan(0);
-    expect(record.message).not.toBe('That could not be completed. Ask an administrator.');
+    expect(record.message).not.toBe('The task failed. Ask an administrator.');
   });
 
   it('lets somebody act on themselves', async () => {

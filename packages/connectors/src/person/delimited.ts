@@ -34,7 +34,7 @@ export interface DelimitedTable {
  */
 export class RowCeilingExceededError extends Error {
   constructor(readonly maxRows: number) {
-    super(`the file has more than ${maxRows} rows, which is this source's limit`);
+    super(`File has more than this source's limit of ${maxRows} rows.`);
     this.name = 'RowCeilingExceededError';
   }
 }
@@ -131,7 +131,7 @@ export function readDelimited(
   for (const column of columns) {
     if (seen.has(column)) {
       throw new Error(
-        `duplicate column "${column}": a mapping naming it could read either`,
+        `Duplicate column "${column}" in the header.`,
       );
     }
     seen.add(column);
@@ -147,8 +147,7 @@ export function readDelimited(
       // The line number an operator sees, counting the header.
       const line = options.hasHeaderRow ? index + 2 : index + 1;
       throw new Error(
-        `row ${line} has ${record.length} cells but the header has ` +
-          `${columns.length}; the extra cells name no column`,
+        `Row ${line} has ${record.length} cells but the header has ${columns.length}.`,
       );
     }
     const row: Record<string, string> = {};

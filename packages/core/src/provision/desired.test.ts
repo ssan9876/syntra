@@ -650,7 +650,7 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'no_contracts',
       message:
-        'Anna Novak holds no contracts at all, so their access cannot be computed; this is an incomplete record, not a departure',
+        'Anna Novak has no contracts. Add one to compute their access.',
     });
     expect(result.account).toBeNull();
     expect([...result.entitlements]).toEqual([]);
@@ -678,7 +678,7 @@ describe('desiredState — persons Provision cannot process', () => {
       horizon: NOW,
     });
     expect(result.unprocessable?.message).toBe(
-      'person-1 holds no contracts at all, so their access cannot be computed; this is an incomplete record, not a departure',
+      'person-1 has no contracts. Add one to compute their access.',
     );
   });
 
@@ -693,7 +693,7 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'unresolvable_rule',
       message:
-        'the rule "Finance staff" names entitlement ent-finance, which is missing in the target catalog; the rule cannot be resolved for this person and produces no desired state',
+        'Rule "Finance staff" grants entitlement ent-finance, which is missing in the target catalog. Fix the rule or refresh the catalog.',
     });
     expect(result.account).toBeNull();
   });
@@ -802,7 +802,7 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'template_unresolvable',
       message:
-        'the account profile template for "mail" references person.businessEmail, which resolves to nothing for this person',
+        'Profile attribute "mail" uses person.businessEmail, which is empty for Anna Novak.',
     });
   });
 
@@ -928,7 +928,7 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'template_unresolvable',
       message:
-        'the container template references contract.department, which resolves to nothing for this person, and the profile has no fallback container',
+        'Container template uses contract.department, which is empty for Anna Novak, and the profile has no fallback container.',
     });
     expect(result.account).toBeNull();
   });
@@ -943,7 +943,7 @@ describe('desiredState — persons Provision cannot process', () => {
     expect(result.unprocessable).toEqual({
       kind: 'name_generation_exhausted',
       message:
-        'no unique account name could be generated for Anna Novak within 20 attempts',
+        'No unique account name for Anna Novak after 20 attempts.',
     });
   });
 

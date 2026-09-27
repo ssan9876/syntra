@@ -121,14 +121,14 @@ export function deriveMirroredDns(
       result = {
         ok: false,
         kind: 'cycle',
-        message: `${unit.name} is its own ancestor in the org-unit tree, so it has no path to mirror`,
+        message: `"${unit.name}" is its own ancestor in the org-unit tree`,
       };
       memo.set(id, result);
       return result;
     }
     visiting.add(id);
     if (unit.name.trim() === '') {
-      result = { ok: false, kind: 'name_blank', message: 'this unit has no name to use as an OU name' };
+      result = { ok: false, kind: 'name_blank', message: 'this unit has no name' };
     } else if ([...unit.name].length > AD_OU_NAME_MAX_LENGTH) {
       result = {
         ok: false,
@@ -139,7 +139,7 @@ export function deriveMirroredDns(
       result = {
         ok: false,
         kind: 'root_invalid',
-        message: 'this target has no base DN or org-unit root to mirror the tree under',
+        message: 'this target has no base DN or org-unit root',
       };
     } else {
       const parent = unit.parentId === null ? undefined : byId.get(unit.parentId);
@@ -202,7 +202,7 @@ export function deriveMirroredDns(
           orgUnitId: unit.id,
           unitName: unit.name,
           kind: 'duplicate_dn',
-          message: `another active unit with the same name under the same parent derives the same OU, ${dns.get(unit.id)}; rename one of them to mirror either`,
+          message: `another unit under the same parent has the same name and OU, ${dns.get(unit.id)}. Rename one of them.`,
         });
         continue;
       }
@@ -212,7 +212,7 @@ export function deriveMirroredDns(
           orgUnitId: unit.id,
           unitName: unit.name,
           kind: 'ancestor_problem',
-          message: `its ancestor "${byId.get(ancestor)!.name}" shares its OU with another unit, so this unit's OU would too`,
+          message: `its ancestor "${byId.get(ancestor)!.name}" shares an OU with another unit`,
         });
       }
     }
@@ -435,7 +435,7 @@ export async function syncMirroredContainers(
           orgUnitId,
           unitName: unitName.get(orgUnitId) ?? orgUnitId,
           kind: 'dn_taken',
-          message: `${change.dn} is already the container of "${unitName.get(owner.orgUnitId) ?? owner.orgUnitId}" on this target${owner.source === 'manual' ? ' (materialised by hand)' : ''}, so this unit cannot be mirrored there`,
+          message: `${change.dn} is already the container of "${unitName.get(owner.orgUnitId) ?? owner.orgUnitId}" on this target${owner.source === 'manual' ? ' (materialised by hand)' : ''}`,
         });
       }
       break;
@@ -639,7 +639,7 @@ export async function mirrorPreview(
       } else if (unit.status !== 'active') {
         placement = row === null ? 'unplaced' : 'not_mirrored';
         effectiveDn = row?.dn ?? null;
-        note = row === null ? 'deactivated, so not mirrored' : 'deactivated: no longer mirrored, and its OU stays where it is';
+        note = row === null ? 'deactivated, so not mirrored' : 'deactivated: no longer mirrored; its OU stays in place';
       } else if (usableDerived !== null && effective.mirrorOrgUnits && placesAccounts) {
         placement = 'mirrored';
         effectiveDn = usableDerived;
@@ -652,11 +652,11 @@ export async function mirrorPreview(
         // Mirroring is off: this is what it WOULD do.
         placement = row === null ? 'unplaced' : 'not_mirrored';
         effectiveDn = row?.dn ?? null;
-        note = row === null ? null : 'mirroring is off: this row is kept as it is';
+        note = row === null ? null : 'mirroring is off; kept as it is';
       } else {
         placement = row === null ? 'unplaced' : 'not_mirrored';
         effectiveDn = row?.dn ?? null;
-        note = row === null ? null : 'cannot be mirrored: no longer kept in step, and its OU stays where it is';
+        note = row === null ? null : 'cannot be mirrored; its OU stays in place';
       }
       return {
         id: unit.id,
@@ -752,7 +752,7 @@ export async function switchToMirroredIn(
     return {
       ok: false,
       reason: 'cannot_derive',
-      message: problem?.message ?? 'this unit cannot be mirrored (it is not active)',
+      message: problem?.message ?? 'this unit is not active',
     };
   }
   const same = derived.toLowerCase() === row.dn.toLowerCase();

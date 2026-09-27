@@ -77,7 +77,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'legal-hold-active',
       count: holds.length,
-      message: `${holds.length} active legal hold(s) cover this person (${[...new Set(holds.map((h) => h.reference))].join(', ')}); they must be released first.`,
+      message: `${holds.length} active legal hold(s): ${[...new Set(holds.map((h) => h.reference))].join(', ')}. Release them first.`,
     });
   }
 
@@ -88,7 +88,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'lifecycle-work-unresolved',
       count: unresolved,
-      message: `${unresolved} lifecycle operation(s) for this person are unresolved; complete or cancel them first.`,
+      message: `${unresolved} lifecycle operation(s) still open. Complete or cancel them first.`,
     });
   }
 
@@ -105,7 +105,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'provisioning-in-flight',
       count: inFlight,
-      message: `${inFlight} provisioning action(s) for this person are in flight or waiting to retry; let the run finish first.`,
+      message: `${inFlight} provisioning action(s) still running. Wait for the run to finish.`,
     });
   }
 
@@ -113,7 +113,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'person-active',
       count: 1,
-      message: 'The person is active. Deactivate them (and end their contracts) before erasing: an erasure never replaces an offboarding.',
+      message: 'Person is still active. Offboard them first.',
     });
   }
 
@@ -125,7 +125,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'accounts-active',
       count: activeUsers + liveAccounts,
-      message: `${activeUsers} Syntra account(s) and ${liveAccounts} target-system account(s) are still active or pending; deactivate, disable or archive them first.`,
+      message: `${activeUsers} Syntra account(s) and ${liveAccounts} target account(s) still active. Deactivate or disable them first.`,
     });
   }
 
@@ -136,7 +136,7 @@ export async function erasureBlockers(tx: TenantClient, ids: SubjectIds): Promis
     blockers.push({
       code: 'access-active',
       count: grants,
-      message: `${grants} access grant(s) are still pending or active; end them first.`,
+      message: `${grants} access grant(s) still active. End them first.`,
     });
   }
   return blockers;

@@ -11,8 +11,8 @@ export type FeedMode = (typeof FEED_MODES)[number];
 export class UnassignableFieldError extends Error {
   constructor(readonly fields: string[]) {
     super(
-      `a mapping may not write ${fields.join(', ')}: those fields are ` +
-        `Syntra's, not the source's`,
+      `A mapping cannot write ${fields.join(', ')}. ` +
+        `Syntra owns those fields.`,
     );
     this.name = 'UnassignableFieldError';
   }
@@ -21,8 +21,8 @@ export class UnassignableFieldError extends Error {
 export class PersonSourceOwnsPersonsError extends Error {
   constructor(readonly persons: number) {
     super(
-      `this source owns ${persons} people; deleting it deactivates and ` +
-        `detaches them, which has to be confirmed`,
+      `Source owns ${persons} people. Deleting it deactivates and ` +
+        `detaches them. Confirm to continue.`,
     );
     this.name = 'PersonSourceOwnsPersonsError';
   }
@@ -30,7 +30,7 @@ export class PersonSourceOwnsPersonsError extends Error {
 
 export class PersonSourceDisabledError extends Error {
   constructor(readonly sourceId: string) {
-    super('this source is disabled, so a run would never be picked up');
+    super('Source is disabled. Enable it to run.');
     this.name = 'PersonSourceDisabledError';
   }
 }
@@ -58,9 +58,7 @@ export interface CreatePersonSourceInput {
 function assertFeedMode(value: string): asserts value is FeedMode {
   if (!(FEED_MODES as readonly string[]).includes(value)) {
     throw new Error(
-      `"${value}" is not a feed mode; it is "snapshot" or "delta", and there ` +
-        `is no default because reading a delta as a snapshot departs everyone ` +
-        `absent from it`,
+      `"${value}" is not a feed mode. Use "snapshot" or "delta".`,
     );
   }
 }
@@ -224,13 +222,13 @@ export async function setPersonMappings(
   const correlations = rules.filter((r) => r.isCorrelation);
   if (correlations.length !== 1) {
     throw new Error(
-      `a source needs exactly one correlation rule, which is what anchors a ` +
-        `row to a person; this set has ${correlations.length}`,
+      `A source needs exactly one correlation rule. ` +
+        `This one has ${correlations.length}.`,
     );
   }
   if (correlations[0]?.recordType !== 'person') {
     throw new Error(
-      'the correlation rule must map a person field, not a contract field',
+      'The correlation rule must map a person field, not a contract field.',
     );
   }
 

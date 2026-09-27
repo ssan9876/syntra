@@ -51,13 +51,13 @@ export function assertLogoUsable(logo: string): void {
   const match = DATA_URI.exec(logo);
   if (!match) {
     throw new BrandRefusedError(
-      'A logo must be a base64 data URI. A logo loaded from a URL stops working the day that URL moves, and this page has to render when nothing else is reachable.',
+      'Logo must be uploaded as an image file, not linked by URL.',
     );
   }
   const [, mediaType, payload] = match as unknown as [string, string, string];
   if (!(LOGO_TYPES as readonly string[]).includes(mediaType)) {
     throw new BrandRefusedError(
-      `A logo may be ${LOGO_TYPES.join(', ')}. SVG is not accepted: it can carry script, and this renders before anybody has signed in.`,
+      `Logo must be ${LOGO_TYPES.join(', ')}. SVG is not accepted.`,
     );
   }
   // The decoded length, not the string's. Base64 inflates by a third, and
@@ -65,7 +65,7 @@ export function assertLogoUsable(logo: string): void {
   const bytes = Math.floor((payload.length * 3) / 4);
   if (bytes > MAX_LOGO_BYTES) {
     throw new BrandRefusedError(
-      `That logo is ${Math.round(bytes / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB.`,
+      `Logo is ${Math.round(bytes / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB.`,
     );
   }
 }
@@ -117,7 +117,7 @@ export function assertColourUsable(field: string, hex: string): void {
     const ratio = contrastRatio(hex, ground);
     if (ratio < MIN_CONTRAST) {
       throw new BrandRefusedError(
-        `${hex} sits at ${ratio.toFixed(2)}:1 against the ${theme} page, below the ${MIN_CONTRAST}:1 a control needs. Pick a ${ratio === contrastRatio(hex, GROUNDS.light) ? 'darker' : 'lighter'} shade of the same colour.`,
+        `${field} ${hex} has contrast ${ratio.toFixed(2)}:1 on the ${theme} page; it needs ${MIN_CONTRAST}:1. Pick a ${ratio === contrastRatio(hex, GROUNDS.light) ? 'darker' : 'lighter'} shade.`,
       );
     }
   }
@@ -154,7 +154,7 @@ export interface BrandInput {
 export function assertSupportUrlUsable(url: string): void {
   if (!isSupportUrl(url)) {
     throw new BrandRefusedError(
-      'A support link must be an https: address or a mailto: email address. It appears on the sign-in page, before anybody has authenticated.',
+      'Support link must be an https: or mailto: address.',
     );
   }
 }
@@ -162,7 +162,7 @@ export function assertSupportUrlUsable(url: string): void {
 export async function setBrand(tx: TenantClient, input: BrandInput): Promise<Brand> {
   const name = input.name?.trim() ?? null;
   if (name !== null && name.length > 64) {
-    throw new BrandRefusedError('A name longer than 64 characters will not fit the header.');
+    throw new BrandRefusedError('Name is longer than 64 characters.');
   }
   if (input.logo) assertLogoUsable(input.logo);
   if (input.primary) assertColourUsable('The primary colour', input.primary);
@@ -171,7 +171,7 @@ export async function setBrand(tx: TenantClient, input: BrandInput): Promise<Bra
   if (supportUrl !== null) assertSupportUrlUsable(supportUrl);
   const supportLabel = input.supportLabel?.trim() || null;
   if (supportLabel !== null && supportLabel.length > 40) {
-    throw new BrandRefusedError('A support link label longer than 40 characters will not fit beside the sign-in form.');
+    throw new BrandRefusedError('Support link label is longer than 40 characters.');
   }
 
   const tenant = await tx.tenant.findFirstOrThrow();

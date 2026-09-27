@@ -118,6 +118,9 @@ const DETAIL_MAX = 300;
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
+const shortDate = (d: Date): string =>
+  d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
 const scrub = (text: string | null | undefined): string | null =>
   text === null || text === undefined || text.trim() === '' ? null : scrubText(text.trim(), DETAIL_MAX);
 
@@ -169,8 +172,10 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
         // Critical: an integration that has stopped receiving is one whose owner
         // believes it is still receiving. Nothing else tells them otherwise.
         severity: 'critical',
-        title: `${n} ${plural(n, 'webhook was', 'webhooks were')} never delivered`,
-        detail: 'The receiving system was not told, and no further attempt will be made.',
+        title: `${n} ${plural(n, 'webhook', 'webhooks')} not delivered`,
+        detail: rows[0]
+          ? `Latest: "${rows[0].endpoint.name}" gave up after ${WEBHOOK_GIVEN_UP} attempts. No more retries.`
+          : `Gave up after ${WEBHOOK_GIVEN_UP} attempts. No more retries.`,
         count: n,
         lastAt: rows[0]?.createdAt ?? null,
         href: '/admin/settings?tab=webhooks',
@@ -207,8 +212,8 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
       drafts.push({
         kind: 'notification_undelivered',
         severity: 'critical',
-        title: `${n} ${plural(n, 'message was', 'messages were')} never sent`,
-        detail: 'Somebody was meant to be told something and was not.',
+        title: `${n} ${plural(n, 'email', 'emails')} not delivered`,
+        detail: `Gave up after ${OUTBOX_GIVEN_UP} attempts. Check the mail settings.`,
         count: n,
         lastAt: rows[0]?.createdAt ?? null,
         href: '/admin/operations',
@@ -242,8 +247,8 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
     drafts.push({
       kind: 'target_runs_skipped',
       severity: 'critical',
-      title: `${skipped.length} ${plural(skipped.length, 'target has', 'targets have')} skipped scheduled runs`,
-      detail: 'A run was due and did not start.',
+      title: `${skipped.length} ${plural(skipped.length, 'target', 'targets')} skipping scheduled runs`,
+      detail: `"${skipped[0]!.name}" skipped ${skipped[0]!.consecutiveSkippedRuns} in a row.`,
       count: skipped.length,
       lastAt: latest(skipped.map((t) => t.lastSkippedAt)),
       href: '/admin/targets',
@@ -284,8 +289,8 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
     drafts.push({
       kind: 'target_never_completed',
       severity: 'critical',
-      title: `${stale.length} scheduled ${plural(stale.length, 'target has', 'targets have')} not completed a run`,
-      detail: 'Runs are starting and not finishing.',
+      title: `${stale.length} ${plural(stale.length, 'target', 'targets')} with no finished run in 2 days`,
+      detail: 'Scheduled runs start but do not finish.',
       count: stale.length,
       lastAt: latest(stale.map((t) => t.lastRunAt)),
       href: '/admin/targets',
@@ -309,7 +314,7 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
         kind: 'provision_run_failed',
         severity: 'warning',
         title: `${n} provisioning ${plural(n, 'run', 'runs')} failed this week`,
-        detail: 'Nothing was applied by these runs. Accounts are as they were.',
+        detail: 'No changes were made.',
         count: n,
         lastAt: rows[0]?.startedAt ?? null,
         href: rows[0] ? `/admin/targets/${rows[0].targetSystemId}/runs` : '/admin/targets',
@@ -340,7 +345,7 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
         title: `${n} directory ${plural(n, 'sync', 'syncs')} failed this week`,
         // Upstream of everything: a stale person register is what the guards
         // refuse a run over.
-        detail: 'The person register may be out of date.',
+        detail: `Latest failure: "${rows[0]?.source.name ?? 'unknown source'}". Person data was not updated.`,
         count: n,
         lastAt: rows[0]?.startedAt ?? null,
         href: '/admin/sources?tab=runs',
@@ -373,8 +378,8 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
       drafts.push({
         kind: 'task_failing',
         severity: 'warning',
-        title: `${n} delegated ${plural(n, 'task run', 'task runs')} failed this week`,
-        detail: 'Somebody on the service desk asked for something and did not get it.',
+        title: `${n} delegated ${plural(n, 'task', 'tasks')} failed this week`,
+        detail: `Latest failure: "${rows[0]?.task.name ?? 'unknown task'}". Those requests were not carried out.`,
         count: n,
         lastAt: rows[0]?.createdAt ?? null,
         href: '/admin/requests?tab=tasks',
@@ -402,8 +407,8 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
       drafts.push({
         kind: 'credential_expired',
         severity: 'critical',
-        title: `${n} ${plural(n, 'credential has', 'credentials have')} expired`,
-        detail: 'Whatever depends on it fails at its next use.',
+        title: `${n} ${plural(n, 'credential', 'credentials')} expired`,
+        detail: `"${rows[0]!.credentialKey}" expired on ${shortDate(rows[0]!.effectiveExpiresAt!)}.`,
         count: n,
         lastAt: rows[0]?.effectiveExpiresAt ?? null,
         href: '/admin/settings?tab=credentials',

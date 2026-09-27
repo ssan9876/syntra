@@ -338,7 +338,7 @@ export async function collectTenant(
       resourceId: user.id,
       personId: null,
       accountRef: user.id,
-      reason: `the Syntra account "${user.login}" is linked to no person`,
+      reason: `Syntra account "${user.login}" is not linked to a person.`,
       sourceRunId: null,
     });
   }
@@ -617,8 +617,8 @@ export async function collectTenant(
       // kind. Naming the target's last run and saying so is honest; implying a
       // precision the data does not have is not.
       reason:
-        `"${entitlement.displayName}" is ${entitlement.status} at its target, so who holds it is unknown. ` +
-        `The run named is the target's most recent run, not necessarily the run that failed the read.`,
+        `"${entitlement.displayName}" is ${entitlement.status} at its target, so its holders are unknown. ` +
+        `The linked run is the target's latest run.`,
       sourceRunId: null,
     });
   }
@@ -744,7 +744,7 @@ export async function collectTenant(
       resourceId: null,
       personId: exception.personId,
       accountRef: null,
-      reason: `Provision could not fully evaluate this person: ${exception.kind} — ${exception.message}`,
+      reason: `Provision could not evaluate this person: ${exception.kind} — ${exception.message}`,
       sourceRunId: exception.runId,
     });
   }

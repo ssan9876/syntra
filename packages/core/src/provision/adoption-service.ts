@@ -32,7 +32,7 @@ import { observedCorrelationKey } from './observed-key.js';
 
 export class NoAccountToAdoptError extends Error {
   constructor() {
-    super('this person has no account on this target, so there is nothing to adopt');
+    super('This person has no account on this target.');
     this.name = 'NoAccountToAdoptError';
   }
 }
@@ -40,8 +40,7 @@ export class NoAccountToAdoptError extends Error {
 export class NotInConflictError extends Error {
   constructor(readonly status: string) {
     super(
-      `this account is ${status}, not in conflict. Adoption is the exit from a conflict, ` +
-        'not a way to re-point an account that already works.',
+      `Account is ${status}, not in conflict. Only a conflicted account can be adopted.`,
     );
     this.name = 'NotInConflictError';
   }
@@ -50,8 +49,7 @@ export class NotInConflictError extends Error {
 export class AnchorAlreadyBoundError extends Error {
   constructor(readonly anchor: string) {
     super(
-      `the object ${anchor} is already held by another account in this target, ` +
-        'so adopting it here would give two people one account',
+      `Object ${anchor} already belongs to another account on this target.`,
     );
     this.name = 'AnchorAlreadyBoundError';
   }
@@ -69,12 +67,10 @@ export class CandidateNotVisibleError extends Error {
   ) {
     super(
       baseDn === null
-        ? `the account ${correlationKey} was refused as already existing, and no account named ${correlationKey} is visible in the target. ` +
-            'Either it has since been deleted, in which case the account can be created again, or the name that collided is not ' +
-            'one this target reads as that key -- a user in a different domain, for example -- and it is not adopted by name.'
-        : `the account ${correlationKey} was refused as already existing, and no object with that name is inside ${baseDn}. ` +
-            'Either it is elsewhere in the domain where this target cannot see it — move it into the managed subtree, ' +
-            "or widen the target's base DN — or it has since been deleted, in which case the account can be created again.",
+        ? `Account ${correlationKey} already exists on the target but cannot be found by that name. ` +
+            'If it was deleted, run again to create it.'
+        : `Account ${correlationKey} already exists but is not inside ${baseDn}. ` +
+            "Move it under the base DN or widen the target's base DN. If it was deleted, run again to create it.",
     );
     this.name = 'CandidateNotVisibleError';
   }
@@ -183,7 +179,7 @@ async function findCandidate(
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, targetSystemId),
   );
-  if (!config) throw new Error('target configuration or credential missing');
+  if (!config) throw new Error(`Target ${targetSystemId} has no configuration or credential.`);
   const connector = (override ??
     targetConnectorFor(type)) as unknown as TargetConnector<unknown>;
 
