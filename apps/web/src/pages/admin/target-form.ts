@@ -230,8 +230,11 @@ export const text = (value: unknown, fallback = '') =>
  */
 export function skipAdvice(reason: string | null): string {
   if (reason !== null && reason.includes('is awaiting review')) {
-    const from = /run from (\S+) is awaiting review/.exec(reason)?.[1];
-    const started = from === undefined ? NaN : Date.parse(from);
+    // The server writes `run from 2026-08-01 03:00 UTC is awaiting review`
+    // (older rows: an ISO timestamp).
+    const from = /run from (.+?) is awaiting review/.exec(reason)?.[1];
+    const iso = from?.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/, '$1T$2Z');
+    const started = iso === undefined ? NaN : Date.parse(iso);
     return Number.isNaN(started)
       ? 'Skipped: a run is waiting for review. Apply or cancel it.'
       : `Skipped: the run from ${new Date(started).toLocaleString()} is waiting for review. Apply or cancel it.`;
