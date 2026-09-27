@@ -33,6 +33,8 @@ export default tseslint.config(
       'apps/web/dist/**',
       'test-results/**',
       'playwright-report/**',
+      // Agent worktrees: whole copies of the repository, node_modules included.
+      '.claude/**',
     ],
   },
 
