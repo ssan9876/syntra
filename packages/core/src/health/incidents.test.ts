@@ -164,7 +164,7 @@ describe('listIncidents', () => {
     const found = await incidents();
     expect(found[0]).toMatchObject({ kind: 'sync_run_failed', severity: 'warning' });
     // The person register is upstream of every other decision.
-    expect(found[0]!.detail).toMatch(/person register/i);
+    expect(found[0]!.detail).toMatch(/person data/i);
   });
 
   it('ignores a failure older than the window', async () => {

@@ -105,16 +105,10 @@ export class EmptyEntitlementReadError extends Error {
   ) {
     super(
       unidentifiable === 0
-        ? `the target returned no entitlements at all while Syntra holds ${known} for it; ` +
-            'refusing to mark the whole catalog missing, because a mistyped ' +
-            'entitlementSearchBase and a domain whose every group was deleted look ' +
-            'identical from here and only one of them is a thing that happens'
-        : `the target returned ${unidentifiable} entitlements and Syntra could identify ` +
-            `none of them — every one came back with a blank anchor — while Syntra holds ` +
-            `${known} for it; refusing to mark the whole catalog missing, because an ` +
-            'anchorAttribute the group objects do not carry and a bind without read ' +
-            'access to the one they do carry both look exactly like this, and Active ' +
-            'Directory omits an attribute it will not show you rather than saying so',
+        ? `Target returned no entitlements; Syntra holds ${known}. Catalog left unchanged. ` +
+            'Check entitlementSearchBase.'
+        : `Target returned ${unidentifiable} entitlements, all with a blank anchor; Syntra holds ${known}. ` +
+            'Catalog left unchanged. Check anchorAttribute and the bind account\'s read access.',
     );
     this.name = 'EmptyEntitlementReadError';
   }
@@ -155,7 +149,7 @@ export async function refreshEntitlements(
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, targetId),
   );
-  if (!config) throw new Error('target configuration or credential missing');
+  if (!config) throw new Error(`Target ${targetId} has no configuration or credential.`);
 
   // Phase 2: the network read. No transaction is held.
   const discovered: DiscoveredEntitlement[] = [];

@@ -269,17 +269,15 @@ export async function registerAdminSourceRoutes(
           throw new ProblemError(
             400,
             'transport-changed',
-            'Retype the bind password to test this',
-            `this request would send the stored bind password somewhere other ` +
-              `than where it is saved (${changed[0]} is "${changed[2]}", not ` +
-              `"${changed[1]}"); type the password to test a different ` +
-              `destination`,
+            'Re-enter the bind password',
+            `${changed[0]} changed from "${changed[1]}" to "${changed[2]}". ` +
+              `Enter the password to test the new destination.`,
             {
               errors: [
                 {
                   path: changed[0],
                   message:
-                    'changing this means the stored password cannot be reused; type it again to test',
+                    'changed; enter the bind password again to test',
                 },
               ],
             },
@@ -293,7 +291,7 @@ export async function registerAdminSourceRoutes(
           400,
           'bad-request',
           'Bad Request',
-          'no bind password was sent and no saved source was named',
+          'Send a bind password or name a saved source.',
         );
       }
 
@@ -484,7 +482,7 @@ export async function registerAdminSourceRoutes(
             throw new ProblemError(
               409,
               'source-counts-changed',
-              'The numbers changed',
+              'Counts changed',
               cause.message,
               { owned: cause.counts },
             );
@@ -619,7 +617,7 @@ export async function registerAdminSourceRoutes(
           503,
           'scheduler-unavailable',
           'Background jobs are not running',
-          'A run is a background job, and the job scheduler did not start. No scheduled sync is running either. Check the API log for why pg-boss failed to start.',
+          'The job scheduler did not start, so no syncs run. Check the API log.',
         );
       }
       // ENQUEUED, not performed. A directory read is network-bound and has no
@@ -642,16 +640,16 @@ export async function registerAdminSourceRoutes(
           throw new ProblemError(
             503,
             'job-not-queued',
-            'The run was recorded but not queued',
-            `${cause.message}. The run is marked failed; start it again once the job queue is healthy.`,
+            'Run not queued',
+            `${cause.message}. The run is marked failed. Start it again when the job queue is back.`,
           );
         }
         if (cause instanceof SourceDisabledError) {
           throw new ProblemError(
             409,
             'source-disabled',
-            'This source is switched off',
-            'A run would never be picked up. Enable the source first.',
+            'Source is disabled',
+            'Enable the source, then start the run.',
           );
         }
         throw cause;

@@ -248,7 +248,7 @@ export function keyManagementWarnings(km: KeyManagementConfig): string[] {
   const warnings: string[] = [];
   if (km.provider !== 'local' && km.masterKey) {
     warnings.push(
-      `MASTER_KEY is still set alongside ${km.provider}; it is used only to read data keys not yet rewrapped. Run rekey, confirm rekey --status shows no local rows, then remove it.`,
+      `MASTER_KEY is still set alongside ${km.provider}. Run rekey, check rekey --status shows no local rows, then remove it.`,
     );
   }
   if (km.previousMasterKey) {

@@ -158,6 +158,7 @@ export function unprocessableScope(kind: UnprocessableKind): UnprocessableScope 
     case 'name_generation_exhausted':
     case 'target_read_incomplete':
     case 'account_conflict':
+    case 'email_domain_unverified':
       return 'all';
     default: {
       // Exhaustiveness: a kind added to the union without a decision here is a
@@ -369,7 +370,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
     if (account?.status === 'conflict') {
       extraUnprocessable.set(state.personId, {
         kind: 'account_conflict',
-        message: `this person account is in conflict: the correlation key ${account.correlationKey} already exists in the target on an account Provision did not create`,
+        message: `Account conflict: correlation key ${account.correlationKey} already exists in the target on an account Syntra did not create.`,
       });
       continue;
     }
@@ -380,7 +381,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
       // revoke, which is the whole reason Ruling P1 exists.
       extraUnprocessable.set(state.personId, {
         kind: 'target_read_incomplete',
-        message: `the target returned this person account at ${object.anchor} but it could not be read in full, so it cannot be diffed against safely`,
+        message: `Account at ${object.anchor} could not be read in full. Skipped for this run.`,
       });
       continue;
     }
@@ -435,7 +436,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
               state: row.state,
               orgUnitContainerId: row.id,
               reason:
-                'Syntra records this container as confirmed at the target and the target no longer returns it',
+                'Container no longer returned by the target.',
             });
           }
           // Unchanged in every other respect, including the scope: without a
@@ -443,7 +444,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
           // is unprocessable.
           extraUnprocessable.set(state.personId, {
             kind: 'container_missing',
-            message: `the container ${container} does not exist in the target; Provision does not create it`,
+            message: `Container ${container} does not exist in the target. Create it there first.`,
           });
           continue;
         }
@@ -457,7 +458,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
       record('account_missing_at_target', account.id, null, {
         anchor: account.anchor,
         correlationKey: account.correlationKey,
-        reason: 'Syntra holds this account and the target no longer returns its anchor',
+        reason: 'Account no longer returned by the target.',
       });
       actual.set(state.personId, {
         personId: state.personId,
@@ -529,8 +530,8 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         input.enforcementMode === 'authoritative' && inRemit && !grantsFrozen;
       record('unmanaged_entitlement', account?.id ?? null, entitlementId, {
         reason: inRemit
-          ? 'the target holds this entitlement and Provision did not grant it'
-          : 'the target holds this entitlement and it is outside Provision remit: no business rule for this target names it',
+          ? 'Held at the target, not granted by Syntra.'
+          : 'Held at the target. No business rule for this target names it.',
         enforcementMode: input.enforcementMode,
         proposedForRevocation,
       });
@@ -553,7 +554,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
       if (heldAtTarget.has(holding.entitlementId)) continue;
       if (!object) continue;
       record('missing_grant', account!.id, holding.entitlementId, {
-        reason: 'Provision granted this entitlement and the target no longer holds it',
+        reason: 'Granted by Syntra, no longer held at the target.',
         origin: holding.origin,
       });
     }
@@ -571,7 +572,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         {
           anchor: object.anchor,
           correlationKey: object.correlationKey,
-          reason: 'this account belongs to somebody whose contract has not started',
+          reason: 'Account belongs to someone whose contract has not started.',
         },
         'not_yet_started',
       );
@@ -583,7 +584,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         record('unexpected_status', account.id, null, {
           syntraBelieves: account.status,
           targetReports: object.enabled ? 'active' : 'disabled',
-          reason: 'the account status at the target does not match what Syntra recorded',
+          reason: 'Account status at the target differs from the record in Syntra.',
         });
       }
     }
@@ -619,7 +620,7 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         anchor: object.anchor,
         correlationKey: object.correlationKey,
         dn: object.dn,
-        reason: 'the target holds this account and it belongs to no person Syntra knows',
+        reason: 'Account belongs to no person Syntra knows.',
       },
       object.anchor,
     );

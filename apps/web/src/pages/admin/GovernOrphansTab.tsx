@@ -46,13 +46,13 @@ export function GovernOrphansTab() {
       setActionError(null);
       setDenying(null);
       setReason('');
-      toast({ title: 'Denial recorded' });
+      toast({ title: 'Match denied' });
       reload();
     } catch (cause) {
       setActionError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Could not record that denial.',
+          : 'Denial could not be saved.',
       );
     }
   };
@@ -70,7 +70,7 @@ export function GovernOrphansTab() {
         {data && proposals.length === 0 && (
           <div className="p-6">
             <Empty
-              title="No accounts waiting for an owner"
+              title="No orphan accounts"
               action={
                 <Link to="/admin/govern?tab=snapshots" className={buttonClasses('secondary')}>
                   Build a snapshot
@@ -87,7 +87,7 @@ export function GovernOrphansTab() {
                   <Identifier value={p.accountRef} /> in {p.systemId} → {p.proposedName}
                 </p>
                 <p className="text-muted">
-                  {Math.round(p.confidence * 100)}% — {p.because}
+                  {Math.round(p.confidence * 100)}% match: {p.because}
                 </p>
                 {/* NO CONFIRM CONTROL, deliberately.
                     It called a route whose injected `link` function throws 501
@@ -110,7 +110,7 @@ export function GovernOrphansTab() {
                         disabled={reason.trim() === ''}
                         onClick={() => void deny(p.id)}
                       >
-                        Record it
+                        Deny match
                       </Button>
                       <Button
                         size="sm"

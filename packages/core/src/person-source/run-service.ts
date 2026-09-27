@@ -36,7 +36,7 @@ const CANCEL_COOPERATIVELY = ['running', 'applying'] as const;
 /** Statuses an apply refuses outright. */
 const NOT_APPLIABLE = ['queued', 'running', 'cancelled', 'failed'] as const;
 /** Written on every change a cancellation left unapplied. */
-const CANCELLED_CHANGE_MESSAGE = 'not applied: the run was cancelled';
+const CANCELLED_CHANGE_MESSAGE = 'Not applied: run cancelled.';
 
 /**
  * The order changes are applied in.
@@ -155,7 +155,7 @@ export async function previewImportRun(
       const source = await tx.personSource.findUnique({ where: { id: sourceId } });
       if (!source) throw new Error(`no such person source: ${sourceId}`);
       const config = await personSourceWithCredential(tx, provider, sourceId);
-      if (!config) throw new Error('source configuration or credential missing');
+      if (!config) throw new Error(`Source "${source.name}" has no configuration or credential.`);
       return {
         config,
         type: source.type,
@@ -217,7 +217,7 @@ export async function previewImportRun(
         mappingFailures += 1;
         failureAnchors.push(person.externalId);
         failureReasons.add(
-          `employee identifier "${person.externalId}" occurs more than once; every occurrence was withheld`,
+          `Employee ID "${person.externalId}" appears more than once. All its rows were withheld.`,
         );
         return false;
       });
@@ -285,7 +285,7 @@ export async function previewImportRun(
       mappingFailures += 1;
       failureAnchors.push(person.externalId);
       failureReasons.add(
-        `employee "${person.externalId}" uses unapproved reference value(s): ${[...invalid].join(', ')}`,
+        `Employee "${person.externalId}" has unapproved reference values: ${[...invalid].join(', ')}`,
       );
       return false;
     });
@@ -311,7 +311,7 @@ export async function previewImportRun(
       mappingFailures += 1;
       failureAnchors.push(person.externalId);
       failureReasons.add(
-        `employee "${person.externalId}" references unknown manager identifier(s): ${unknown.join(', ')}`,
+        `Employee "${person.externalId}" has unknown manager IDs: ${unknown.join(', ')}`,
       );
       return false;
     });
@@ -339,9 +339,8 @@ export async function previewImportRun(
     const absenceReliable = unattributable === 0;
     if (!absenceReliable) {
       failureReasons.add(
-        `${unattributable} row(s) could not be matched to anybody, so no ` +
-          `leaver is proposed in this run: a file that cannot be read is not ` +
-          `evidence that anyone has left`,
+        `${unattributable} row(s) could not be matched to a person. ` +
+          `No leavers are proposed in this run.`,
       );
     }
 
@@ -476,7 +475,7 @@ export async function previewImportRun(
           personsAbsent: departures,
           requiresConfirmation: duplicateReviewCount > 0 ? false : verdict.blocked ? verdict.requiresConfirmation : false,
           blockedReason: duplicateReviewCount > 0
-            ? `${duplicateReviewCount} possible duplicate match${duplicateReviewCount === 1 ? '' : 'es'} require review before this run can apply`
+            ? `${duplicateReviewCount} possible duplicate${duplicateReviewCount === 1 ? '' : 's'} to review before this run can apply.`
             : verdict.blocked ? verdict.reason : null,
         },
       });
@@ -782,7 +781,7 @@ export async function applyImportRun(
   // satisfy this.
   if (run.status === 'blocked' && !(run.requiresConfirmation && opts.confirm)) {
     throw new Error(
-      `run is blocked and cannot be applied: ${run.blockedReason ?? 'unknown reason'}`,
+      `Run is blocked: ${run.blockedReason ?? 'no reason recorded'}`,
     );
   }
   if ((NOT_APPLIABLE as readonly string[]).includes(run.status)) {
@@ -847,7 +846,7 @@ export async function applyImportRun(
             where: { id: change.id },
             data: {
               status: 'skipped',
-              message: `not applied: processing of this person is restricted by privacy case ${restrictedBy}`,
+              message: `Not applied: person restricted by privacy case ${restrictedBy}.`,
             },
           });
           await recordEvent(tx, {

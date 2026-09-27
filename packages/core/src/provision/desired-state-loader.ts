@@ -4,6 +4,7 @@ import { correlationKeyPolicyFor } from '@syntra/connectors';
 import { conditionSchema } from './condition.js';
 import { desiredState } from './desired.js';
 import type { ContractFacts, GrantFacts, PersonFacts, RuleFacts } from './types.js';
+import { verifiedEmailDomains } from '../tenant/email-domains.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -272,7 +273,7 @@ async function projectOne(
       notYetStarted: false,
       unprocessable: {
         kind: 'no_profile',
-        message: 'this target has no account profile, so nothing can be planned for it',
+        message: 'This target has no account profile.',
       },
       catalogUnverified: true,
     };
@@ -283,7 +284,7 @@ async function projectOne(
   for (const rule of ruleRows) {
     const parsed = conditionSchema.safeParse(rule.condition);
     if (!parsed.success) {
-      ruleUnreadable = `the business rule "${rule.name}" has a condition this version cannot read`;
+      ruleUnreadable = `Business rule "${rule.name}" has a condition this version cannot read.`;
       continue;
     }
     rules.push({
@@ -327,6 +328,7 @@ async function projectOne(
     // by not writing it anywhere.
     takenCorrelationKeys: new Set<string>(),
     correlationKeyPolicy: correlationKeyPolicyFor(target.type, target.config),
+    verifiedEmailDomains: await verifiedEmailDomains(tx),
     containerOverride: placement?.container ?? null,
     orgUnitContainer: container,
     renameEnabled: target.renameEnabled,

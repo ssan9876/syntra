@@ -172,7 +172,7 @@ export async function fulfilRequest(
     // "There is no path to a grant that does not pass approval" is the claim
     // this slice exists to make; it must not rest on nobody adding a caller.
     if (request.status !== 'approved' && request.status !== 'awaiting_fulfilment') {
-      throw new Error(`request ${requestId} is ${request.status}, not approved`);
+      throw new Error(`Request ${requestId} is ${request.status}, not approved.`);
     }
 
     // Re-checked HERE as well as at each stage (spec section 4: "re-evaluated
@@ -333,7 +333,7 @@ export async function fulfilRequest(
           where: { id: item.id },
           data: {
             status: 'skipped',
-            message: `already held, from ${existing.detail}`,
+            message: `Already held, from ${existing.detail}.`,
           },
         });
         skipped.push(resource);
@@ -345,7 +345,7 @@ export async function fulfilRequest(
         // between approval and fulfilment.
         await tx.requestItem.update({
           where: { id: item.id },
-          data: { status: 'failed', message: 'the subject holds no active Syntra account' },
+          data: { status: 'failed', message: 'Person has no active Syntra account.' },
         });
         failed.push(resource);
         continue;
@@ -378,7 +378,7 @@ export async function fulfilRequest(
           where: { id: superseded.id },
           data: {
             status: 'revoked',
-            statusReason: 'superseded by an approved extension',
+            statusReason: 'Replaced by an approved extension.',
             endedAt: now,
           },
         });
@@ -539,7 +539,7 @@ export async function fulfilRequest(
         status,
         ...(allSkipped
           ? {
-              statusReason: `already held: ${nameList(names, skipped)}`,
+              statusReason: `Already held: ${nameList(names, skipped)}.`,
             }
           : {}),
         ...(anyInFlight ? { dispatchedAt: request.dispatchedAt ?? now } : {}),

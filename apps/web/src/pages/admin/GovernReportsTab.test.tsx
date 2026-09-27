@@ -86,7 +86,7 @@ describe('the reports screen', () => {
 
     await userEvent.type(screen.getByLabelText('System'), 'sys-1');
     await userEvent.selectOptions(screen.getByLabelText('Point in time'), 's-old');
-    await userEvent.click(screen.getByRole('button', { name: 'Run the report' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
     await waitFor(() => expect(urls.some((u) => u.includes('snapshotId=s-old'))).toBe(true));
   });
@@ -97,7 +97,7 @@ describe('the reports screen', () => {
     await screen.findByLabelText('System');
 
     await userEvent.type(screen.getByLabelText('System'), 'sys-1');
-    await userEvent.click(screen.getByRole('button', { name: 'Run the report' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
 
     await waitFor(() =>
       expect(urls.some((u) => u.includes('/govern/reports/system?systemId=sys-1'))).toBe(true),
@@ -114,15 +114,15 @@ describe('the reports screen', () => {
     const urls = mockApi();
     renderPage();
     await userEvent.type(await screen.findByLabelText('System'), 'sys-1');
-    await userEvent.click(screen.getByRole('button', { name: 'Run the report' }));
-    await screen.findByText(/Nobody holds anything/);
+    await userEvent.click(screen.getByRole('button', { name: 'Run report' }));
+    await screen.findByText(/No holders/);
     expect(screen.queryByRole('button', { name: 'Export as CSV' })).toBeNull();
 
     granted.add('govern.export');
     const second = renderPage();
     await userEvent.type(within(second.container).getByLabelText('System'), 'sys-1');
     await userEvent.selectOptions(within(second.container).getByLabelText('Point in time'), 's-old');
-    await userEvent.click(within(second.container).getByRole('button', { name: 'Run the report' }));
+    await userEvent.click(within(second.container).getByRole('button', { name: 'Run report' }));
     await userEvent.click(await within(second.container).findByRole('button', { name: 'Export as CSV' }));
     await waitFor(() => expect(urls).toContain('/api/admin/govern/exports/csv'));
     const post = vi

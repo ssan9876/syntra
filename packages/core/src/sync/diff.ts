@@ -128,7 +128,7 @@ export function diffObjects(
         // month later needs to know which one happened.
         after: { status: 'inactive', reason: DISABLED_IN_SOURCE },
         status: 'proposed',
-        message: 'the directory source reports this account as disabled',
+        message: 'Disabled in the directory source.',
       });
       continue;
     }

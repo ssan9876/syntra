@@ -100,7 +100,7 @@ export function CatalogTab() {
                       {product.audienceCondition === null ? (
                         <StateBadge state="attention">Nobody</StateBadge>
                       ) : (
-                        <Status tone="neutral">An audience rule</Status>
+                        <Status tone="neutral">Audience rule</Status>
                       )}
                     </td>
                     <td>

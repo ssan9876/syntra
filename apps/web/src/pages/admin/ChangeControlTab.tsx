@@ -48,7 +48,7 @@ const STATUS: Record<ChangeRequest['status'], { label: string; tone: 'warning' |
 
 function message(error: unknown): string {
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
-  return error instanceof Error ? error.message : 'The request failed.';
+  return error instanceof Error ? error.message : 'Request failed.';
 }
 
 function when(iso: string | null) {
@@ -71,7 +71,7 @@ export function ChangeControlTab() {
   const [secret, setSecret] = useState<string | null>(null);
 
   if (loading && !data) return <SkeletonRows rows={3} cols={2} />;
-  if (error || !data) return <Alert tone="danger">{error ?? 'Change control could not be loaded.'}</Alert>;
+  if (error || !data) return <Alert tone="danger">{error ?? 'Change control did not load.'}</Alert>;
 
   const classes = selected ?? data.classes;
   const dirty = [...classes].sort().join(',') !== [...data.classes].sort().join(',');
@@ -112,7 +112,7 @@ export function ChangeControlTab() {
 
     {secret ? <Alert tone="warning" title="Copy this secret now">
       <p className="font-mono break-all">{secret}</p>
-      <p className="mt-2 text-sm">Shown once — copy it now.</p>
+      <p className="mt-2 text-sm">It will not be shown again.</p>
       <Button variant="secondary" onClick={() => setSecret(null)}>I have copied it</Button>
     </Alert> : null}
 
@@ -127,7 +127,7 @@ export function ChangeControlTab() {
           />
         ))}
         {dirty && data.classes.some((key) => !classes.includes(key))
-          ? <p className="text-sm text-warning">Switching off is itself held for a second administrator.</p>
+          ? <p className="text-sm text-warning">Turning a change type off also needs a second administrator.</p>
           : null}
         <Button loading={busy === 'policy'} disabled={!dirty} onClick={() => void savePolicy()}>Save</Button>
       </div>
@@ -135,7 +135,7 @@ export function ChangeControlTab() {
 
     <Panel title="Awaiting approval" actions={<Status tone={pending.length > 0 ? 'warning' : 'neutral'}>{String(pending.length)}</Status>}>
       <div className="divide-y divide-border-subtle">
-        {pending.length === 0 ? <p className="p-4 text-sm text-muted">Nothing is waiting.</p> : null}
+        {pending.length === 0 ? <p className="p-4 text-sm text-muted">No changes waiting.</p> : null}
         {pending.map((request) => {
           const own = request.requestedByUserId === data.viewerUserId;
           return <div key={request.id} className="space-y-3 p-4">

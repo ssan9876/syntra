@@ -238,6 +238,6 @@ describe('writing a routing rule through addRule', () => {
           upstreamIdpId: upstreamId,
         }),
       ),
-    ).rejects.toThrow(/no authorization impact/);
+    ).rejects.toThrow(/no impact preview/);
   });
 });

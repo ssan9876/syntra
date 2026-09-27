@@ -336,7 +336,7 @@ export function OnboardPersonPage() {
           <Alert tone="warning" title="Partly done">
             <ul className="mb-2 list-disc pl-5">
               <li>{`${progress.personName}: created`}</li>
-              <li>{progress.contract ? 'Contract: saved' : 'Contract: not saved — nothing will be provisioned'}</li>
+              <li>{progress.contract ? 'Contract: saved' : 'Contract: not saved'}</li>
               {progress.user ? (
                 <li>Syntra login: created and linked</li>
               ) : progress.userId ? (
@@ -359,7 +359,7 @@ export function OnboardPersonPage() {
 
       {duplicates && (
         <div className="mb-4">
-          <Alert tone="warning" title="Somebody here already looks like this">
+          <Alert tone="warning" title="Possible duplicate">
             <div className="space-y-3">
               <p>{problem}</p>
               {/* Named and LINKED. A warning that says somebody similar exists
@@ -537,7 +537,7 @@ export function OnboardPersonPage() {
             // somebody reads the actual string and notices the wrong word in
             // it; a paraphrase would defeat the purpose.
             <div className="sm:col-span-2">
-              <p className="mb-2 font-medium text-ink">Where the account will be created</p>
+              <p className="mb-2 font-medium text-ink">Account location</p>
               <ul className="space-y-2">
                 {hints.map((hint) => (
                   <li key={hint.targetId} className="text-sm">
@@ -602,7 +602,7 @@ export function OnboardPersonPage() {
         </FormSection>
 
         {unplaced.length > 0 && (
-          <Alert tone="warning" title="This account would not be placed">
+          <Alert tone="warning" title="Account has no container">
             {/*
               Names the field, not the outcome. "It will go to Unsorted" leaves
               the reader guessing which box to fill in, which is their only

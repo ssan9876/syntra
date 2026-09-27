@@ -1,5 +1,6 @@
 import { Client } from 'pg';
 import { prisma } from './client.js';
+import { withTenant } from './with-tenant.js';
 
 /**
  * Points the superuser connection at whichever database the tests are actually
@@ -63,4 +64,25 @@ export async function resetDatabase(): Promise<void> {
 
   const list = tables.map((t) => `"public"."${t.tablename}"`).join(', ');
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} CASCADE`);
+}
+
+/**
+ * The domains test fixtures write addresses in. Verified for a tenant by
+ * `verifyTestEmailDomains`, because Syntra refuses to write an address in a
+ * domain the tenant has not verified.
+ */
+export const TEST_EMAIL_DOMAINS = ['acme.test', 'contoso.com', 'contoso.onmicrosoft.com', 'example.test', 'fabrikam.com'] as const;
+
+/** Marks `domains` verified for the tenant, as if their TXT records had been found. */
+export async function verifyTestEmailDomains(
+  tenantId: string,
+  domains: readonly string[] = TEST_EMAIL_DOMAINS,
+): Promise<void> {
+  if (domains.length === 0) return;
+  await withTenant(tenantId, (tx) =>
+    tx.emailDomain.createMany({
+      data: domains.map((domain) => ({ tenantId, domain, verificationToken: 'test', verifiedAt: new Date() })),
+      skipDuplicates: true,
+    }),
+  );
 }

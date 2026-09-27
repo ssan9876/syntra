@@ -3,7 +3,7 @@ import { Alert, Button, Field, Panel, StateBadge, Status } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
 
 function problem(error: unknown) {
-  return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'The external-write control could not be changed.';
+  return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'External writes could not be stopped or resumed.';
 }
 
 export interface WriteStopState {

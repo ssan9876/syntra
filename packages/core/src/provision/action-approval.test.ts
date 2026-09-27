@@ -189,7 +189,7 @@ describe('a held rename on an auto-applied target', () => {
     expect(run.status).toBe('partially_applied');
     const rename = heldIn(run, 'rename_account')!;
     expect(rename).toBeDefined();
-    expect(rename).toMatchObject({ message: expect.stringMatching(/requires an explicit confirmation/) });
+    expect(rename).toMatchObject({ message: expect.stringMatching(/requires confirmation/) });
   });
 
   it('applies in the next auto-applied run once approved, and only that rename', async () => {
@@ -309,7 +309,7 @@ describe('a held rename on an auto-applied target', () => {
     // And nothing unconfirmed can apply it: the approval is per action.
     await expect(
       applyProvisionRun(tenantId, provider, second.id, { connector: target as never }),
-    ).rejects.toThrow(/blocked and has not been confirmed/);
+    ).rejects.toThrow(/blocked until confirmed/);
     expect(keyAtTarget(anchor)).toBe('bea.old');
     const standing = await withTenant(tenantId, (tx) => tx.provisionActionApproval.findFirstOrThrow({}));
     expect(standing.consumedAt).toBeNull();

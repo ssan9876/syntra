@@ -101,6 +101,6 @@ describe('GovernSnapshotDetailPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('17')).toBeInTheDocument());
     const html = document.body.innerHTML;
-    expect(html.indexOf('nobody can explain')).toBeLessThan(html.indexOf('4,120'));
+    expect(html.indexOf('holdings with no explaining source')).toBeLessThan(html.indexOf('4,120'));
   });
 });

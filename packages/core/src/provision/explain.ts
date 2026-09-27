@@ -11,6 +11,7 @@ import {
 } from './condition.js';
 import { activeOn, personDisplayName, resolveMappingContract } from './desired.js';
 import { generateCorrelationKey } from './names.js';
+import { addressedDomain, domainIsCovered, isAddressAttribute, verifiedEmailDomains } from '../tenant/email-domains.js';
 import { renderContainer, renderTemplate, type TemplateContext } from './templates.js';
 import {
   accountProfileSchema,
@@ -874,13 +875,19 @@ export async function previewAccountProfile(
     };
 
     const problems: string[] = [];
+    const verifiedDomains = await verifiedEmailDomains(tx);
     const attributes: Record<string, string> = {};
     for (const [name, template] of Object.entries(profile.attributeTemplates)) {
       const rendered = renderTemplate(template, context);
-      if (rendered.ok) attributes[name] = rendered.value;
-      else {
+      if (rendered.ok) {
+        attributes[name] = rendered.value;
+        const domain = isAddressAttribute(name) ? addressedDomain(rendered.value) : null;
+        if (domain !== null && !domainIsCovered(domain, verifiedDomains)) {
+          problems.push(`"${name}" is an address in ${domain}, which is not a verified domain`);
+        }
+      } else {
         problems.push(
-          `the template for "${name}" references ${rendered.missing.join(', ')}, which resolves to nothing for this person`,
+          `the template for "${name}" uses ${rendered.missing.join(', ')}, which is empty for this person`,
         );
       }
     }
@@ -948,8 +955,8 @@ export async function previewAccountProfile(
       // entirely of whitespace.
       problems.push(
         containerRendered.ok
-          ? 'the container template resolves to nothing for this person, and the profile has no fallback container'
-          : `the container template references ${containerRendered.missing.join(', ')}, which resolves to nothing for this person, and the profile has no fallback container`,
+          ? 'the container template is empty for this person and there is no fallback container'
+          : `the container template uses ${containerRendered.missing.join(', ')}, which is empty for this person, and there is no fallback container`,
       );
     }
 
@@ -967,6 +974,7 @@ export async function previewAccountProfile(
       maxLength: keyPolicy.maxLength,
       charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
+      verifiedDomains,
     });
     const unique = generateCorrelationKey({
       template: profile.correlationKeyTemplate,
@@ -975,15 +983,18 @@ export async function previewAccountProfile(
       maxLength: keyPolicy.maxLength,
       charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
+      verifiedDomains,
     });
 
     if (!unique.ok) {
       problems.push(
         unique.reason === 'exhausted'
-          ? `no unique account name could be generated within ${profile.maxUniquenessAttempts} attempts`
+          ? `no unique account name after ${profile.maxUniquenessAttempts} attempts`
+          : unique.reason === 'domain_unverified'
+            ? `the account name template renders an address in ${unique.domain}, which is not a verified domain`
           : unique.reason === 'malformed'
             ? `the account name template ${unique.message}`
-            : `the account name template references ${unique.missing.join(', ')}, which resolves to nothing for this person`,
+            : `the account name template uses ${unique.missing.join(', ')}, which is empty for this person`,
       );
     }
 
@@ -1004,8 +1015,13 @@ export async function previewAccountProfile(
         },
         unique.correlationKey,
       );
-      if ('upn' in named) userPrincipalName = named.upn;
-      else problems.push(named.message);
+      if ('upn' in named) {
+        userPrincipalName = named.upn;
+        const domain = named.upn.slice(named.upn.lastIndexOf('@') + 1);
+        if (!domainIsCovered(domain, verifiedDomains)) {
+          problems.push(`userPrincipalName domain ${domain} is not a verified domain`);
+        }
+      } else problems.push(named.message);
     }
 
     return {

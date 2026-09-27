@@ -2146,6 +2146,21 @@ const RAW = {
     erasure: 'retain',
     why: "Which administrator acknowledged or resolved an incident on the attention list, and their note. Kept as operational evidence, like the audit event it mirrors.",
   }),
+  EmailDomain: table('configuration', {
+    id: 'none',
+    tenantId: 'none',
+    domain: 'none',
+    verificationToken: 'none',
+    verifiedAt: 'operational',
+    lastCheckedAt: 'operational',
+    lastCheckError: 'operational',
+    createdById: 'identity',
+    createdAt: 'operational',
+  }, {
+    links: {user: ['createdById']},
+    erasure: 'retain',
+    why: "An organisation's own domain and who added it. Configuration, not data about a person; the administrator reference is kept as evidence of who claimed the domain, like the audit event it mirrors.",
+  }),
   WebhookEndpoint: table('configuration', {
     id: 'none',
     tenantId: 'none',

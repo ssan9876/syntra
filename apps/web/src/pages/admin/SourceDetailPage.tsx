@@ -218,7 +218,7 @@ export function SourceDetailPage() {
       setResult(answer);
       setResultFor(sentFor);
     } catch (cause) {
-      fail(cause, 'The connection could not be tested.');
+      fail(cause, 'Connection test did not run. Try again.');
     } finally {
       setBusy(null);
     }
@@ -273,17 +273,17 @@ export function SourceDetailPage() {
             body: JSON.stringify({ rules }),
           });
           navigate(`/admin/sources/${created.id}`, {
-            state: { notice: 'The source and its attribute mappings were saved.' },
+            state: { notice: 'Source and attribute mappings saved.' },
           });
         } catch (cause) {
           navigate(`/admin/sources/${created.id}`, {
             state: {
               notice:
-                'The source was saved but its attribute mappings were refused: ' +
+                'Source saved. Attribute mappings refused: ' +
                 (cause instanceof ApiError
                   ? (cause.problem.detail ?? cause.problem.title)
                   : 'unknown reason') +
-                '. Nothing will sync until they are set.',
+                '. Nothing syncs until they are fixed.',
             },
           });
         }
@@ -330,7 +330,7 @@ export function SourceDetailPage() {
       reload();
       reloadMappings();
     } catch (cause) {
-      fail(cause, 'The source could not be saved.');
+      fail(cause, 'Source not saved. Try again.');
     } finally {
       setBusy(null);
     }
@@ -345,7 +345,7 @@ export function SourceDetailPage() {
       });
       navigate(`/admin/sync-runs/${run.id}`);
     } catch (cause) {
-      fail(cause, 'The run could not be started.');
+      fail(cause, 'Run did not start. Try again.');
     } finally {
       setBusy(null);
     }
@@ -374,10 +374,10 @@ export function SourceDetailPage() {
         // Put the question again with the truth in it, rather than reporting a
         // failure the administrator cannot act on.
         setConfirmDelete(false);
-        setProblem(cause.problem.detail ?? 'The numbers changed.');
+        setProblem(cause.problem.detail ?? 'The counts changed. Check them and confirm again.');
         reload();
       } else {
-        fail(cause, 'The source could not be deleted.');
+        fail(cause, 'Source not deleted. Try again.');
       }
     } finally {
       setBusy(null);
@@ -481,7 +481,7 @@ export function SourceDetailPage() {
               {...mark('tlsMode')}
               warning={
                 form.tlsMode === 'plain'
-                  ? 'The bind password crosses the network unencrypted.'
+                  ? 'The bind password is sent unencrypted.'
                   : undefined
               }
               options={[
@@ -494,7 +494,7 @@ export function SourceDetailPage() {
               className="sm:col-span-2"
               checked={form.rejectUnauthorized}
               onChange={(v) => set('rejectUnauthorized', v)}
-              label="Verify the directory server's TLS certificate"
+              label="Verify the server's TLS certificate"
             />
             <Field
               label="Bind DN"
@@ -652,21 +652,21 @@ export function SourceDetailPage() {
               checked={form.writebackEnabled && form.writebackDisable}
               disabled={!form.writebackEnabled}
               onChange={(v) => set('writebackDisable', v)}
-              label="Deactivating a user disables their account here"
+              label="Disable the account here when a user is deactivated"
             />
             <Check
               className="sm:col-span-2"
               checked={form.writebackEnabled && form.writebackPassword}
               disabled={!form.writebackEnabled}
               onChange={(v) => set('writebackPassword', v)}
-              label="Self-service password change writes through to this directory"
+              label="Write self-service password changes to this directory"
               // The consequence people do not expect: the directory's policy
               // starts applying, including the minimum age, and it will refuse
               // things Syntra's own policy would have accepted. Shown while it
               // is ticked, which is exactly while it applies.
               warning={
                 form.writebackEnabled && form.writebackPassword
-                  ? 'The directory’s own password policy then applies, and can refuse a change Syntra would accept.'
+                  ? 'This directory’s password policy also applies.'
                   : undefined
               }
             />
@@ -682,7 +682,7 @@ export function SourceDetailPage() {
               // This is not, so the warning says so while it is ticked.
               warning={
                 form.writebackEnabled && form.writebackDelete
-                  ? 'A deletion here cannot be undone from Syntra.'
+                  ? 'Deletions here cannot be undone.'
                   : undefined
               }
             />
@@ -705,7 +705,7 @@ export function SourceDetailPage() {
         </form>
 
         {!isNew && (
-          <Panel title="Delete this source">
+          <Panel title="Delete source">
             <div className="space-y-3 p-4">
               {/* The counts before the button, in words. Deleting a source
                   revokes real access, and an administrator should read the
@@ -720,14 +720,14 @@ export function SourceDetailPage() {
                   }
                 >
                   <ul className="list-disc space-y-0.5 pl-5">
-                    <li>Deactivates every one of those users and groups</li>
-                    <li>Detaches all of them from any source</li>
+                    <li>Deactivates these users and groups</li>
+                    <li>Leaves all of them with no source</li>
                     <li>Deletes nothing from the directory</li>
                   </ul>
                 </Alert>
               ) : (
                 <p className="text-ink">
-                  Owns no users, groups or organizational units.
+                  This source owns no users, groups or organizational units.
                 </p>
               )}
 
@@ -739,11 +739,11 @@ export function SourceDetailPage() {
                   // acknowledges all of what happens rather than the two
                   // thirds of it that deactivates.
                   label={
-                    `I understand that ${owned.users} ` +
+                    `Deactivate ${owned.users} ` +
                     `${owned.users === 1 ? 'user' : 'users'} and ` +
-                    `${owned.groups} ${owned.groups === 1 ? 'group' : 'groups'} ` +
-                    `will be deactivated, and ${owned.orgUnits} ` +
-                    `${owned.orgUnits === 1 ? 'unit' : 'units'} detached.`
+                    `${owned.groups} ${owned.groups === 1 ? 'group' : 'groups'}, ` +
+                    `and detach ${owned.orgUnits} ` +
+                    `${owned.orgUnits === 1 ? 'unit' : 'units'}`
                   }
                 />
               )}

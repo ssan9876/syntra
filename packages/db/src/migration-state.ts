@@ -59,6 +59,7 @@ export async function migrationState(): Promise<MigrationState> {
 
   // Raw, because `_prisma_migrations` is Prisma's own bookkeeping table and is
   // deliberately absent from the generated client.
+  // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
   const rows = await prisma.$queryRawUnsafe<MigrationRow[]>(
     'SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations"',
   );

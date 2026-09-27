@@ -75,7 +75,7 @@ describe('the dispatch table — exactly one route per holding', () => {
     });
     // §7: the report has to say WHICH attributions were not removed.
     expect(decision.notRemoved).toContain('request');
-    expect(decision.explanation).toContain('comes from');
+    expect(decision.explanation).toContain('Granted by a business rule');
   });
 
   it('routes a syntraRole holding to requires_change, to a holder of rbac.manage', () => {
@@ -108,7 +108,7 @@ describe('the dispatch table — exactly one route per holding', () => {
       route: 'requires_change_directory_source',
       remediationKind: 'directory_source_change_required',
     });
-    expect(decision.explanation).toContain('rewrites that membership every run');
+    expect(decision.explanation).toContain('Change it at the source');
   });
 
   it('routes an administrator-assigned application to requires_change', () => {
@@ -320,7 +320,7 @@ describe('the dispatch table — exactly one route per holding', () => {
       dispatchable: false,
       remediationKind: 'account_removal_required',
     });
-    expect(decision.explanation).toContain('leaver ladder');
+    expect(decision.explanation).toContain('removed by offboarding');
   });
 
   it('routes a syntraUser holding to requires_change_syntra_user, never to an order', () => {

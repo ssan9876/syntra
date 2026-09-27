@@ -84,7 +84,7 @@ export function LoginInfo({
       toast(
         result.delivered
           ? { tone: 'success', title: 'Login info sent' }
-          : { tone: 'warning', title: 'The link was created but the mail was not accepted' },
+          : { tone: 'warning', title: 'Link created, but the email was not delivered' },
       );
       history.reload();
     } catch (cause) {

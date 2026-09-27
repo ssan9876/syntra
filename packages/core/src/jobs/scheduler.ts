@@ -6,6 +6,8 @@ import {
   jobTraceCarrier,
   JOB_TRACE_KEY,
   newCorrelationId,
+  oplog,
+  serializeError,
   SpanKind,
   splitJobPayload,
   withCorrelation,
@@ -106,6 +108,30 @@ export async function runJob<T>(
   );
 }
 
+/** The ids a job payload may carry, logged so a failure can be traced to its object. */
+const JOB_ID_FIELDS = ['tenantId', 'targetSystemId', 'runId', 'sourceId', 'receiptId', 'exportId', 'operationId', 'personId'] as const;
+
+/**
+ * One error line per failed attempt: which job, which attempt, what it was
+ * working on and the error. pg-boss retries silently, so without this a
+ * failing job left nothing in the service log.
+ */
+function logJobFailure(name: string, job: { id: string; data: unknown; retryCount?: number }, error: unknown): void {
+  const { data } = splitJobPayload(job.data);
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const ids: Record<string, unknown> = {};
+  for (const field of JOB_ID_FIELDS) if (typeof payload[field] === 'string') ids[field] = payload[field];
+  const attempt = (job.retryCount ?? 0) + 1;
+  const message = error instanceof Error ? error.message : String(error);
+  oplog('error', `job ${name} failed (attempt ${attempt}): ${message}`, {
+    job: name,
+    jobId: job.id,
+    attempt,
+    ...ids,
+    err: serializeError(error),
+  });
+}
+
 /**
  * A thin wrapper over pg-boss, which keeps the queue in the same PostgreSQL
  * instance as everything else — no Redis, and a job enqueued in a transaction
@@ -164,6 +190,7 @@ export function createScheduler(
               await runJob(name, job, handler);
             } catch (error) {
               if (error instanceof TenantRetiredError) continue;
+              logJobFailure(name, job, error);
               throw error;
             }
           }

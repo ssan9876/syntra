@@ -119,7 +119,7 @@ test('a snapshot is built from the console, and says what it could not see', asy
   // created after it was taken is not in it.
   await buildReviewableHolding(page);
 
-  await page.getByRole('button', { name: 'Build a snapshot now' }).click();
+  await page.getByRole('button', { name: 'Build snapshot' }).click();
 
   // The row itself is the assertion: a snapshot exists and is dated. Coverage
   // is a property of the snapshot, not of the button that made it.
@@ -208,7 +208,7 @@ test('a manager reviews from the PORTAL, with no administrative session', async 
   // `getByText`, not `getByRole('heading')`. `Empty` renders its title as a
   // `<p>` — there is no heading here, and an assertion that asks for one waits
   // out its timeout against a screen that is showing exactly what it should.
-  await expect(page.getByText('Nothing is waiting for you')).toBeVisible();
+  await expect(page.getByText('No reviews waiting')).toBeVisible();
 });
 
 test('the console has nothing to offer a reviewer who is not an administrator', async ({ page }) => {
@@ -233,12 +233,12 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // one item resolved to nobody. Jo cannot review Jo's own membership of
   // Nurses, so that item has no reviewer and the screen says so instead of
   // quietly counting it as done.
-  await expect(page.getByText(/item\(s\) have no reviewer or fallback/)).toBeVisible();
+  await expect(page.getByText(/item\(s\) have no reviewer/)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Compute the revocation batch' }).click();
-  await page.getByRole('link', { name: 'Open the batch' }).click();
+  await page.getByRole('button', { name: 'Compute revocations' }).click();
+  await page.getByRole('link', { name: 'Open batch' }).click();
 
-  await expect(page.getByRole('heading', { name: /removals Govern can dispatch/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /removals to dispatch/ })).toBeVisible();
   // The decision reached the batch, whichever route it took: a dispatchable
   // removal, or its own panel because something else has to change first.
   await expect(page.getByText(GROUP_NAME).first()).toBeVisible();
@@ -246,7 +246,7 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // and it is shown only while it is true — it disappears once the batch is
   // dispatched, which is the whole point of saying it.
   await expect(
-    page.getByRole('alert').filter({ hasText: 'Nothing here has happened yet' }),
+    page.getByRole('alert').filter({ hasText: 'Not dispatched. No access has been removed yet.' }),
   ).toBeVisible();
 });
 
@@ -266,6 +266,6 @@ test('the segregation-of-duties screen refuses to be written over two groups', a
   await expect(page.getByLabel('Business function A')).toBeVisible();
   await expect(page.getByLabel('Business function B')).toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'Preview who this flags' }),
+    page.getByRole('button', { name: 'Preview matches' }),
   ).toBeDisabled();
 });

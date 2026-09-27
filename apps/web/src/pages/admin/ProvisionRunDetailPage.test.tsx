@@ -146,7 +146,7 @@ describe('ProvisionRunDetailPage threshold hint', () => {
       blockedReason: 'the target returned no accounts at all',
     }));
     renderPage();
-    expect(await screen.findByText('This run is blocked')).toBeVisible();
+    expect(await screen.findByText('Run blocked')).toBeVisible();
     expect(screen.queryByTestId('threshold-hint')).toBeNull();
   });
 });
@@ -171,7 +171,7 @@ describe('ProvisionRunDetailPage', () => {
     expect(await screen.findByText('Outside the target maintenance window')).toBeVisible();
     const retry = screen.getByRole('button', { name: 'Apply 1 action' });
     expect(retry).toBeDisabled();
-    await userEvent.click(screen.getByLabelText('I have read what needs confirmation and want to apply it'));
+    await userEvent.click(screen.getByLabelText('Apply the actions that need confirmation'));
     await userEvent.type(screen.getByLabelText('Urgent leaver exception reason'), 'Immediate termination');
     await userEvent.click(retry);
     const body = JSON.parse(String(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')[1]?.[1]?.body));
@@ -215,7 +215,7 @@ describe('ProvisionRunDetailPage', () => {
     );
     renderPage();
 
-    expect(await screen.findByText('This run is blocked')).toBeVisible();
+    expect(await screen.findByText('Run blocked')).toBeVisible();
     // Split on the separator the guard joins its reasons with, so a run with
     // three reasons reads as three reasons.
     expect(
@@ -226,7 +226,7 @@ describe('ProvisionRunDetailPage', () => {
     ).toBeVisible();
     expect(
       screen.getByLabelText(
-        'I have read the numbers above and want to apply this run anyway',
+        'Apply this run despite the numbers above',
       ),
     ).toBeVisible();
   });
@@ -249,15 +249,15 @@ describe('ProvisionRunDetailPage', () => {
     );
     renderPage();
 
-    expect(await screen.findByText('This run is blocked')).toBeVisible();
-    expect(screen.getByText(/cannot be confirmed away/i)).toBeVisible();
+    expect(await screen.findByText('Run blocked')).toBeVisible();
+    expect(screen.getByText(/Cannot be overridden/i)).toBeVisible();
     expect(
       screen.queryByLabelText(
-        'I have read the numbers above and want to apply this run anyway',
+        'Apply this run despite the numbers above',
       ),
     ).toBeNull();
     expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
-    expect(screen.getByText('This run cannot be applied')).toBeVisible();
+    expect(screen.getByText('Cannot apply this run')).toBeVisible();
   });
 
   it('still offers the apply for a block that CAN be confirmed away', async () => {
@@ -273,9 +273,9 @@ describe('ProvisionRunDetailPage', () => {
     );
     renderPage();
 
-    expect(await screen.findByText('This run is blocked')).toBeVisible();
+    expect(await screen.findByText('Run blocked')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Apply 1 action' })).toBeVisible();
-    expect(screen.queryByText('This run cannot be applied')).toBeNull();
+    expect(screen.queryByText('Cannot apply this run')).toBeNull();
   });
 
   it('does not name every non-confirmable refusal, having named only two of five', async () => {
@@ -330,7 +330,7 @@ describe('ProvisionRunDetailPage', () => {
     mockFetch(run({ actions: [] }));
     renderPage();
 
-    expect(await screen.findByText('This run proposes nothing')).toBeVisible();
+    expect(await screen.findByText('No changes proposed')).toBeVisible();
     expect(screen.queryByRole('button', { name: /Apply/ })).toBeNull();
   });
 
@@ -377,7 +377,7 @@ describe('ProvisionRunDetailPage', () => {
     await userEvent.click(
       // A substring: `Check` puts its hint inside the same wrapping label, so
       // the accessible name carries the explanation as well as the sentence.
-      screen.getByLabelText(/I have read what needs confirmation/),
+      screen.getByLabelText(/Apply the actions that need confirmation/),
     );
     expect(screen.getByRole('button', { name: 'Apply 1 action' })).toBeEnabled();
   });
@@ -432,7 +432,7 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('Nothing further to apply'),
+      await screen.findByText('Nothing left to apply'),
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: /^Apply/ })).toBeNull();
   });
@@ -444,7 +444,7 @@ describe('ProvisionRunDetailPage', () => {
     expect(
       await screen.findByRole('button', { name: 'Apply 1 action' }),
     ).toBeVisible();
-    expect(screen.queryByText('Nothing further to apply')).toBeNull();
+    expect(screen.queryByText('Nothing left to apply')).toBeNull();
   });
 
   it('does not report a failed drift read as nothing being wrong', async () => {
@@ -455,10 +455,10 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
 
     await userEvent.click(await screen.findByRole('button', { name: /^Drift/ }));
-    expect(screen.getByText('Drift could not be read')).toBeVisible();
+    expect(screen.getByText('Drift not loaded')).toBeVisible();
     expect(screen.queryByText('No drift outstanding')).toBeNull();
     expect(
-      screen.queryByText(/drift is unknown, not zero/i),
+      screen.queryByText(/unknown, not zero/i),
     ).toBeVisible();
   });
 
@@ -495,7 +495,7 @@ describe('ProvisionRunDetailPage', () => {
       await screen.findByRole('button', { name: 'Drift (500+)' }),
     ).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Drift (500+)' }));
-    expect(screen.getByText('This list is not all of it')).toBeVisible();
+    expect(screen.getByText('List truncated')).toBeVisible();
   });
 
   it('reports every count the apply returned, not the three it used to', async () => {
@@ -651,7 +651,7 @@ describe('ProvisionRunDetailPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('Not attributed to a person'),
+      await screen.findByText('No person'),
     ).toBeVisible();
   });
 });
@@ -662,7 +662,7 @@ describe('ProvisionRunDetailPage: held actions on a finished run', () => {
     id: RENAME_ID,
     actionType: 'rename_account',
     requiresConfirmation: true,
-    message: 'not attempted: this action requires an explicit confirmation and this run was not confirmed',
+    message: 'Not attempted: requires confirmation.',
     before: { correlationKey: 'aadmin' },
     after: { correlationKey: 'sadmin' },
     person: { id: 'p2', givenName: 'Sam', familyName: 'Admin' },
@@ -703,7 +703,7 @@ describe('ProvisionRunDetailPage: held actions on a finished run', () => {
                   actionId: RENAME_ID,
                   status: 'proposed',
                   approvable: false,
-                  reason: 'already approved and waiting for the next run',
+                  reason: 'already approved; runs on the next run',
                   approval: {
                     id: 'a1',
                     state: 'pending',

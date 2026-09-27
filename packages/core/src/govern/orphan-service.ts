@@ -133,7 +133,7 @@ export function proposeOwners(
           personId: person.personId,
           method: 'adjacent_manager',
           confidence: 0.4,
-          because: `this account's manager and this person's manager are the same person`,
+          because: `Same manager as this person.`,
         });
       }
     }
@@ -274,8 +274,8 @@ export async function refreshOrphanProposals(
         proposalCount: proposals.length,
         note:
           proposals.length === 0
-            ? 'no candidate owner could be proposed; this account is outside every person-scoped review and every SoD check'
-            : 'a candidate owner has been proposed; a human must confirm or deny it',
+            ? 'No owner found. Assign one so this account is reviewed.'
+            : 'Owner proposed. Confirm or deny it.',
       },
     });
   }
@@ -297,7 +297,7 @@ export async function denyProposal(
   proposalId: string,
   reason: string,
 ): Promise<void> {
-  if (reason.trim().length === 0) throw new Error('denying a proposal requires a reason');
+  if (reason.trim().length === 0) throw new Error('Add a reason to deny this proposal.');
   await withTenant(tenantId, async (tx) => {
     await tx.accountAttribution.update({
       where: { id: proposalId },
@@ -348,7 +348,7 @@ export async function confirmProposal(
       select: { id: true },
     });
     if (already !== null) {
-      throw new Error('this account already has a confirmed owner');
+      throw new Error('Account already has a confirmed owner.');
     }
     return row;
   });

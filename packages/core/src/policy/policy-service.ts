@@ -175,17 +175,17 @@ function validate(input: RuleInput): void {
     }
     if (input.groupIds && input.groupIds.length > 0) {
       throw new PolicyRuleInvalidError(
-        'a federate rule cannot match on group membership: the upstream is chosen before the user is known',
+        'Federate rules cannot match on group membership.',
       );
     }
     if (input.contractField) {
       throw new PolicyRuleInvalidError(
-        'a federate rule cannot match on a contract attribute: the upstream is chosen before the user is known',
+        'Federate rules cannot match on a contract attribute.',
       );
     }
     if (input.factorType) {
       throw new PolicyRuleInvalidError(
-        'a federate rule cannot require a factor: requirements are decided by authorize() after the upstream returns',
+        'Federate rules cannot require a factor.',
       );
     }
   } else if (input.upstreamIdpId) {
@@ -212,7 +212,7 @@ function validate(input: RuleInput): void {
     }
   }
   if (input.timezone && !isValidTimeZone(input.timezone)) {
-    throw new PolicyRuleInvalidError(`timezone is not a zone this platform knows: ${input.timezone}`);
+    throw new PolicyRuleInvalidError(`Unknown timezone: ${input.timezone}`);
   }
   for (const range of input.ipRanges ?? []) {
     // A parse, which is what a syntax check is. Asking instead whether the
@@ -221,7 +221,7 @@ function validate(input: RuleInput): void {
     // every literal host address — which is to say most of what a tenant
     // actually types into an office allowlist.
     if (!isIpRangeUsable(range)) {
-      throw new PolicyRuleInvalidError(`ipRanges holds something that is not an address or CIDR: ${range}`);
+      throw new PolicyRuleInvalidError(`Invalid IP address or CIDR in ipRanges: ${range}`);
     }
   }
   for (const platform of input.devicePlatforms ?? []) {
@@ -230,7 +230,7 @@ function validate(input: RuleInput): void {
     // silently never fires is worse than one that refuses to be written.
     if (!isDevicePlatform(platform)) {
       throw new PolicyRuleInvalidError(
-        `devicePlatforms holds something that is not a device kind: ${platform}`,
+        `Unknown device platform: ${platform}`,
       );
     }
   }
@@ -241,7 +241,7 @@ function validate(input: RuleInput): void {
     // would be a bug nobody could work around.
     if (!/^[A-Za-z]{2}$/.test(country.trim())) {
       throw new PolicyRuleInvalidError(
-        `countries holds something that is not a two-letter country code: ${country}`,
+        `Invalid two-letter country code: ${country}`,
       );
     }
   }
@@ -269,7 +269,7 @@ async function assertFactorUsable(
   const tenant = await tx.tenant.findUniqueOrThrow({ where: { id: tenantId } });
   if (factorType === 'webauthn' && !tenant.primaryDomain) {
     throw new PolicyRuleInvalidError(
-      'this tenant has no primary domain set, so security keys cannot be registered — set one before requiring them',
+      'Security keys need a primary domain. Set one in tenant settings first.',
     );
   }
   // The same dead end as the one above, one switch along. Emailed codes are
@@ -278,7 +278,7 @@ async function assertFactorUsable(
   // enrol them.
   if (factorType === 'email_otp' && !tenant.emailOtpEnabled) {
     throw new PolicyRuleInvalidError(
-      'emailed codes are switched off for this tenant — turn them on before requiring one',
+      'Emailed codes are turned off. Turn them on in tenant settings first.',
     );
   }
 }

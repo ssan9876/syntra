@@ -127,7 +127,7 @@ describe('application logger redaction', () => {
 
     // Still diagnosable: the type, the code, the host and the status survive.
     const parsed = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-    const unhandled = parsed.find((line) => line.msg === 'unhandled error');
+    const unhandled = parsed.find((line) => String(line.msg).startsWith('unhandled error in '));
     expect(unhandled?.err).toMatchObject({
       type: 'AxiosError',
       code: 'ERR_BAD_REQUEST',

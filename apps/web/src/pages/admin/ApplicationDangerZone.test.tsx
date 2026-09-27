@@ -150,7 +150,7 @@ describe('the danger zone', () => {
       problem(
         409,
         'application-in-use',
-        'Not deleted: catalog products grant it ("Ledger access"). Remove it from those products and end those grants first, or retire the application instead.',
+        'Not deleted: catalog products grant it ("Ledger access"). Remove it from those products and end the grants, or retire it.',
       ),
     );
     renderPage();
@@ -164,14 +164,14 @@ describe('the danger zone', () => {
 
   it('offers to elevate when the session is too old, and goes there', async () => {
     mockApi(() =>
-      problem(403, 'step-up-required', 'Deleting an application needs a console session started in the last 10 minutes.'),
+      problem(403, 'step-up-required', 'Deleting an application needs a console session from the last 10 minutes. Elevate again, then retry.'),
     );
     renderPage();
     const dialog = await openDialog();
     await userEvent.type(within(dialog).getByLabelText('Type Ledger to confirm'), 'Ledger');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete application' }));
 
-    expect(await screen.findByText(/needs a console session started/)).toBeInTheDocument();
+    expect(await screen.findByText(/needs a console session from the last/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Confirm it is you' }));
     expect(await screen.findByText('Elevate page')).toBeInTheDocument();
   });

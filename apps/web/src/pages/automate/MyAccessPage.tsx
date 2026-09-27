@@ -50,7 +50,7 @@ export function MyAccessPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : 'Access was not handed back. Try again.',
       );
     } finally {
       setBusy(null);
@@ -61,10 +61,7 @@ export function MyAccessPage() {
     <AppShell>
       <div className="mx-auto w-full max-w-4xl px-6 py-8">
         <h1 className="text-lg font-semibold text-ink">My access</h1>
-        <p className="mt-1 text-muted">
-          Everything you hold because you asked for it. Access from your role is
-          not listed here — it comes and goes with your contracts.
-        </p>
+        <p className="mt-1 text-muted">Requested access only. Access from your role is not listed.</p>
         {error && <Alert tone="danger">{error}</Alert>}
         {problem && <Alert tone="warning">{problem}</Alert>}
 
@@ -74,16 +71,13 @@ export function MyAccessPage() {
             {data && (data.grants ?? []).length === 0 && (
               <div className="p-6">
                 <Empty
-                  title="You hold nothing you asked for"
+                  title="No requested access"
                   action={
                     <Link to="/catalog" className={buttonClasses('primary')}>
                       Browse the catalog
                     </Link>
                   }
-                >
-                  Anything granted from the catalog appears here with its end
-                  date.
-                </Empty>
+                />
               </div>
             )}
             {data && (data.grants ?? []).length > 0 && (
@@ -103,8 +97,7 @@ export function MyAccessPage() {
                       </p>
                       {grant.needsReview && (
                         <p className="text-sm text-warning">
-                          Flagged for review: {grant.reviewReason}. Nothing has
-                          been removed.
+                          Flagged for review: {grant.reviewReason}. Still active.
                         </p>
                       )}
                     </div>

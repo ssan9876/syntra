@@ -83,7 +83,7 @@ export function TasksPage() {
 
       {!loading && !error && tasks.length === 0 && (
         <div className="mt-6">
-          <Empty title="Nothing has been delegated to you" />
+          <Empty title="No tasks yet" />
         </div>
       )}
 
@@ -144,7 +144,7 @@ function RunTask({ task, onDone }: { task: Task; onDone(): void }) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be done.',
+          : 'Task not run. Try again.',
       );
     } finally {
       setBusy(false);

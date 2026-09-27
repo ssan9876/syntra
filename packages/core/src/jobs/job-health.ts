@@ -173,6 +173,7 @@ export type QueueInspector = (tenantId: string | null, failedSince: Date) => Pro
 
 export const pgBossInspector: QueueInspector = async (tenantId, failedSince) => {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement; the since-date and tenant id are bound as $1 and $2
     const rows = await prisma.$queryRawUnsafe<QueueGroup[]>(
       `select name,
               state::text as state,
@@ -429,13 +430,13 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
         const waiting = liveCount(name, own);
         if (readable && waiting === 0 && older(run.startedAt, T.orphanGraceMs)) {
           add('orphaned', kind, run.id, run.status, run.startedAt,
-            `This ${label} is queued but no job exists to start it. Requeue it, or mark it failed.`,
+            `Queued ${label} has no job to start it. Requeue it or mark it failed.`,
             { repairs: ['requeue', 'mark_failed'] });
         } else if (waiting > 0) {
           const since = oldestWaiting(name, own);
           if (since && older(since, T.queueDelaySlaMs)) {
             add('delayed', kind, run.id, run.status, since,
-              `This ${label} has waited more than ${minutes(T.queueDelaySlaMs)} minutes for a worker; the queue is not keeping up.`);
+              `Queued ${label} has waited over ${minutes(T.queueDelaySlaMs)} minutes for a worker.`);
           }
         }
       } else if (run.status === 'running') {
@@ -443,11 +444,11 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
         const working = liveCount(name, (group) => own(group) || (group.runId === null && group.sourceId === run.sourceId), ['active']);
         if (readable && working === 0 && older(run.startedAt, T.orphanGraceMs)) {
           add('orphaned', kind, run.id, run.status, run.startedAt,
-            `This ${label} says it is reading, and no worker is running it. A preview writes nothing until it finishes, so marking it failed loses nothing.`,
+            `No worker is running this ${label}. It has written nothing, so marking it failed is safe.`,
             { repairs: ['mark_failed'] });
         } else if (older(run.startedAt, T.stuckAfterMs)) {
           add('stuck', kind, run.id, run.status, run.startedAt,
-            `This ${label} has been reading for more than ${minutes(T.stuckAfterMs) / 60} hours.`,
+            `This ${label} has been reading for over ${minutes(T.stuckAfterMs) / 60} hours.`,
             { repairs: readable && working > 0 ? [] : ['mark_failed'] });
         }
       } else if (run.status === 'applying' && older(run.startedAt, T.stuckAfterMs)) {
@@ -456,7 +457,7 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
         // is offered: applying the run again resumes it, and cancelling it is
         // honoured before the resumed apply touches anything.
         add('stuck', kind, run.id, run.status, run.startedAt,
-          `This ${label} has been applying for a long time. Apply it again from its run page to resume it, or cancel it.`);
+          `This ${label} has been applying for over ${minutes(T.stuckAfterMs) / 60} hours. Apply it again from its run page to resume, or cancel it.`);
       }
     }
   }
@@ -472,19 +473,19 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
         liveCount(PERSON_PROVISION_JOB, (group) => group.receiptId !== null && receiptTarget.get(group.receiptId) === run.targetSystemId, ['active']);
       if (readable && working === 0 && older(aliveAt, T.orphanGraceMs)) {
         add('orphaned', 'provision_run', run.id, run.status, aliveAt,
-          'This provisioning preview is not being worked on by any job. It wrote no plan, so marking it failed loses nothing.',
+          'No job is running this provisioning preview. It has written no plan, so marking it failed is safe.',
           { repairs: ['mark_failed'] });
       } else if (older(aliveAt, T.stuckAfterMs)) {
         add('stuck', 'provision_run', run.id, run.status, aliveAt,
-          `This provisioning preview has shown no progress for more than ${minutes(T.stuckAfterMs) / 60} hours. The next scheduled run would adopt it as abandoned.`,
+          `Provisioning preview has shown no progress for over ${minutes(T.stuckAfterMs) / 60} hours. The next scheduled run will adopt it as abandoned.`,
           { repairs: ['mark_failed'] });
       }
     } else if (run.status === 'applying' && older(aliveAt, T.heartbeatStaleMs)) {
       const unknown = inFlight > 0
-        ? ` ${inFlight} action${inFlight === 1 ? ' has' : 's have'} an unknown outcome and will be verified against the target before the next run plans anything.`
+        ? ` ${inFlight} action${inFlight === 1 ? ' has' : 's have'} an unknown outcome and will be verified against the target before the next run.`
         : '';
       add(older(aliveAt, T.stuckAfterMs) ? 'stuck' : 'orphaned', 'provision_run', run.id, run.status, aliveAt,
-        `This provisioning apply stopped sending its heartbeat ${minutes(now.getTime() - aliveAt.getTime())} minutes ago; the process applying it is gone. Releasing it closes the run as partially applied.${unknown}`,
+        `Provisioning apply stopped ${minutes(now.getTime() - aliveAt.getTime())} minutes ago. Release it to close the run as partially applied.${unknown}`,
         { repairs: ['release_lease'], inFlightActions: inFlight });
     }
   }
@@ -499,11 +500,11 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
         : 1;
       if (readable && waiting === 0 && older(receipt.updatedAt, T.orphanGraceMs)) {
         add('orphaned', 'person_provision_receipt', receipt.id, receipt.status, receipt.updatedAt,
-          'This target operation was deferred by the concurrency cap and its retry job is gone. Requeue it, or mark it failed.',
+          'Deferred target operation has lost its retry job. Requeue it or mark it failed.',
           { repairs: ['requeue', 'mark_failed'] });
       } else {
         add('saturation_deferred', 'person_provision_receipt', receipt.id, receipt.status, receipt.updatedAt,
-          `This target operation is waiting for a slot under the tenant's concurrency cap (deferred ${deferrals} time${deferrals === 1 ? '' : 's'}). It retries by itself.`,
+          `Target operation is waiting for a slot under the concurrency cap (deferred ${deferrals} time${deferrals === 1 ? '' : 's'}). It retries automatically.`,
           { repairs: ['mark_failed'] });
       }
     } else if (receipt.status === 'pending') {
@@ -513,24 +514,24 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
       if (receipt.message !== null) continue;
       if (readable && waiting === 0 && older(receipt.updatedAt, T.orphanGraceMs)) {
         add('orphaned', 'person_provision_receipt', receipt.id, receipt.status, receipt.updatedAt,
-          'This target operation is pending but no job exists to run it. Requeue it, or mark it failed.',
+          'Pending target operation has no job to run it. Requeue it or mark it failed.',
           { repairs: ['requeue', 'mark_failed'] });
       } else if (waiting > 0) {
         const since = oldestWaiting(PERSON_PROVISION_JOB, own);
         if (since && older(since, T.queueDelaySlaMs)) {
           add('delayed', 'person_provision_receipt', receipt.id, receipt.status, since,
-            `This target operation has waited more than ${minutes(T.queueDelaySlaMs)} minutes for a worker.`);
+            `Target operation has waited over ${minutes(T.queueDelaySlaMs)} minutes for a worker.`);
         }
       }
     } else if (receipt.status === 'planning') {
       const working = liveCount(PERSON_PROVISION_JOB, own, ['active']);
       if (readable && working === 0 && older(receipt.updatedAt, T.orphanGraceMs)) {
         add('orphaned', 'person_provision_receipt', receipt.id, receipt.status, receipt.updatedAt,
-          'This target operation was being planned or applied by a worker that is gone. Requeuing it starts a new preview, which verifies any unknown write outcomes against the target before planning.',
+          'The worker running this target operation is gone. Requeue it to start a new preview.',
           { repairs: ['requeue', 'mark_failed'] });
       } else if (older(receipt.updatedAt, T.stuckAfterMs)) {
         add('stuck', 'person_provision_receipt', receipt.id, receipt.status, receipt.updatedAt,
-          `This target operation has shown no progress for more than ${minutes(T.stuckAfterMs) / 60} hours.`,
+          `Target operation has shown no progress for over ${minutes(T.stuckAfterMs) / 60} hours.`,
           { repairs: readable && working > 0 ? [] : ['requeue', 'mark_failed'] });
       }
     }
@@ -543,13 +544,13 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
       const waiting = liveCount(EXPORT_JOB, own);
       if (readable && waiting === 0 && older(row.requestedAt, T.orphanGraceMs)) {
         add('orphaned', 'data_export', row.id, row.status, row.requestedAt,
-          'This export is queued but no job exists to generate it. Requeue it, or mark it failed.',
+          'Queued export has no job to generate it. Requeue it or mark it failed.',
           { repairs: ['requeue', 'mark_failed'] });
       } else if (waiting > 0) {
         const since = oldestWaiting(EXPORT_JOB, own);
         if (since && older(since, T.queueDelaySlaMs)) {
           add('delayed', 'data_export', row.id, row.status, since,
-            `This export has waited more than ${minutes(T.queueDelaySlaMs)} minutes for a worker.`);
+            `Export has waited over ${minutes(T.queueDelaySlaMs)} minutes for a worker.`);
         }
       }
     } else {
@@ -557,7 +558,7 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
       const working = liveCount(EXPORT_JOB, own, ['active']);
       if (readable && working === 0 && older(since, T.orphanGraceMs)) {
         add('orphaned', 'data_export', row.id, row.status, since,
-          'This export is marked as generating and no worker is generating it. Mark it failed; the requester can ask again.',
+          'No worker is generating this export. Mark it failed and ask again.',
           { repairs: ['mark_failed'] });
       }
     }
@@ -567,10 +568,10 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
   for (const operation of facts.operations) {
     if (older(operation.updatedAt, T.stuckAfterMs)) {
       add('stuck', 'lifecycle_operation', operation.id, operation.status, operation.updatedAt,
-        `This ${operation.kind} operation has not changed for more than ${minutes(T.stuckAfterMs) / 60} hours. Retry it from the operation's page, where a retry after an ambiguous target outcome requires verification first.`);
+        `The ${operation.kind} operation has not changed for over ${minutes(T.stuckAfterMs) / 60} hours. Retry it from the operation's page.`);
     } else if (operation.status === 'queued' && operation.sloDeadlineAt && operation.sloDeadlineAt < now) {
       add('delayed', 'lifecycle_operation', operation.id, operation.status, operation.sloDeadlineAt,
-        `This ${operation.kind} operation is still queued past its service-level deadline.`);
+        `The ${operation.kind} operation is still queued past its deadline.`);
     }
   }
 
@@ -603,7 +604,7 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
     for (const entry of liveBySubject.values()) {
       if (entry.count < 2) continue;
       add('duplicated', entry.kind, entry.id, null, entry.since,
-        `${entry.count} jobs are live for the same work. Only one can claim it; the rest will do nothing. Look for a double enqueue.`);
+        `${entry.count} jobs are queued for the same work. Only one will run. Check for a double enqueue.`);
     }
 
     const attemptsBySubject = new Map<string, { kind: JobHealthKind; id: string; attempts: number; since: Date; lastError: string | null }>();
@@ -623,8 +624,8 @@ export function classifyJobHealth(facts: Facts, queue: QueueGroup[] | null, now:
       const error = entry.lastError ? scrubText(entry.lastError, 300) : null;
       add('poisoned', entry.kind, entry.id, null, entry.since,
         errorClass === 'unknown'
-          ? `Failed ${entry.attempts} times in the last day. Retrying it unchanged will fail again; fix the cause first.`
-          : `Failed ${entry.attempts} times in the last day (${errorClass.replace('_', ' ')}). Retrying it unchanged will fail again; fix the cause first.`,
+          ? `Failed ${entry.attempts} times in the last day. Fix the cause before retrying.`
+          : `Failed ${entry.attempts} times in the last day (${errorClass.replace('_', ' ')}). Fix the cause before retrying.`,
         { errorClass, error });
     }
   }
@@ -766,8 +767,8 @@ export async function repairJob(
   const now = options.now ?? new Date();
   if (!REPAIRABLE.includes(input.kind)) {
     throw new JobRepairRefusedError('unsupported', input.kind === 'lifecycle_operation'
-      ? 'Lifecycle operations are retried from their own page, where a retry after an ambiguous outcome requires verification.'
-      : 'This kind of job has no repair; fix the cause and let the schedule run again.');
+      ? 'Retry lifecycle operations from their own page.'
+      : 'No repair for this kind of job. Fix the cause and let the schedule run again.');
   }
   const report = await inspectJobHealth(tenantId, options);
   const matching = report.findings.filter((finding) => finding.kind === input.kind && finding.subjectId === input.subjectId);
@@ -802,7 +803,7 @@ export async function repairJob(
     }
     // Healthy now: already repaired, or it recovered by itself. Idempotent.
     return withTenant(tenantId, (tx) =>
-      audit(tx, { outcome: 'noop', findings: [], previousStatus: null, status: null, detail: 'Nothing to repair: no finding stands against this job now.' }),
+      audit(tx, { outcome: 'noop', findings: [], previousStatus: null, status: null, detail: 'Nothing to repair.' }),
     );
   }
   const findings = [...new Set(permitting.map((finding) => finding.finding))];
@@ -810,7 +811,7 @@ export async function repairJob(
 
   if (input.action === 'requeue') {
     if (!options.scheduler) {
-      throw new JobRepairRefusedError('scheduler-unavailable', 'Background jobs are not running, so nothing can be requeued.');
+      throw new JobRepairRefusedError('scheduler-unavailable', 'Background jobs are not running. Nothing was requeued.');
     }
     return requeue(tenantId, input, options.scheduler, previousStatus, findings, audit);
   }
@@ -821,7 +822,7 @@ export async function repairJob(
       ? await releaseLease(tx, input.subjectId, reason, now)
       : await markFailed(tx, input.kind, input.subjectId, previousStatus, reason, now);
     if (changed === null) {
-      return audit(tx, { outcome: 'noop', findings, previousStatus, status: previousStatus, detail: 'The job changed state while the repair was being applied; nothing was changed.' });
+      return audit(tx, { outcome: 'noop', findings, previousStatus, status: previousStatus, detail: 'The job changed state during the repair. Nothing was changed.' });
     }
     return audit(tx, { outcome: 'repaired', findings, previousStatus, status: changed, detail: DETAIL[input.action] });
   });
@@ -831,7 +832,7 @@ const DETAIL: Record<JobRepairAction, string> = {
   requeue: 'A job was queued for this work.',
   mark_failed: 'Marked failed with your reason.',
   release_lease:
-    'Released. The run is closed as partially applied; any action with an unknown outcome is verified against the target before the next run plans anything.',
+    'Released. Run closed as partially applied. Actions with an unknown outcome will be verified against the target before the next run.',
 };
 
 /** Why a row was ended by an operator, in the words the row will carry. */
@@ -970,7 +971,7 @@ async function requeue(
       if (receipt.status !== 'planning') return false;
       const reset = await tx.personProvisionReceipt.updateMany({
         where: { id, status: 'planning', updatedAt: receipt.updatedAt },
-        data: { status: 'pending', message: 'Requeued by an operator after its worker was lost.', jobId: null },
+        data: { status: 'pending', message: 'Requeued by an operator after the worker was lost.', jobId: null },
       });
       return reset.count === 1;
     });
@@ -979,7 +980,7 @@ async function requeue(
 
   if (job === null) {
     return withTenant(tenantId, (tx) =>
-      audit(tx, { outcome: 'noop', findings, previousStatus, status: previousStatus, detail: 'The job changed state while the repair was being applied; nothing was queued.' }),
+      audit(tx, { outcome: 'noop', findings, previousStatus, status: previousStatus, detail: 'The job changed state during the repair. Nothing was queued.' }),
     );
   }
 

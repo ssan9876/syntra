@@ -76,14 +76,14 @@ export function useApiResource<T>(path: string | null): Resource<T> {
       .catch((cause: unknown) => {
         if (cancelled) return;
         if (!(cause instanceof ApiError)) {
-          setError('Something went wrong loading this page.');
+          setError('This page did not load. Try again.');
           return;
         }
         // A 500 deliberately carries no detail — the server logs it and tells
         // the client nothing — so it falls through to the generic sentence
         // rather than reporting an empty one.
         setError(cause.problem.detail ?? GENERIC[cause.problem.status] ??
-          'Something went wrong loading this page.');
+          'This page did not load. Try again.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

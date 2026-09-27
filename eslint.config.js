@@ -33,6 +33,8 @@ export default tseslint.config(
       'apps/web/dist/**',
       'test-results/**',
       'playwright-report/**',
+      // Agent worktrees: whole copies of the repository, node_modules included.
+      '.claude/**',
     ],
   },
 
@@ -196,6 +198,33 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',
+    },
+  },
+
+  {
+    // SQL BUILT FROM STRINGS. Prisma's tagged `$queryRaw`/`$executeRaw` and
+    // `Prisma.sql` bind every interpolated value as a parameter; the `Unsafe`
+    // variants and `Prisma.raw` splice text into the statement, which is the
+    // one way a value from a request can become SQL. Every production call of
+    // one carries a disable comment saying why what it splices cannot come
+    // from a caller -- a fixed statement, a catalog-read table name, an
+    // identifier checked by `quoteIdent` -- so a new one has to argue the
+    // same case in review. Tests are exempt: they build fixtures, not
+    // statements from input.
+    files: ['**/*.{ts,tsx}'],
+    ignores: ['**/*.test.{ts,tsx}', 'e2e/**', '**/test-support.ts', 'apps/api/src/tenant-isolation/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'MemberExpression[property.name=/^\\$(queryRaw|executeRaw)Unsafe$/]',
+          message: 'Use the tagged $queryRaw`...`/$executeRaw`...` (values are bound). If text must be spliced, justify it in an eslint-disable comment.',
+        },
+        {
+          selector: 'MemberExpression[object.name="Prisma"][property.name="raw"]',
+          message: 'Prisma.raw splices text into SQL. Use Prisma.sql, or justify it in an eslint-disable comment.',
+        },
+      ],
     },
   },
 

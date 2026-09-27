@@ -119,7 +119,7 @@ export function classifySweep(input: SweepInput): SweepClassification {
           personId: grant.subjectPersonId,
           kind: 'no_contracts',
           message:
-            'this person holds no contract at all, so there is no departure date to lapse their requested access from',
+            'Person has no contract, so there is no end date to act on.',
         });
       }
       continue;
@@ -143,7 +143,7 @@ export function classifySweep(input: SweepInput): SweepClassification {
             personId: grant.subjectPersonId,
             kind: 'not_yet_started',
             message:
-              'every contract this person holds starts beyond the pre-hire horizon, so nothing of theirs lapses',
+              'All contracts start after the pre-hire window. Nothing removed.',
           });
         }
         continue;
@@ -174,7 +174,7 @@ export function classifySweep(input: SweepInput): SweepClassification {
         resourceType: grant.resourceType,
         resourceId: grant.resourceId,
         targetSystemId: grant.targetSystemId,
-        message: `the grant ended on ${grant.endsAt.toISOString().slice(0, 10)}`,
+        message: `Grant ended on ${grant.endsAt.toISOString().slice(0, 10)}.`,
       });
       continue;
     }
@@ -189,7 +189,7 @@ export function classifySweep(input: SweepInput): SweepClassification {
       reviewFlags.push({
         grantId: grant.grantId,
         reason:
-          'the subject no longer satisfies the audience for the product this was granted from',
+          'Person no longer matches the product audience.',
       });
     }
   }
@@ -367,7 +367,7 @@ export async function previewExpirySweep(
         data: {
           status: 'superseded',
           finishedAt: now,
-          error: `superseded by a newer sweep on ${now.toISOString().slice(0, 10)}; it was ${stale.status}${stale.blockedReason === null ? '' : `: ${stale.blockedReason}`}`,
+          error: `superseded by a newer sweep on ${now.toISOString().slice(0, 10)}; was ${stale.status}${stale.blockedReason === null ? '' : `: ${stale.blockedReason}`}`,
         },
       });
       await tx.sweepAction.updateMany({
@@ -625,7 +625,7 @@ export async function applyExpirySweep(
     if (skippedIds.length > 0) {
       await tx.sweepAction.updateMany({
         where: { id: { in: skippedIds } },
-        data: { status: 'skipped', message: 'skipped by the reviewer' },
+        data: { status: 'skipped', message: 'Skipped by the reviewer.' },
       });
     }
 
@@ -682,7 +682,7 @@ export async function applyExpirySweep(
         if (grant === undefined) {
           await tx.sweepAction.update({
             where: { id: action.id },
-            data: { status: 'failed', message: 'the grant no longer exists' },
+            data: { status: 'failed', message: 'Grant no longer exists.' },
           });
           batchFailed += 1;
           continue;
@@ -814,7 +814,7 @@ export async function applyExpirySweep(
               lastContractEnd: action.message ?? '',
               stillHeldNote:
                 stillHeld > 0
-                  ? 'You still hold this through your role, so nothing has changed for you in practice.'
+                  ? 'You still have this through your role.'
                   : '',
               catalogUrl: `${publicUrl}/catalog`,
             },

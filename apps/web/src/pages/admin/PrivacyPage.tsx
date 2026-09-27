@@ -115,7 +115,7 @@ function OpenCaseForm({ initialPersonId, onOpened }: { initialPersonId: string |
               <Field label="Find the person" value={term} onChange={setTerm} placeholder="Name, email or HR id" />
               <Button variant="secondary" disabled={term.trim().length === 0} onClick={() => void search()}>Search</Button>
             </div>
-            {hits !== null && hits.length === 0 ? <p className="text-sm text-muted">Nobody matches.</p> : null}
+            {hits !== null && hits.length === 0 ? <p className="text-sm text-muted">No matches.</p> : null}
             {hits && hits.length > 0 ? (
               <ul className="space-y-1">
                 {hits.map((hit) => (

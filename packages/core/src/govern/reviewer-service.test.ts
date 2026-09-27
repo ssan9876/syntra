@@ -186,7 +186,7 @@ describe('resolution', () => {
       tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
     );
     expect(item.status).toBe('blocked_no_reviewer');
-    expect(item.statusReason).toContain('would be attesting to their own access');
+    expect(item.statusReason).toContain('found nobody other than the person themselves');
   });
 
   it('an unattributed account resolves to the named fallback, or blocks — never to a sentinel', async () => {
@@ -237,7 +237,7 @@ describe('resolution', () => {
     const item = await withTenant(tenantId, (tx) =>
       tx.campaignItem.findUniqueOrThrow({ where: { id: itemId } }),
     );
-    expect(item.statusReason).toContain('belongs to nobody');
+    expect(item.statusReason).toContain('account has no owner');
   });
 
   it('SKIPS an item that already has a reviewer, so a retried generation is idempotent', async () => {

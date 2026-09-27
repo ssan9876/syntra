@@ -367,7 +367,7 @@ describe('save-time validation', () => {
         exceptionWorkflowId: null,
         enabled: true,
       }),
-    ).rejects.toThrow(/same business function/i);
+    ).rejects.toThrow(/two different business functions/i);
   });
 });
 
@@ -616,8 +616,8 @@ describe('detectDecisionGraph', () => {
     // Tuesday, and a finding that reads as an accusation there is a finding
     // people learn to dismiss.
     const detail = finding.detail as { statement?: string; aToB?: number };
-    expect(detail.statement).toContain('normal and expected');
-    expect(detail.statement).toContain('not an accusation');
+    expect(detail.statement).toContain('approve each other');
+    expect(detail.statement).toContain('Nothing was blocked or removed');
     expect(detail.aToB).toBe(3);
   });
 
@@ -717,7 +717,7 @@ describe('detectDecisionGraph', () => {
       tx.governFinding.findFirstOrThrow({ where: { kind: 'no_human_decision' } }),
     );
     expect(finding.subjectRefId).toBe(bramId);
-    expect((finding.detail as { statement?: string }).statement).toContain('no human decided it');
+    expect((finding.detail as { statement?: string }).statement).toContain('Nobody approved it');
   });
 
   it('QUALIFICATION THREE: an actor with no linked person is REPORTED, never dropped', async () => {
@@ -742,7 +742,7 @@ describe('detectDecisionGraph', () => {
     const finding = await withTenant(tenantId, (tx) =>
       tx.governFinding.findFirstOrThrow({ where: { kind: 'unmergeable_actor' } }),
     );
-    expect((finding.detail as { statement?: string }).statement).toContain('silence is the wrong');
+    expect((finding.detail as { statement?: string }).statement).toContain('not linked to a person');
   });
 
   it('raises SoD laundering at the RULE’s own severity, and does not soft-pedal it', async () => {
@@ -766,7 +766,7 @@ describe('detectDecisionGraph', () => {
     expect(detail.ruleName).toBe('Payment raising and approval');
     expect(detail.statement).toContain('opposite side');
     // The reciprocity sentence would be an excuse here, not context.
-    expect(detail.statement).not.toContain('normal and expected');
+    expect(detail.statement).not.toContain('Nothing was blocked or removed');
   });
 
   it('raises nothing for a DISABLED rule', async () => {

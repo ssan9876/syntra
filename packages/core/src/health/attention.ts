@@ -128,12 +128,12 @@ export function runAttentionSummary(run: RunCounters & {
 }): string {
   const planned = plannedPhrase(run);
   if (run.status === 'blocked') {
-    const reason = run.blockedReason?.split('; ')[0] ?? 'no reason was recorded';
+    const reason = run.blockedReason?.split('; ')[0] ?? 'no reason recorded';
     return run.requiresConfirmation
-      ? `Held for confirmation: ${reason}`
-      : `Refused by the safety guard: ${reason}`;
+      ? `Needs confirmation: ${reason}`
+      : `Blocked by the safety guard: ${reason}`;
   }
-  return planned ? `Waiting to be applied: would ${planned}` : 'Waiting to be applied: no changes planned';
+  return planned ? `Ready to apply: would ${planned}` : 'Ready to apply: no changes';
 }
 
 export async function readAttentionSummary(
@@ -188,7 +188,10 @@ export async function readAttentionSummary(
     // Lifecycle work is read with `provision.read` too: it is what the
     // lifecycle-operations routes are gated on.
     const open = { status: { notIn: TERMINAL_OPERATION } };
-    const failedWhere = { status: 'failed' };
+    // A failed operation whose case somebody resolved is dealt with: without
+    // the case filter it stayed on the list for ever, with nothing left to
+    // press that would remove it.
+    const failedWhere = { status: 'failed', caseStatus: { not: 'resolved' } };
     const verifyingWhere = {
       ...open,
       steps: { some: { key: 'targets', status: 'running', responseCategory: 'read_back_incomplete' } },

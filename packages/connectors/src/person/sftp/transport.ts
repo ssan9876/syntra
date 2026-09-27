@@ -47,8 +47,8 @@ export async function assertAddressAllowed(
   for (const entry of resolved) {
     if (!allowPrivate && classifyAddress(entry.address) === 'blocked') {
       throw new Error(
-        `"${host}" resolves to an address this deployment refuses to connect ` +
-          `to (${entry.address}); set OUTBOUND_ALLOW_PRIVATE to permit it`,
+        `"${host}" resolves to ${entry.address}, which this deployment refuses to connect to. ` +
+          `Set OUTBOUND_ALLOW_PRIVATE to allow it.`,
       );
     }
   }
@@ -61,8 +61,8 @@ export class HostKeyMismatchError extends Error {
     readonly stored: string,
   ) {
     super(
-      `the server presented host key ${presented}, but this source is pinned ` +
-        `to ${stored}; a changed key is a rebuilt server or an interception`,
+      `Host key changed: the server presented ${presented}, but this source is pinned ` +
+        `to ${stored}. Confirm the server was rebuilt before accepting the new key.`,
     );
     this.name = 'HostKeyMismatchError';
   }
@@ -71,8 +71,7 @@ export class HostKeyMismatchError extends Error {
 export class HostKeyUnknownError extends Error {
   constructor(readonly presented: string) {
     super(
-      `this source has no host key pinned; test the connection and accept ` +
-        `${presented} before it can run`,
+      `This source has no host key pinned. Test the connection and accept ${presented}.`,
     );
     this.name = 'HostKeyUnknownError';
   }
@@ -80,7 +79,7 @@ export class HostKeyUnknownError extends Error {
 
 export class ByteCeilingExceededError extends Error {
   constructor(readonly maxBytes: number) {
-    super(`the file is larger than ${maxBytes} bytes, which is this source's limit`);
+    super(`File is larger than this source's limit of ${maxBytes} bytes.`);
     this.name = 'ByteCeilingExceededError';
   }
 }
@@ -91,9 +90,8 @@ export class MultipleFilesMatchedError extends Error {
     readonly matches: string[],
   ) {
     super(
-      `"${pattern}" matches ${matches.length} files (${matches.join(', ')}); ` +
-        `a source must name exactly one, because picking the first would ` +
-        `import last week's export the week somebody left a copy behind`,
+      `"${pattern}" matches ${matches.length} files (${matches.join(', ')}). ` +
+        `It must match exactly one.`,
     );
     this.name = 'MultipleFilesMatchedError';
   }

@@ -93,7 +93,7 @@ describe('BusinessRulesPage', () => {
     await screen.findByText(/adding a rule can also remove access/);
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText('Persons matched');
+    await screen.findByText('People matched');
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
   });
 
@@ -118,7 +118,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Other target' }));
     await screen.findByText('Finance');
     await act(async () => finish(json(IMPACT)));
-    expect(screen.queryByText('Persons matched')).toBeNull();
+    expect(screen.queryByText('People matched')).toBeNull();
     expect(screen.getByLabelText('Name')).toHaveValue('');
   });
 
@@ -132,9 +132,9 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
     await act(async () => finish[0]!(json(IMPACT)));
     expect(screen.getByRole('button', { name: 'Preview impact' })).toBeDisabled();
-    expect(screen.queryByText('Persons matched')).toBeNull();
+    expect(screen.queryByText('People matched')).toBeNull();
     await act(async () => finish[1]!(json({ ...IMPACT, wouldRevoke: 9 })));
-    expect(await screen.findByText('9 holdings would be taken away')).toBeVisible();
+    expect(await screen.findByText('9 holdings would be removed')).toBeVisible();
   });
 
   it.each(['Name', 'Value', 'Enabled', 'Finance'])('clears impact after editing %s', async (label) => {
@@ -142,10 +142,10 @@ describe('BusinessRulesPage', () => {
     renderPage();
     await screen.findByText('Finance');
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    expect(await screen.findByText('Persons matched')).toBeVisible();
+    expect(await screen.findByText('People matched')).toBeVisible();
     if (label === 'Enabled' || label === 'Finance') await userEvent.click(screen.getByLabelText(label));
     else await userEvent.type(screen.getByLabelText(label), 'x');
-    expect(screen.queryByText('Persons matched')).toBeNull();
+    expect(screen.queryByText('People matched')).toBeNull();
   });
 
   it.each([false, true])('ignores an in-flight impact after editing (failure=%s)', async (fails) => {
@@ -158,7 +158,7 @@ describe('BusinessRulesPage', () => {
     await act(async () => finish(fails
       ? json({ title: 'Old draft failed', status: 500 }, 500)
       : json(IMPACT)));
-    expect(screen.queryByText('Persons matched')).toBeNull();
+    expect(screen.queryByText('People matched')).toBeNull();
     expect(screen.queryByText('Old draft failed')).toBeNull();
     expect(screen.getByRole('button', { name: 'Preview impact' })).toBeEnabled();
   });
@@ -169,7 +169,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText('Persons matched');
+    await screen.findByText('People matched');
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeEnabled();
     await userEvent.click(screen.getByLabelText('Finance'));
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
@@ -235,7 +235,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
 
     expect(
-      await screen.findByText('12 holdings would be taken away'),
+      await screen.findByText('12 holdings would be removed'),
     ).toBeVisible();
   });
 
@@ -246,8 +246,8 @@ describe('BusinessRulesPage', () => {
     await screen.findByText('Finance');
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
 
-    expect(await screen.findByText('Persons matched')).toBeVisible();
-    expect(screen.queryByText(/would be taken away/)).toBeNull();
+    expect(await screen.findByText('People matched')).toBeVisible();
+    expect(screen.queryByText(/would be removed/)).toBeNull();
   });
 
   it('marks an entitlement the catalog can no longer see', async () => {
@@ -258,7 +258,7 @@ describe('BusinessRulesPage', () => {
     });
     renderPage();
 
-    expect(await screen.findByText(/missing —/)).toBeVisible();
+    expect(await screen.findByText(/missing:/)).toBeVisible();
   });
 
   it('says the catalog is empty, and offers the control that fills it', async () => {
@@ -269,7 +269,7 @@ describe('BusinessRulesPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/entitlement catalog is empty/),
+      await screen.findByText(/No entitlements yet/),
     ).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Refresh entitlement catalog' }),
@@ -338,7 +338,7 @@ describe('BusinessRulesPage', () => {
     renderPage();
 
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
-    await screen.findByText(/holdings would be taken away|holding would be taken away/);
+    await screen.findByText(/holdings would be removed|holding would be removed/);
 
     const body = bodyOfLastPost(fetchMock, '/rules/impact');
     expect(body.id).toBe('r1');
@@ -355,7 +355,7 @@ describe('BusinessRulesPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
     expect(
-      await screen.findByText(/could not be worked out/),
+      await screen.findByText(/Impact unknown/),
     ).toBeVisible();
     expect(
       fetchMock.mock.calls.some(
@@ -372,7 +372,7 @@ describe('BusinessRulesPage', () => {
     renderPage();
 
     expect(screen.queryByText('No rules yet')).toBeNull();
-    expect(screen.queryByText(/entitlement catalog is empty/)).toBeNull();
+    expect(screen.queryByText(/No entitlements yet/)).toBeNull();
 
     expect(await screen.findByText('Finance staff')).toBeVisible();
   });
@@ -477,16 +477,16 @@ describe('BusinessRulesPage', () => {
     renderPage();
     await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     // Why Save is disabled, said beside it.
-    expect(screen.getByText('Preview required before saving')).toBeVisible();
+    expect(screen.getByText('Preview before saving')).toBeVisible();
 
     await userEvent.click(screen.getByRole('button', { name: 'Preview impact' }));
-    await screen.findByText('Persons matched');
-    expect(screen.getByText('Matches this draft')).toBeVisible();
+    await screen.findByText('People matched');
+    expect(screen.getByText('Current')).toBeVisible();
 
     await userEvent.type(screen.getByLabelText('Value'), 'x');
-    expect(screen.queryByText('Persons matched')).toBeNull();
+    expect(screen.queryByText('People matched')).toBeNull();
     expect(screen.getByText('Out of date — run again')).toBeVisible();
-    expect(screen.getByText('Preview is out of date')).toBeVisible();
+    expect(screen.getByText('Preview out of date')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save rule' })).toBeDisabled();
   });
 

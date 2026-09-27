@@ -84,7 +84,7 @@ describe('evaluateProvisionGuard — the unconditional refusals', () => {
       blocked: true,
       requiresConfirmation: false,
       reasons: [
-        'the target returned no accounts at all, and a run has been applied against it before, so it is not a target that was simply never populated; an empty target and an unreachable one look identical from here, and the safe reading is the second',
+        'the target returned no accounts at all, but runs have been applied to it before — check that it is reachable, then run again',
       ],
     });
   });
@@ -138,7 +138,7 @@ describe('evaluateProvisionGuard — the first run', () => {
       blocked: true,
       requiresConfirmation: true,
       reasons: [
-        'this target has never had a run applied, so the first run is confirmed by a person whatever the thresholds say',
+        'this target has never had a run applied: the first run is confirmed by a person',
       ],
     });
   });
@@ -181,7 +181,7 @@ describe('evaluateProvisionGuard — the first run', () => {
       actions: many('create_account', 4000),
     });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
-    expect(reasonsOf(verdict).join(' ')).toContain('has no denominator on this run');
+    expect(reasonsOf(verdict).join(' ')).toContain('cannot be measured as a share');
   });
 
   it('still refuses outright when an axis that should have a denominator has none', () => {
@@ -196,7 +196,7 @@ describe('evaluateProvisionGuard — the first run', () => {
       actions: many('archive_account', 40),
     });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
-    expect(reasonsOf(verdict)[0]).toContain('cannot evaluate the archive axis');
+    expect(reasonsOf(verdict)[0]).toContain('cannot evaluate the archive threshold');
   });
 });
 
@@ -400,7 +400,7 @@ describe('evaluateProvisionGuard — a denominator of zero is "cannot evaluate",
       holderCountByEntitlement: new Map([['ent-a', 90]]),
     });
     expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
-    expect(reasonsOf(verdict)[0]).toContain('no holder count at all');
+    expect(reasonsOf(verdict)[0]).toContain('no holder count');
   });
 
   it('refuses the exact pre-flight failure: an entirely empty holder map', () => {

@@ -555,7 +555,7 @@ describe('the critical-finding producer', () => {
     );
     // A name, never an id: nobody reading this should have to know the enum.
     expect(vars['findingKind']).not.toMatch(/_/);
-    expect(vars['summary']).toContain('does not hold');
+    expect(vars['summary']).toContain('breaks at this sequence');
   });
 
   it('is NEVER digested, whatever the recipient chose', async () => {

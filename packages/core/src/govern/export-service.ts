@@ -144,7 +144,7 @@ export async function exportReportCsv(
       }),
     );
     throw new Error(
-      'a live report cannot be exported as evidence: it has no as-of time, and evidence with no as-of time is not evidence',
+      'Live reports cannot be exported as evidence. Export from a snapshot.',
     );
   }
 
@@ -641,7 +641,7 @@ export async function fetchEvidencePack(
     tx.evidencePack.findUniqueOrThrow({ where: { id: packId } }),
   );
   if (pack.snapshotId === null) {
-    throw new Error('this evidence pack names no snapshot, so it cannot be rebuilt');
+    throw new Error('Evidence pack has no snapshot and cannot be rebuilt.');
   }
 
   const withoutDigest = await buildEvidenceBundle(tenantId, {

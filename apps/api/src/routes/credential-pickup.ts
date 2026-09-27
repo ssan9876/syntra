@@ -85,7 +85,7 @@ export async function registerCredentialPickupRoutes(
         410,
         'credential-link-unusable',
         'That link no longer works',
-        'Each link shows the password once and expires after three days. Ask your administrator to send a new one.',
+        'It was already used or has expired. Ask your administrator for a new one.',
       );
     }
     return credentialPickupRevealResponse.parse({

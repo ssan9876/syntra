@@ -212,8 +212,7 @@ export class UnknownActionError extends Error {
 export class EscalationRefusedError extends Error {
   constructor() {
     super(
-      'this task cannot act on that account: it holds a permission you do not, ' +
-        'and a delegated task may not be used to reach further than the person running it',
+      'This task cannot act on that account: it holds a permission you do not.',
     );
     this.name = 'EscalationRefusedError';
   }

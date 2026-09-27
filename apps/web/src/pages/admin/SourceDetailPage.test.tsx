@@ -227,7 +227,7 @@ describe('creating a source', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(
-      await screen.findByText(/attribute mappings were saved/i),
+      await screen.findByText(/attribute mappings saved/i),
     ).toBeInTheDocument();
   });
 
@@ -272,9 +272,9 @@ describe('creating a source', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(
-      await screen.findByText(/attribute mappings were refused/i),
+      await screen.findByText(/attribute mappings refused/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/nothing will sync/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing syncs/i)).toBeInTheDocument();
   });
 
   it('puts a rejected cron expression on the schedule field, not in a banner', async () => {
@@ -669,7 +669,7 @@ describe('deleting a source', () => {
     expect(title).toHaveTextContent('3 groups');
     expect(title).toHaveTextContent('2 organizational units');
     expect(title.closest('[role="alert"]')).toHaveTextContent(
-      /deactivates every one of those/i,
+      /deactivates these users and groups/i,
     );
   });
 
@@ -684,7 +684,7 @@ describe('deleting a source', () => {
     // Every number the paragraph states, org units included.
     await userEvent.click(
       screen.getByRole('checkbox', {
-        name: /12 users and 3 groups will be deactivated, and 2 units detached/i,
+        name: /deactivate 12 users and 3 groups, and detach 2 units/i,
       }),
     );
     expect(remove).toBeEnabled();
@@ -715,7 +715,7 @@ describe('deleting a source', () => {
           json(
             {
               type: 'https://syntra.dev/problems/source-counts-changed',
-              title: 'The numbers changed',
+              title: 'Counts changed',
               status: 409,
               detail:
                 'this source now owns 1200 user(s), 3 group(s) and 2 organizational unit(s), not the 12, 3 and 2 that were confirmed',
@@ -735,7 +735,7 @@ describe('deleting a source', () => {
     renderEdit();
     await screen.findByText(/this source owns/i);
     const acknowledge = () =>
-      screen.getByRole('checkbox', { name: /will be deactivated/i });
+      screen.getByRole('checkbox', { name: /^deactivate \d+ users/i });
     await userEvent.click(acknowledge());
     await userEvent.click(screen.getByRole('button', { name: 'Delete source' }));
 

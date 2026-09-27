@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { Prisma, type TenantClient } from '@syntra/db';
 import { z } from 'zod';
 import {
+  assertVerifiedEmailAddress,
   getLifecycleOperation,
   retryLifecycleOperation,
   assertRetryAfterVerification,
@@ -300,7 +301,7 @@ export async function registerAdminLifecycleOperationRoutes(
       : [];
     const scheduler = options.scheduler?.() ?? null;
     if (receipts.length > 0 && !scheduler) {
-      throw new ProblemError(503, 'scheduler-unavailable', 'Background jobs are unavailable', 'Target receipts were not reset because they cannot be queued.');
+      throw new ProblemError(503, 'scheduler-unavailable', 'Background jobs are not running', 'Target receipts were not reset.');
     }
     if (!scheduler) return retryLifecycleOperation(tenantId, operationId);
     return retryOperationWithReceipts(tenantId, operationId, scheduler);
@@ -394,7 +395,7 @@ export async function registerAdminLifecycleOperationRoutes(
         return await updateLifecyclePolicy(request.tenantId, body, request.session.userId);
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-          throw new ProblemError(400, 'invalid-owner', 'No such user', 'The escalation owner must be an existing account.');
+          throw new ProblemError(400, 'invalid-owner', 'User not found', 'The escalation owner must be an existing account.');
         }
         throw error;
       }
@@ -829,6 +830,7 @@ export async function registerAdminLifecycleOperationRoutes(
     },
     async (request, reply) => {
       const body = onboardingRequest.parse(request.body);
+      await request.db((tx) => assertVerifiedEmailAddress(tx, body.person.businessEmail, 'person.businessEmail'));
       const existed = await request.db((tx) =>
         tx.lifecycleOperation.findUnique({
           where: {
@@ -861,7 +863,7 @@ export async function registerAdminLifecycleOperationRoutes(
             409,
             'idempotency-key-reused',
             'Idempotency key already used',
-            'This idempotencyKey was already used with different input. Use a new key for a new request.',
+            'This idempotencyKey was used with different input. Use a new key.',
           );
         }
         throw cause;

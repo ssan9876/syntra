@@ -173,7 +173,7 @@ export async function registerAdminApplicationRoutes(
             throw new ProblemError(
               400,
               'missing-value',
-              'That application needs another value',
+              'Missing value',
               cause.message,
             );
           }
@@ -223,7 +223,7 @@ export async function registerAdminApplicationRoutes(
             throw new ProblemError(
               409,
               'slug-taken',
-              'That slug is already used',
+              'Slug already in use',
               error.message,
             );
           }
@@ -325,7 +325,7 @@ export async function registerAdminApplicationRoutes(
           403,
           'step-up-required',
           'Confirm it is you first',
-          `Deleting an application needs a console session started in the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
+          `Deleting an application needs a console session from the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
         );
       }
 
@@ -365,9 +365,9 @@ export async function registerAdminApplicationRoutes(
             throw new ProblemError(
               400,
               'confirm-mismatch',
-              'The name does not match',
-              "Type the application's name exactly as it is shown to delete it.",
-              { errors: [{ path: 'confirm', message: "Type the application's name exactly as it is shown" }] },
+              'Name does not match',
+              "Type the application's name exactly as shown.",
+              { errors: [{ path: 'confirm', message: "Type the name exactly as shown" }] },
             );
           case 'in_use': {
             const products = outcome.products.map((p) => `"${p}"`).join(', ');
@@ -380,8 +380,8 @@ export async function registerAdminApplicationRoutes(
             throw new ProblemError(
               409,
               'application-in-use',
-              'This application is still granted through Automate',
-              `Not deleted: ${parts.join(', and ')}. Remove it from those products and end those grants first, or retire the application instead.`,
+              'Application still in use',
+              `Not deleted: ${parts.join(', and ')}. Remove it from those products and end the grants, or retire it.`,
               { products: outcome.products, liveGrants: outcome.liveGrants },
             );
           }
@@ -420,7 +420,7 @@ export async function registerAdminApplicationRoutes(
           result = await setApplicationIcon(tx, id, body.icon);
         } catch (cause) {
           if (cause instanceof ApplicationIconRefusedError) {
-            throw new ProblemError(400, 'icon-refused', 'That logo cannot be used', cause.message, {
+            throw new ProblemError(400, 'icon-refused', 'Logo refused', cause.message, {
               errors: [{ path: 'icon', message: cause.message }],
             });
           }

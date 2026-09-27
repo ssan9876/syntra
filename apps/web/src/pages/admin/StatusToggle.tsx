@@ -67,7 +67,7 @@ export function StatusToggle({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `That ${label} could not be changed.`,
+          : `The ${label} was not changed. Try again.`,
       );
     } finally {
       setBusy(false);

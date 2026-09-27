@@ -458,7 +458,7 @@ describe('verifyIncremental', () => {
     expect(finding.severity).toBe('critical');
     expect(finding.detail).toMatchObject({ checkpointSequence: 4 });
     expect(String((finding.detail as Record<string, unknown>)['statement'])).toContain(
-      'does not carry a valid signature',
+      'Checkpoint signature is not valid',
     );
   });
 
@@ -492,7 +492,7 @@ describe('verifyIncremental', () => {
     expect(result.signatureState).toBe('unsigned_no_signer_configured');
 
     const status = await withTenant(tenantId, (tx) => integrityStatus(tx, false, null));
-    expect(status.checkpointStatement).toContain('UNSIGNED and no signing key is configured');
+    expect(status.checkpointStatement).toContain('unsigned and no signing key is set');
     expect(status.lastCheckpoint).toMatchObject({ signatureState: 'unsigned_no_signer_configured' });
   });
 });
@@ -555,7 +555,7 @@ describe('integrityStatus', () => {
     await verifyIncremental(tenantId, { now: NOW });
     const status = await withTenant(tenantId, (tx) => integrityStatus(tx, false));
     expect(status.anchoring.configured).toBe(false);
-    expect(status.anchoring.statement).toContain('not proof against the operator');
+    expect(status.anchoring.statement).toContain('External anchoring is off');
     expect(status.headSequence).toBe(2);
     expect(status.lastCheckpoint).toMatchObject({ sequence: 2, signed: false });
   });

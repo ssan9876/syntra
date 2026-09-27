@@ -213,7 +213,7 @@ describe('minting on create', () => {
     const sealed = await withTenant(tenantId, (tx) =>
       tx.auditEvent.findFirstOrThrow({ where: { action: 'provision.credential.sealed' } }),
     );
-    expect((sealed.payload as { note: string }).note).toMatch(/no public URL/);
+    expect((sealed.payload as { note: string }).note).toMatch(/PUBLIC_URL is not set/);
   });
 });
 

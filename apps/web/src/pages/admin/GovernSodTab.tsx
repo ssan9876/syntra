@@ -74,7 +74,7 @@ export function GovernSodTab() {
           {functions.data === null && functions.loading && <SkeletonRows rows={3} cols={2} />}
           {functions.error !== null && <Alert tone="danger">{functions.error}</Alert>}
           {functions.data !== null && functions.data.functions.length === 0 && (
-            <Empty title="No business functions yet" />
+            <Empty title="No business functions" />
           )}
           {(functions.data?.functions ?? []).length > 0 && (
             <ul className="divide-y divide-border-subtle">
@@ -163,12 +163,12 @@ export function GovernSodTab() {
                       setActionError(
                         cause instanceof ApiError
                           ? (cause.problem.detail ?? cause.problem.title)
-                          : 'Could not preview that rule.',
+                          : 'Rule preview failed.',
                       ),
                     );
                 }}
               >
-                Preview who this flags
+                Preview matches
               </Button>
             </div>
 
@@ -179,7 +179,7 @@ export function GovernSodTab() {
                   `: ${preview.sample.map((s) => s.displayName).join(', ')}`}
                 .
                 {preview.unevaluableSubjects > 0 &&
-                  ` ${preview.unevaluableSubjects} not evaluated: a resource could not be read.`}
+                  ` ${preview.unevaluableSubjects} not checked: a resource could not be read.`}
               </Alert>
             )}
           </div>

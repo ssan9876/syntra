@@ -66,7 +66,7 @@ export function RequestQueueTab() {
                 title="No requests yet"
                 action={
                   <Link to="/admin/requests?tab=catalog" className={buttonClasses('secondary')}>
-                    Review what can be requested
+                    Open catalog
                   </Link>
                 }
               />

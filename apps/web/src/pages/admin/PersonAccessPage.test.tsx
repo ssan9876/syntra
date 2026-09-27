@@ -73,7 +73,7 @@ describe('PersonAccessPage', () => {
     expect(
       screen.getByText('Accountant, Finance, from 2026-01-01'),
     ).toBeVisible();
-    expect(screen.getByText('A business rule')).toBeVisible();
+    expect(screen.getByText('Business rule')).toBeVisible();
     // Nothing is stale, so nothing says so.
     expect(screen.queryByText('no longer asks for this')).toBeNull();
     expect(screen.queryByText('nothing asks for this now')).toBeNull();
@@ -118,7 +118,7 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('pending — nothing at the target yet'),
+      await screen.findByText('pending — not created yet'),
     ).toBeVisible();
   });
 
@@ -146,7 +146,7 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('This person holds no target-system accounts'),
+      await screen.findByText('No target accounts'),
     ).toBeVisible();
   });
 
@@ -156,7 +156,7 @@ describe('PersonAccessPage', () => {
 
     expect(await screen.findByText('That record no longer exists.')).toBeVisible();
     expect(
-      screen.queryByText('This person holds no target-system accounts'),
+      screen.queryByText('No target accounts'),
     ).toBeNull();
   });
 
@@ -186,7 +186,7 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('Found at the target, not granted here'),
+      await screen.findByText('Found at the target'),
     ).toBeVisible();
   });
 
@@ -284,7 +284,7 @@ describe('PersonAccessPage', () => {
 
     expect(await screen.findByText('nothing asks for this now')).toBeVisible();
     expect(
-      screen.getByText('A rule granted this and no rule keeps it in place.'),
+      screen.getByText('Granted by a rule. No rule keeps it now.'),
     ).toBeVisible();
     expect(screen.getByText('Finance staff')).toBeVisible();
     expect(screen.getByText('no longer asks for this')).toBeVisible();
@@ -316,7 +316,7 @@ describe('PersonAccessPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('a rule that has since been deleted'),
+      await screen.findByText('deleted rule'),
     ).toBeVisible();
     expect(screen.getByText('Finance analysts')).toBeVisible();
   });
@@ -340,7 +340,7 @@ describe('PersonAccessPage', () => {
     expect(await screen.findByText('nothing asks for this now')).toBeVisible();
     expect(
       screen.getByText(
-        'Finance staff still names it, but no active contract of this person matches it.',
+        'Finance staff names it, but no active contract matches.',
       ),
     ).toBeVisible();
   });
@@ -487,7 +487,7 @@ describe('the placement control', () => {
       put: () =>
         json({
           moved: false,
-          message: 'the server is unwilling to perform. The move is recorded and the next run will retry it.',
+          message: 'the server is unwilling to perform. The next run retries the move.',
         }) as unknown as Response,
     });
     renderPage();
@@ -503,7 +503,7 @@ describe('the placement control', () => {
     // Not an error. The decision is stored and the next run retries it, and
     // saying "that failed" would tell the administrator their decision was
     // lost when it was not.
-    expect(await screen.findByText(/next run will retry it/i)).toBeVisible();
+    expect(await screen.findByText(/next run retries the move/i)).toBeVisible();
   });
 
   it('offers to hand the person back to the rule', async () => {

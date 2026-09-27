@@ -158,7 +158,7 @@ describe('the three application paths', () => {
     );
     expect(draft!.detail['administratorName']).toBeNull();
     expect(draft!.detail['note']).toBe(
-      'assigned directly; no audit event records who or when',
+      'Assigned directly; no audit event records who or when.',
     );
     expect(draft!.detail['scopeOrgUnitName']).toBe('Head Office');
   });
@@ -333,7 +333,7 @@ describe('summariseAttributions', () => {
 
   it('says plainly that nothing explains it', () => {
     expect(summariseAttributions(attributionsFor(input(), AT))).toBe(
-      'nothing in Syntra explains this access',
+      'No recorded reason for this access',
     );
   });
 });

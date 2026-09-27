@@ -59,7 +59,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
     setBusy(true);
     void api<Preview>(`/api/admin/persons/${personId}/offboarding`)
       .then((value) => { if (current) { setPreview(value); setProblem(null); } })
-      .catch((cause: unknown) => { if (current) setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The offboarding preview could not be loaded.'); })
+      .catch((cause: unknown) => { if (current) setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Offboarding preview failed to load.'); })
       .finally(() => { if (current) setBusy(false); });
     return () => { current = false; };
   }, [open, personId]);
@@ -81,7 +81,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
         <ul className="list-disc pl-5">
           <li>disables linked Syntra sign-ins</li>
           <li>revokes sessions</li>
-          <li>starts target-system leaver work</li>
+          <li>starts leaver work on target systems</li>
         </ul>
       </Alert>
       {problem && <Alert tone="danger">{problem}</Alert>}
@@ -97,7 +97,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
               return <tr key={account.id}>
                 <th scope="row" className="font-medium text-ink">{account.login}</th>
                 <td><AccountState status={account.status} /></td>
-                <td>{manual ? <StateBadge state="attention">Manual: {account.source!.name} cannot be disabled by Syntra</StateBadge> : account.source ? account.source.name : '—'}</td>
+                <td>{manual ? <StateBadge state="attention">Manual: disable in {account.source!.name}</StateBadge> : account.source ? account.source.name : '—'}</td>
               </tr>;
             }) : <tr><td colSpan={3} className="text-muted">No linked sign-ins</td></tr>}
           </tbody>
@@ -115,7 +115,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
           </tbody>
         </Table>
         <Field label="Reason" value={reason} onChange={setReason} />
-        <Check label="Urgent departure" checked={urgent} onChange={setUrgent} warning={urgent ? 'Urgent service level; escalates if target access is not removed in time.' : undefined} />
+        <Check label="Urgent departure" checked={urgent} onChange={setUrgent} warning={urgent ? 'Escalates if target access is not removed by the urgent deadline.' : undefined} />
         <div className="flex gap-2"><Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void finish()}>End employment now</Button><Button variant="secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button></div>
       </>}
       {results && outcome && <>
@@ -131,8 +131,8 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
           </tbody>
         </Table>
         {outcome.provisionMessage ? <Alert tone="warning">{outcome.provisionMessage}</Alert> : null}
-        {outcome.sloDeadlineAt ? <dl className="text-sm"><dt className="font-medium text-muted">{outcome.priority === 'critical' ? 'Urgent' : 'Standard'} service level · target access removed by</dt><dd className="mt-0.5 font-medium text-ink">{new Date(outcome.sloDeadlineAt).toLocaleString()}</dd></dl> : null}
-        {outcome.approvalRequired ? <Alert tone="info" title="Approval required">{outcome.approvalReason ?? 'Target work needs a second approver.'}</Alert> : null}
+        {outcome.sloDeadlineAt ? <dl className="text-sm"><dt className="font-medium text-muted">Target access removed by ({outcome.priority === 'critical' ? 'urgent' : 'standard'})</dt><dd className="mt-0.5 font-medium text-ink">{new Date(outcome.sloDeadlineAt).toLocaleString()}</dd></dl> : null}
+        {outcome.approvalRequired ? <Alert tone="info" title="Approval required">{outcome.approvalReason ?? 'Target changes need a second approver.'}</Alert> : null}
         <Link className="link" to={`/admin/lifecycle-operations/${outcome.operationId}`}>Open offboarding operation</Link>
       </>}
       {busy && !preview && <SkeletonRows rows={3} cols={3} />}

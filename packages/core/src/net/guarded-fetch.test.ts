@@ -37,13 +37,13 @@ describe('guardedFetch', () => {
     // https here, so the refusal cannot be a transport-scheme refusal wearing
     // the guard's clothes — nothing ever connects.
     await expect(fetcher(`https://localhost:${port}/.well-known/openid-configuration`))
-      .rejects.toThrow(/inside this deployment/);
+      .rejects.toThrow(/private network address/);
   });
 
   it('refuses a literal loopback address too', async () => {
     const { base } = await listen((_req, res) => res.end('{}'));
     await expect(guardedFetch({ allowPrivateAddresses: false })(base)).rejects.toThrow(
-      /inside this deployment/,
+      /private network address/,
     );
   });
 

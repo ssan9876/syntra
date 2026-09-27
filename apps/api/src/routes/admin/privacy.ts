@@ -148,7 +148,7 @@ export async function registerAdminPrivacyRoutes(
     } catch (cause) {
       if (cause instanceof ExportRefusedError) throw exportProblem(cause);
       if (cause instanceof JobNotQueuedError) {
-        throw new ProblemError(503, 'job-not-queued', 'The bundle was recorded but not queued', cause.message);
+        throw new ProblemError(503, 'job-not-queued', 'Bundle not queued', cause.message);
       }
       throw cause;
     }

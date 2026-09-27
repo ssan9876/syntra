@@ -83,7 +83,7 @@ describe('previewImportRun', () => {
 
     expect(run.mappingFailures).toBe(1);
     expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
-      'employee "rejected" uses unapproved reference value(s): department "Finance"',
+      'Employee "rejected" has unapproved reference values: department "Finance"',
     ]));
     const changes = await changesOf(run.id);
     expect(changes.some((change) => change.externalId === 'approved')).toBe(true);
@@ -118,7 +118,7 @@ describe('previewImportRun', () => {
 
     expect(run.mappingFailures).toBe(2);
     expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
-      'employee identifier "duplicate" occurs more than once; every occurrence was withheld',
+      'Employee ID "duplicate" appears more than once. All its rows were withheld.',
     ]));
     expect(await changesOf(run.id)).toEqual([]);
   });
@@ -136,7 +136,7 @@ describe('previewImportRun', () => {
 
     expect(run.mappingFailures).toBe(1);
     expect(run.mappingFailureReasons).toEqual(expect.arrayContaining([
-      'employee "employee" references unknown manager identifier(s): missing-manager',
+      'Employee "employee" has unknown manager IDs: missing-manager',
     ]));
     expect(await changesOf(run.id)).toEqual([]);
   });
@@ -290,7 +290,7 @@ describe('previewImportRun', () => {
     expect(second.mappingFailures).toBe(5);
     expect(second.personsAbsent).toBe(0);
     expect(await changesOf(second.id)).toEqual([]);
-    expect(second.mappingFailureReasons.join(' ')).toMatch(/no leaver is proposed/);
+    expect(second.mappingFailureReasons.join(' ')).toMatch(/No leavers are proposed/);
 
     const stillHere = await withTenant(tenantId, (tx) =>
       tx.person.count({ where: { status: 'active' } }),

@@ -76,6 +76,7 @@ async function within<T>(ms: number, work: () => Promise<T>): Promise<T> {
 
 async function queueReadable(): Promise<boolean> {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     await prisma.$queryRawUnsafe('select 1 from pgboss.job limit 1');
     return true;
   } catch {
@@ -88,54 +89,55 @@ export async function componentHealth(deps: StatusDeps): Promise<StatusComponent
   const ms = deps.timeoutMs ?? COMPONENT_TIMEOUT_MS;
   const components: StatusComponent[] = [
     // Answering this request is the whole of the API's check.
-    { name: 'api', state: 'operational', detail: 'The API is answering.' },
+    { name: 'api', state: 'operational', detail: 'API is responding.' },
   ];
 
   let databaseUp = false;
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     await within(ms, () => prisma.$queryRawUnsafe('SELECT 1'));
     databaseUp = true;
     const state = await within(ms, () => migrationState());
     components.push(
       state.ok
-        ? { name: 'database', state: 'operational', detail: 'The database is reachable and its schema is current.' }
-        : { name: 'database', state: 'degraded', detail: 'The database is reachable but a schema migration is incomplete.' },
+        ? { name: 'database', state: 'operational', detail: 'Database is up. Schema is current.' }
+        : { name: 'database', state: 'degraded', detail: 'Database is up, but a schema migration is incomplete.' },
     );
   } catch {
     components.push(
       databaseUp
-        ? { name: 'database', state: 'degraded', detail: 'The database is reachable but its schema state could not be read.' }
-        : { name: 'database', state: 'unavailable', detail: 'The database is not answering.' },
+        ? { name: 'database', state: 'degraded', detail: 'Database is up, but its schema state could not be read.' }
+        : { name: 'database', state: 'unavailable', detail: 'Database is not responding.' },
     );
   }
 
   const running = deps.schedulerRunning?.();
   if (running === undefined) {
-    components.push({ name: 'queue', state: 'unknown', detail: 'This process does not report on background work.' });
+    components.push({ name: 'queue', state: 'unknown', detail: 'Not reported by this process.' });
   } else if (!running) {
-    components.push({ name: 'queue', state: 'unavailable', detail: 'Background work is not running: scheduled syncs, provisioning and notifications are paused until it recovers.' });
+    components.push({ name: 'queue', state: 'unavailable', detail: 'Background worker is down. Scheduled syncs, provisioning and emails are paused.' });
   } else if (databaseUp && !(await within(ms, queueReadable).catch(() => false))) {
-    components.push({ name: 'queue', state: 'degraded', detail: 'Background work is running but its queue could not be read.' });
+    components.push({ name: 'queue', state: 'degraded', detail: 'Background worker is running, but its queue could not be read.' });
   } else {
-    components.push({ name: 'queue', state: 'operational', detail: 'Background work is running.' });
+    components.push({ name: 'queue', state: 'operational', detail: 'Background worker is running.' });
   }
 
   try {
     await within(ms, () => deps.provider.check());
-    components.push({ name: 'key_provider', state: 'operational', detail: 'The key provider protects and opens stored secrets.' });
+    components.push({ name: 'key_provider', state: 'operational', detail: 'Key provider is up.' });
   } catch {
-    components.push({ name: 'key_provider', state: 'unavailable', detail: 'The key provider is not answering: new secrets cannot be stored, and connector credentials stop opening as cached keys expire.' });
+    components.push({ name: 'key_provider', state: 'unavailable', detail: 'Key provider is not responding. New secrets cannot be saved, and connector credentials stop working as cached keys expire.' });
   }
 
   if (!deps.transport?.verify) {
-    components.push({ name: 'smtp', state: 'unknown', detail: 'Outbound mail is not checked by this deployment.' });
+    components.push({ name: 'smtp', state: 'unknown', detail: 'Mail server is not checked in this deployment.' });
   } else {
     const verify = deps.transport.verify.bind(deps.transport);
     try {
       await within(ms, verify);
-      components.push({ name: 'smtp', state: 'operational', detail: 'The mail server accepts connections.' });
+      components.push({ name: 'smtp', state: 'operational', detail: 'Mail server is accepting connections.' });
     } catch {
-      components.push({ name: 'smtp', state: 'unavailable', detail: 'The mail server is not accepting connections: notifications and one-time codes by email are delayed.' });
+      components.push({ name: 'smtp', state: 'unavailable', detail: 'Mail server is not accepting connections. Emails, including sign-in codes, are delayed.' });
     }
   }
   return components;
@@ -391,6 +393,7 @@ export async function deploymentStatus(deps: DeploymentStatusDeps, now: Date = n
 
   let pending: number | null;
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     const rows = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
       `select count(*)::bigint as count from pgboss.job where state in ('created', 'retry')`,
     );

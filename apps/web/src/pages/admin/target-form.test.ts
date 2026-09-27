@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLANK, configFromForm, formFrom, validateNumbers, type Target } from './target-form.js';
+import { BLANK, configFromForm, formFrom, validateNumbers, skipAdvice, type Target } from './target-form.js';
 
 const target = (overrides: Partial<Target> = {}): Target => ({
   id: 't1',
@@ -129,5 +129,19 @@ describe('the native Entra ID target form', () => {
     expect(form.type).toBe('httpJson');
     expect(form.entraTenantId).toBe('tenant-9');
     expect(form.entraClientId).toBe('client-9');
+  });
+});
+
+describe('skipAdvice', () => {
+  it('reads the run time from the current reason and from the older ISO form', () => {
+    const now = skipAdvice('Skipped: run from 2026-08-01 03:00 UTC is awaiting review. Apply or cancel it.');
+    const old = skipAdvice('a run from 2026-08-01T03:00:00.000Z is awaiting review (blocked), so this scheduled run did not start');
+    const expected = `Skipped: the run from ${new Date('2026-08-01T03:00:00Z').toLocaleString()} is waiting for review. Apply or cancel it.`;
+    expect(now).toBe(expected);
+    expect(old).toBe(expected);
+  });
+
+  it('falls back when no time can be read', () => {
+    expect(skipAdvice('a run is awaiting review')).toBe('Skipped: a run is waiting for review. Apply or cancel it.');
   });
 });

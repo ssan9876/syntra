@@ -36,7 +36,7 @@ export const en = {
   'login.help': 'Trouble signing in? Contact your IT administrator.',
   'login.trouble': 'Trouble signing in?',
   'common.get_help': 'Get help',
-  'login.failed': 'That login and password do not match an account.',
+  'login.failed': 'Wrong login or password.',
 
   'forgot.title': 'Reset your password',
   'forgot.field': 'Login or email',
@@ -46,7 +46,7 @@ export const en = {
   // account exists, and a translation that promised delivery would give away
   // what the endpoint carefully does not.
   'forgot.sent':
-    'If that account exists, we have sent it a link. It works once and expires in thirty minutes.',
+    'If that account exists, a link is on its way. It works once and expires in 30 minutes.',
 
   'reset.title': 'Choose a new password',
   'reset.password': 'New password',
@@ -56,18 +56,16 @@ export const en = {
 
   'renew.title': 'Your password has expired',
   'renew.lead': 'Choose a new one to carry on.',
-  'reset.too_short': 'At least twelve characters. A short sentence works well.',
+  'reset.too_short': 'At least 12 characters.',
   'reset.factor_totp': 'Code from your app',
-  'reset.factor_hint':
-    'Your account has a second factor, so resetting the password needs it too.',
-  'renew.too_short':
-    'At least twelve characters, and not one you have used before. A short sentence works well.',
+  'reset.factor_hint': 'Your account has a second factor. Enter its code too.',
+  'renew.too_short': 'At least 12 characters, and not one you have used before.',
   'renew.submit': 'Save and sign in',
 
   'mfa.title': 'One more step',
   'mfa.code': 'Code',
   'mfa.verify': 'Verify',
-  'mfa.wrong_code': 'That code did not match. Try the next one your app shows.',
+  'mfa.wrong_code': 'Wrong code. Try the next one your app shows.',
   'mfa.use_recovery': 'Use a recovery code instead',
   'mfa.recovery_code': 'Recovery code',
   'mfa.use_key': 'Use your security key',
@@ -77,7 +75,7 @@ export const en = {
   'mfa.totp_code': 'Six-digit code',
   'mfa.email_code': 'Code from your email',
   'mfa.email_resend': 'Send it again',
-  'mfa.recovery_hint': 'One of the codes you saved when you set up your second factor.',
+  'mfa.recovery_hint': 'One of the recovery codes you saved at setup.',
   'mfa.webauthn_lead': 'Use your security key or passkey when the browser asks.',
   'mfa.use_totp': 'Use a code from your app',
   'mfa.use_email': 'Email me a code',
@@ -96,7 +94,7 @@ export const en = {
   'enrol.switch_to_app': 'Use an app instead',
 
   'portal.title': 'Your applications',
-  'portal.empty': 'Nothing has been made available to you yet.',
+  'portal.empty': 'No applications yet.',
   'portal.search': 'Search',
   'portal.sign_out': 'Sign out',
   'portal.greeting': 'Good day, {name}',
@@ -160,7 +158,7 @@ export const nl: Catalog = {
   'login.help': 'Lukt aanmelden niet? Neem contact op met je IT-beheerder.',
   'login.trouble': 'Lukt aanmelden niet?',
   'common.get_help': 'Hulp krijgen',
-  'login.failed': 'Deze gebruikersnaam en dit wachtwoord horen niet bij een account.',
+  'login.failed': 'Onjuiste gebruikersnaam of wachtwoord.',
 
   'forgot.title': 'Wachtwoord opnieuw instellen',
   'forgot.field': 'Gebruikersnaam of e-mail',
@@ -177,18 +175,16 @@ export const nl: Catalog = {
 
   'renew.title': 'Je wachtwoord is verlopen',
   'renew.lead': 'Kies een nieuw wachtwoord om verder te gaan.',
-  'reset.too_short': 'Minstens twaalf tekens. Een korte zin werkt goed.',
+  'reset.too_short': 'Minstens 12 tekens.',
   'reset.factor_totp': 'Code uit je app',
-  'reset.factor_hint':
-    'Je account heeft een tweede factor, dus die is ook nodig om je wachtwoord opnieuw in te stellen.',
-  'renew.too_short':
-    'Minstens twaalf tekens, en niet één die je eerder gebruikt hebt. Een korte zin werkt goed.',
+  'reset.factor_hint': 'Je account heeft een tweede factor. Vul ook die code in.',
+  'renew.too_short': 'Minstens 12 tekens, en niet één die je eerder gebruikt hebt.',
   'renew.submit': 'Opslaan en aanmelden',
 
   'mfa.title': 'Nog één stap',
   'mfa.code': 'Code',
   'mfa.verify': 'Verifiëren',
-  'mfa.wrong_code': 'Deze code klopte niet. Probeer de volgende die je app laat zien.',
+  'mfa.wrong_code': 'Onjuiste code. Probeer de volgende die je app laat zien.',
   'mfa.use_recovery': 'Gebruik in plaats daarvan een herstelcode',
   'mfa.recovery_code': 'Herstelcode',
   'mfa.use_key': 'Gebruik je beveiligingssleutel',
@@ -198,7 +194,7 @@ export const nl: Catalog = {
   'mfa.totp_code': 'Zescijferige code',
   'mfa.email_code': 'Code uit je e-mail',
   'mfa.email_resend': 'Stuur opnieuw',
-  'mfa.recovery_hint': 'Een van de codes die je bewaarde toen je je tweede factor instelde.',
+  'mfa.recovery_hint': 'Een van de herstelcodes die je bij het instellen bewaarde.',
   'mfa.webauthn_lead': 'Gebruik je beveiligingssleutel of passkey wanneer de browser erom vraagt.',
   'mfa.use_totp': 'Gebruik een code uit je app',
   'mfa.use_email': 'Mail mij een code',
@@ -269,7 +265,7 @@ export const de: Catalog = {
   'login.help': 'Probleme bei der Anmeldung? Wenden Sie sich an Ihre IT-Administration.',
   'login.trouble': 'Probleme bei der Anmeldung?',
   'common.get_help': 'Hilfe erhalten',
-  'login.failed': 'Benutzername und Passwort gehören zu keinem Konto.',
+  'login.failed': 'Benutzername oder Passwort falsch.',
 
   'forgot.title': 'Passwort zurücksetzen',
   'forgot.field': 'Benutzername oder E-Mail',
@@ -286,18 +282,16 @@ export const de: Catalog = {
 
   'renew.title': 'Ihr Passwort ist abgelaufen',
   'renew.lead': 'Wählen Sie ein neues, um fortzufahren.',
-  'reset.too_short': 'Mindestens zwölf Zeichen. Ein kurzer Satz eignet sich gut.',
+  'reset.too_short': 'Mindestens 12 Zeichen.',
   'reset.factor_totp': 'Code aus Ihrer App',
-  'reset.factor_hint':
-    'Ihr Konto hat einen zweiten Faktor, der auch zum Zurücksetzen des Passworts nötig ist.',
-  'renew.too_short':
-    'Mindestens zwölf Zeichen, und keines, das Sie schon verwendet haben. Ein kurzer Satz eignet sich gut.',
+  'reset.factor_hint': 'Ihr Konto hat einen zweiten Faktor. Geben Sie auch dessen Code ein.',
+  'renew.too_short': 'Mindestens 12 Zeichen, und keines, das Sie schon verwendet haben.',
   'renew.submit': 'Speichern und anmelden',
 
   'mfa.title': 'Noch ein Schritt',
   'mfa.code': 'Code',
   'mfa.verify': 'Bestätigen',
-  'mfa.wrong_code': 'Dieser Code stimmte nicht. Versuchen Sie den nächsten aus Ihrer App.',
+  'mfa.wrong_code': 'Falscher Code. Versuchen Sie den nächsten aus Ihrer App.',
   'mfa.use_recovery': 'Stattdessen einen Wiederherstellungscode verwenden',
   'mfa.recovery_code': 'Wiederherstellungscode',
   'mfa.use_key': 'Sicherheitsschlüssel verwenden',
@@ -307,7 +301,7 @@ export const de: Catalog = {
   'mfa.totp_code': 'Sechsstelliger Code',
   'mfa.email_code': 'Code aus Ihrer E-Mail',
   'mfa.email_resend': 'Erneut senden',
-  'mfa.recovery_hint': 'Einer der Codes, die Sie beim Einrichten Ihres zweiten Faktors gespeichert haben.',
+  'mfa.recovery_hint': 'Einer der Wiederherstellungscodes, die Sie beim Einrichten gespeichert haben.',
   'mfa.webauthn_lead': 'Verwenden Sie Ihren Sicherheitsschlüssel oder Passkey, wenn der Browser danach fragt.',
   'mfa.use_totp': 'Code aus Ihrer App verwenden',
   'mfa.use_email': 'Code per E-Mail schicken',

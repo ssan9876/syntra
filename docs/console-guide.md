@@ -175,8 +175,10 @@ one is safe), and a redacted support bundle.
 
 ![Settings](images/console/17-settings.png)
 
-Sign-in and session rules, branding, webhooks, stored credentials, security
-alerts, change control, break-glass access and offboarding.
+Sign-in and session rules, the verified email domains every address must be
+in (see [configure.md](configure.md#email-domains)), branding, webhooks, stored
+credentials, security alerts, change control, break-glass access and
+offboarding.
 
 ### Updates
 

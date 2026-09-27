@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
 import { createTarget, upsertAccountProfile, upsertBusinessRule } from './target-service.js';
 import { explainPersonAccess, previewAccountProfile, previewRuleImpact } from './explain.js';
@@ -44,6 +44,7 @@ const profileInput = {
 beforeEach(async () => {
   await resetDatabase();
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+  await verifyTestEmailDomains(t.id);
   tenantId = t.id;
   targetId = (
     await createTarget(tenantId, provider, null, {
@@ -1095,7 +1096,7 @@ describe('previewAccountProfile', () => {
       NOW,
     );
     expect(preview.problems).toEqual([
-      'the template for "mail" references person.businessEmail, which resolves to nothing for this person',
+      'the template for "mail" uses person.businessEmail, which is empty for this person',
     ]);
     expect(preview.attributes.mail).toBeUndefined();
   });

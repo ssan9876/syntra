@@ -412,7 +412,7 @@ export function TargetDetailPage() {
       setResult(answer);
       setResultFor(sentFor);
     } catch (cause) {
-      fail(cause, 'The connection could not be tested.');
+      fail(cause, 'Connection test failed.');
     } finally {
       setBusy(null);
     }
@@ -482,7 +482,7 @@ export function TargetDetailPage() {
           // `fail` puts the field-level messages on their own controls.
           setCreatedId(created.id);
           setNotice('Target created; ladder and thresholds not saved. Fix them and press Save.');
-          fail(cause, 'The ladder and thresholds were refused.');
+          fail(cause, 'Lifecycle timings and thresholds not saved.');
         }
         return;
       }
@@ -533,7 +533,7 @@ export function TargetDetailPage() {
       }
       reload();
     } catch (cause) {
-      fail(cause, 'The target could not be saved.');
+      fail(cause, 'Target not saved.');
     } finally {
       setBusy(null);
     }
@@ -555,7 +555,7 @@ export function TargetDetailPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'The run could not be started.',
+          : 'Run not started.',
       );
     } finally {
       setBusy(null);
@@ -853,12 +853,12 @@ export function TargetDetailPage() {
               <div className="space-y-3 sm:col-span-2">
                 {gaps.noProfile && (
                   <Alert tone="warning">
-                    No account profile: accounts cannot be created.
+                    No account profile. Add one under Account profile.
                   </Alert>
                 )}
                 {gaps.noAccountRule && (
                   <Alert tone="warning">
-                    No rule grants an account: nobody is provisioned.
+                    No rule grants an account. Add one under Business rules.
                   </Alert>
                 )}
                 <ul className="flex flex-wrap gap-x-6 gap-y-2">

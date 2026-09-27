@@ -127,7 +127,8 @@ export async function registerAuthRoutes(
       throw new ProblemError(
         401,
         'account-locked',
-        'Too many failed sign-in attempts. Wait until the lock lifts, or ask an administrator to unlock the account.',
+        'Account locked',
+        'Too many failed sign-in attempts. Try again later, or ask an administrator to unlock it.',
       );
     }
     if (result.status === 'deny') {
@@ -384,9 +385,8 @@ export async function registerAuthRoutes(
           throw new ProblemError(
             422,
             'directory-password-policy',
-            'The directory refused the new password',
-            'Your organisation’s directory rejected this password. It may be too ' +
-              'simple, one you have used before, or changed too recently.',
+            'Directory refused the password',
+            'It may be too simple, recently used, or changed too recently.',
             { errors: [{ path: 'newPassword', message: 'directory_policy' }] },
           );
         case 'directory_unavailable':
@@ -395,9 +395,8 @@ export async function registerAuthRoutes(
           throw new ProblemError(
             503,
             'directory-unavailable',
-            'The directory could not be reached',
-            'This password is held in your organisation’s directory, which ' +
-              'could not be reached just now. Nothing was changed. Try again shortly.',
+            'Directory unreachable',
+            'Your password is held in the directory. Nothing was changed. Try again shortly.',
           );
         case 'weak_password':
           throw new ProblemError(

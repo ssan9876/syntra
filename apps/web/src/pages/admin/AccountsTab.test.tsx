@@ -235,7 +235,7 @@ describe('AccountsTab', () => {
           title: 'Not available to you',
           status: 403,
           detail:
-            'This account is not linked to a person record, so it cannot ask for anything or hold anything.',
+            'Your account is not linked to a person record.',
         },
         403,
       ),
@@ -448,7 +448,7 @@ describe('AccountsTab person picker', () => {
 
     // Their own unit outranks this one and is not overwritten from here, so a
     // unit picked on this form would silently not apply to placement.
-    expect(await screen.findByText(/already placed in Care/i)).toBeInTheDocument();
+    expect(await screen.findByText(/stays placed in Care/i)).toBeInTheDocument();
   });
 
   it('confirms a second account, naming the one they have', async () => {
@@ -459,7 +459,7 @@ describe('AccountsTab person picker', () => {
       return json(
         {
           type: 'https://syntra.dev/problems/second-account',
-          title: 'They already have an account',
+          title: 'Person already has an account',
           status: 409,
           detail: 'Kaycen Tyre already signs in as ktyre.',
           existingAccount: { id: 'u9', login: 'ktyre' },

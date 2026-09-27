@@ -63,7 +63,7 @@ export function evaluateSweepGuard(input: SweepGuardInput): SweepGuardVerdict {
   // can say anything about it, so a human looks at it once.
   if (!input.hasEverApplied && input.internalRemovals > 0) {
     soft.push(
-      `this is the first sweep applied in this tenant, so there is no previous state to compare ${input.internalRemovals} removals against`,
+      `First sweep in this tenant: ${input.internalRemovals} removals`,
     );
   }
 

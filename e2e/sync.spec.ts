@@ -286,7 +286,7 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
   await expect(report).toContainText('entryUUID');
 
   await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByText(/attribute mappings were saved/i)).toBeVisible();
+  await expect(page.getByText(/Source and attribute mappings saved/i)).toBeVisible();
   // The editor moved to the saved source rather than staying on /new.
   await expect(page).toHaveURL(/\/admin\/sources\/[0-9a-f-]{36}$/);
   // Saved and read back, not merely echoed: this is a fresh GET of the source.
@@ -310,7 +310,7 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
   // screen is the only place those records are visible at all -- so their
   // absence is what says nothing was silently dropped.
   await expect(page.getByText(/could not be mapped/i)).toHaveCount(0);
-  await expect(page.getByText(/could not be resolved/i)).toHaveCount(0);
+  await expect(page.getByText('Group members not synced')).toHaveCount(0);
 
   // Skip one proposed change outright. It is recorded as skipped on the run
   // and never applied.
@@ -382,12 +382,12 @@ test('deleting a source states what it will deactivate before it will do it', as
   await expect(page.getByRole('heading', { name: SOURCE_NAME })).toBeVisible();
 
   const panel = page.locator('section', {
-    has: page.getByRole('heading', { name: 'Delete this source' }),
+    has: page.getByRole('heading', { name: 'Delete source' }),
   });
   // The previous test applied one user and one group from this source.
   await expect(panel).toContainText('1 user');
   await expect(panel).toContainText('1 group');
-  await expect(panel).toContainText(/deactivates every one of those/i);
+  await expect(panel).toContainText(/Deactivates these users and groups/);
 
   const remove = panel.getByRole('button', { name: 'Delete source' });
   await expect(remove).toBeDisabled();

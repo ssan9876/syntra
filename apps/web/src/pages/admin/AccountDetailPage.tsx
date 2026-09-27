@@ -223,7 +223,7 @@ export function AccountDetailPage() {
         });
         reload();
       } catch (cause) {
-        failed(cause, 'The account type could not be changed.');
+        failed(cause, `Could not change the type of ${data.login}.`);
       }
     });
 
@@ -237,7 +237,7 @@ export function AccountDetailPage() {
         // Surfaced rather than swallowed: an unlock that quietly did nothing
         // sends the administrator back to the support call with the same
         // problem.
-        failed(cause, 'That account could not be unlocked. Try again.');
+        failed(cause, `Could not unlock ${data.login}.`);
       }
     });
 
@@ -251,7 +251,7 @@ export function AccountDetailPage() {
         toast({ title: `Linked to ${candidate.givenName} ${candidate.familyName}` });
         reload();
       } catch (cause) {
-        failed(cause, 'That account could not be linked.');
+        failed(cause, `Could not link ${data!.login} to ${candidate.givenName} ${candidate.familyName}.`);
       }
     });
 
@@ -267,7 +267,7 @@ export function AccountDetailPage() {
         setConfirmUnlink(false);
         reload();
       } catch (cause) {
-        failed(cause, 'That account could not be unlinked.');
+        failed(cause, `Could not unlink ${data!.login} from ${person.givenName} ${person.familyName}.`);
       }
     });
 
@@ -280,7 +280,7 @@ export function AccountDetailPage() {
         );
         setSetupLink(body);
       } catch (cause) {
-        failed(cause, 'Could not create a setup link.');
+        failed(cause, `Could not create a password link for ${data.login}.`);
       }
     });
 
@@ -297,13 +297,13 @@ export function AccountDetailPage() {
         // owner that the page in their drawer has stopped working.
         setFactorNotice(
           result.recoveryCodesRevoked > 0
-            ? `Removed. ${result.recoveryCodesRevoked} unused recovery code${
+            ? `Removed from ${data.login}. ${result.recoveryCodesRevoked} unused recovery code${
                 result.recoveryCodesRevoked === 1 ? '' : 's'
               } revoked.`
-            : 'Removed.',
+            : `Removed from ${data.login}.`,
         );
       } catch (cause) {
-        failed(cause, 'That factor could not be removed.');
+        failed(cause, `Could not remove the factor from ${data.login}.`);
       }
     });
 
@@ -700,7 +700,7 @@ export function AccountDetailPage() {
                           // refusal names what was wrong with the password,
                           // and clearing the box would make them retype a
                           // password they are about to adjust.
-                          failed(cause, 'That password could not be set.');
+                          failed(cause, `Could not set the password for ${data.login}.`);
                         }
                       })
                     }

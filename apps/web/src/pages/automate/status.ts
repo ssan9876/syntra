@@ -24,15 +24,15 @@ export const REQUEST_STATE: Record<string, State> = {
 
 export const REQUEST_LABEL: Record<string, string> = {
   pending_approval: 'Waiting for approval',
-  blocked_no_approver: 'Nobody can approve this',
+  blocked_no_approver: 'No approver',
   approved: 'Approved',
   awaiting_fulfilment: 'Approved, being applied',
   fulfilled: 'Granted',
   partially_fulfilled: 'Partly granted',
-  fulfilment_failed: 'Could not be applied',
+  fulfilment_failed: 'Failed to apply',
   rejected: 'Refused',
   cancelled: 'Withdrawn',
-  expired: 'Expired without a decision',
+  expired: 'Expired',
 };
 
 export const GRANT_STATE: Record<string, State> = {
@@ -49,7 +49,7 @@ export const GRANT_LABEL: Record<string, string> = {
   pending: 'Being applied',
   active: 'Held',
   expired: 'Ended',
-  lapsed: 'Ended with the contract',
+  lapsed: 'Contract ended',
   revoked: 'Given back',
 };
 

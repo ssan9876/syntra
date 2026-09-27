@@ -266,7 +266,7 @@ export async function stageRotation(
       const system = await loadSystem(tx, input.systemKind, input.systemId);
       if (!system) throw new RotationRefusedError('system_not_found', 'no such system');
       if (system.secretName === '') {
-        throw new RotationRefusedError('no_credential', 'this system holds no credential of its own to rotate');
+        throw new RotationRefusedError('no_credential', 'This system has no credential to rotate.');
       }
       const key = credentialKey(KIND_FOR[input.systemKind], input.systemId);
       const row = await tx.credentialRotation.create({
@@ -297,7 +297,7 @@ export async function stageRotation(
     if (isUniqueViolation(cause)) {
       throw new RotationRefusedError(
         'already_open',
-        'a rotation of this credential is already open; complete, roll back or cancel it first',
+        'A rotation is already open for this credential. Complete, roll back or cancel it first.',
       );
     }
     throw cause;
@@ -324,7 +324,7 @@ export async function verifyRotation(
   const prepared = await withTenant(tenantId, async (tx) => {
     const row = await openRow(tx, id, ['staged', 'verified', 'verification_failed']);
     const system = await loadSystem(tx, row.systemKind as RotatableSystemKind, row.systemId);
-    if (!system) throw new RotationRefusedError('system_not_found', 'the system this rotation belongs to no longer exists');
+    if (!system) throw new RotationRefusedError('system_not_found', 'The system for this rotation no longer exists.');
     const secret = row.stagedSecretName ? await getSecret(tx, provider, row.stagedSecretName) : null;
     if (secret === null) throw new RotationRefusedError('no_credential', 'the staged secret is missing');
     return { row, system, secret };
@@ -388,14 +388,14 @@ export async function cutOverRotation(
       throw new RotationRefusedError('not_verified', 'the staged secret has not passed a connection test');
     }
     if (now.getTime() - row.verifiedAt.getTime() > ROTATION_VERIFICATION_TTL_MS) {
-      throw new RotationRefusedError('verification_stale', 'the connection test is more than a day old; test again');
+      throw new RotationRefusedError('verification_stale', 'Connection test is more than a day old. Test again.');
     }
     const system = await loadSystem(tx, row.systemKind as RotatableSystemKind, row.systemId);
-    if (!system) throw new RotationRefusedError('system_not_found', 'the system this rotation belongs to no longer exists');
+    if (!system) throw new RotationRefusedError('system_not_found', 'The system for this rotation no longer exists.');
     if (fingerprint(system.config) !== row.verificationFingerprint) {
       throw new RotationRefusedError(
         'configuration_changed',
-        'the connection settings changed after the test; test the staged secret again',
+        'Connection settings changed after the test. Test the staged secret again.',
       );
     }
     const staged = row.stagedSecretName ? await getSecret(tx, provider, row.stagedSecretName) : null;
@@ -475,7 +475,7 @@ export async function completeRotation(
   const prepared = await withTenant(tenantId, async (tx) => {
     const row = await openRow(tx, id, ['cut_over']);
     const system = await loadSystem(tx, row.systemKind as RotatableSystemKind, row.systemId);
-    if (!system) throw new RotationRefusedError('system_not_found', 'the system this rotation belongs to no longer exists');
+    if (!system) throw new RotationRefusedError('system_not_found', 'The system for this rotation no longer exists.');
     const secret = await getSecret(tx, provider, system.secretName);
     if (secret === null) throw new RotationRefusedError('no_credential', 'the live secret is missing');
     return { system, secret };
@@ -547,7 +547,7 @@ export async function completeRotation(
     if (result.refused) {
       throw new RotationRefusedError(
         'check_failed',
-        `the live secret failed its check, so the previous one was kept for rollback: ${result.message}`,
+        `New secret failed its check; the previous one is kept for rollback: ${result.message}`,
       );
     }
     return result.view;
@@ -566,10 +566,10 @@ export async function rollbackRotation(
   const view = await withTenant(tenantId, async (tx) => {
     const row = await openRow(tx, id, ['cut_over']);
     const system = await loadSystem(tx, row.systemKind as RotatableSystemKind, row.systemId);
-    if (!system) throw new RotationRefusedError('system_not_found', 'the system this rotation belongs to no longer exists');
+    if (!system) throw new RotationRefusedError('system_not_found', 'The system for this rotation no longer exists.');
     const previous = row.previousSecretName ? await getSecret(tx, provider, row.previousSecretName) : null;
     if (previous === null) {
-      throw new RotationRefusedError('no_credential', 'no previous secret was kept, so there is nothing to roll back to');
+      throw new RotationRefusedError('no_credential', 'No previous secret was kept. Nothing to roll back to.');
     }
     await putSecret(tx, provider, system.secretName, previous);
     await deleteSecret(tx, row.previousSecretName!);

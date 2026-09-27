@@ -90,8 +90,8 @@ describe('BreakGlassBanner', () => {
       }),
     });
     render(<MemoryRouter><BreakGlassBanner /></MemoryRouter>);
-    expect(await screen.findByText(/Emergency access is active for Emergency/)).toBeVisible();
-    expect(screen.getByText(/1 emergency access review outstanding/)).toBeVisible();
+    expect(await screen.findByText(/Emergency access active: Emergency/)).toBeVisible();
+    expect(screen.getByText(/1 emergency access review due/)).toBeVisible();
   });
 
   it('renders nothing when all is quiet', async () => {
@@ -112,7 +112,7 @@ describe('BreakGlass request page', () => {
     await userEvent.type(screen.getByLabelText('Sealed credential'), 'syntra_bg_sealed');
     await userEvent.type(screen.getByLabelText('Reason'), 'All security keys lost in the fire');
     await userEvent.click(screen.getByRole('button', { name: 'Request emergency access' }));
-    expect(await screen.findByText(/Every administrator has been told/)).toBeVisible();
+    expect(await screen.findByText(/All administrators notified/)).toBeVisible();
     const sent = fetch.mock.calls[0]!;
     expect(JSON.parse(String(sent[1]?.body))).toMatchObject({ login: 'glass', credential: 'syntra_bg_sealed', durationMinutes: 60 });
   });

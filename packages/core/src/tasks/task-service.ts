@@ -283,7 +283,7 @@ export async function runTask(
       outcome: 'failure',
       message: detail.slice(0, 500),
     });
-    return { ok: false, message: 'That could not be completed. Ask an administrator.' };
+    return { ok: false, message: 'The task failed. Ask an administrator.' };
   }
 
   await record(tenantId, task, input, subjectUserId, validated.values, {

@@ -25,7 +25,7 @@ export type TargetConnectorType = (typeof TARGET_CONNECTOR_TYPES)[number];
 export class UnknownTargetConnectorTypeError extends Error {
   constructor(readonly type: string) {
     super(
-      `no target connector implements type "${type}"; known types are ${TARGET_CONNECTOR_TYPES.join(', ')}`,
+      `Unknown target type "${type}". Known types: ${TARGET_CONNECTOR_TYPES.join(', ')}`,
     );
     this.name = 'UnknownTargetConnectorTypeError';
   }
@@ -93,7 +93,7 @@ export class AdapterVersionNotImplementedError extends Error {
     readonly type: string,
     readonly adapterVersion: string,
   ) {
-    super(`this build does not include ${type} adapter ${adapterVersion}`);
+    super(`${type} adapter ${adapterVersion} is not in this build.`);
     this.name = 'AdapterVersionNotImplementedError';
   }
 }

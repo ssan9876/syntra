@@ -78,7 +78,7 @@ export function UnlinkedAccountsPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That account could not be linked.',
+          : 'Account not linked.',
       );
     } finally {
       setBusy(false);
@@ -121,7 +121,7 @@ export function UnlinkedAccountsPage() {
 
           {data && rows.length === 0 && (
             <div className="p-6">
-              <Empty title="Every account has a person" />
+              <Empty title="No unlinked accounts" />
             </div>
           )}
 

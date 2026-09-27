@@ -131,7 +131,7 @@ describe('reviewing an import run', () => {
     });
     renderPage();
     expect(
-      await screen.findByRole('button', { name: /i have read the numbers/i }),
+      await screen.findByRole('button', { name: 'Apply anyway' }),
     ).toBeVisible();
   });
 

@@ -119,7 +119,7 @@ export function GovernCampaignsTab() {
 
       {data && campaigns.length === 0 && (
         <Empty
-          title="No campaigns yet"
+          title="No campaigns"
           action={
             // The empty state TOLD the reader to scope a review and offered no
             // way to. Every endpoint behind this link already existed.
@@ -150,7 +150,7 @@ export function GovernCampaignsTab() {
                     </Link>
                     {campaign.blockedItems > 0 && (
                       <span className="ml-2 text-muted">
-                        {campaign.blockedItems} item(s) resolved to nobody
+                        {campaign.blockedItems} item(s) have no reviewer
                       </span>
                     )}
                   </td>

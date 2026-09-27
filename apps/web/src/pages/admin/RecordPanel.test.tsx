@@ -264,7 +264,7 @@ describe('RecordPanel confirmable refusals', () => {
 
   const SECOND_ACCOUNT = {
     type: 'https://syntra.dev/problems/second-account',
-    title: 'They already have an account',
+    title: 'Person already has an account',
     status: 409,
     detail: 'Maya Okafor already signs in as mokafor.',
     existingAccount: { id: 'u9', login: 'mokafor' },

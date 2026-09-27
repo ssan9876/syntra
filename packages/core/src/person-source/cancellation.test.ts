@@ -139,7 +139,7 @@ describe('HR import run cancellation', () => {
     expect(
       after
         .filter((c) => c.status === 'skipped')
-        .every((c) => c.message === 'not applied: the run was cancelled'),
+        .every((c) => c.message === 'Not applied: run cancelled.'),
     ).toBe(true);
     // The persons table says exactly what the run says.
     expect(await withTenant(tenantId, (tx) => tx.person.count())).toBe(2);

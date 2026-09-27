@@ -13,7 +13,7 @@ export class TargetMigrationNotAvailableError extends Error {
 
 export class TargetMigrationPreviewStaleError extends Error {
   constructor() {
-    super('the target changed after this migration was previewed; refresh the preview before applying');
+    super('Target changed after this migration was previewed. Refresh the preview.');
     this.name = 'TargetMigrationPreviewStaleError';
   }
 }
@@ -59,7 +59,7 @@ const deriveNativeConfig = (raw: unknown): Record<string, unknown> => {
     throw new TargetMigrationNotAvailableError('the legacy target is not pointed at Microsoft Graph');
   }
   if (typeof document.auth.tokenUrl !== 'string' || typeof document.auth.clientId !== 'string') {
-    throw new TargetMigrationNotAvailableError('the legacy target has no concrete token endpoint and client id');
+    throw new TargetMigrationNotAvailableError('the legacy target has no token endpoint and client id');
   }
   let token: URL;
   try {
@@ -69,7 +69,7 @@ const deriveNativeConfig = (raw: unknown): Record<string, unknown> => {
   }
   const match = /^\/([^/]+)\/oauth2\/v2\.0\/token\/?$/i.exec(token.pathname);
   if (token.protocol !== 'https:' || token.hostname.toLowerCase() !== 'login.microsoftonline.com' || !match) {
-    throw new TargetMigrationNotAvailableError('the legacy target does not use the supported Microsoft identity token endpoint');
+    throw new TargetMigrationNotAvailableError('the legacy target does not use the Microsoft identity token endpoint');
   }
   const tenantId = decodeURIComponent(match[1]!);
   return entraTargetConfigSchema.parse({
@@ -123,8 +123,8 @@ const buildPreview = (target: NonNullable<MigrationRow>): EntraMigrationPreview 
     },
     capabilityChanges,
     warnings: [
-      'The saved credential is preserved and is not returned by this preview.',
-      'Existing readiness evidence becomes stale because the adapter and configuration fingerprint change.',
+      'The saved credential is kept.',
+      'Existing readiness evidence goes stale.',
       'Run a native Entra connection test and simulation before enabling external writes.',
     ],
   };

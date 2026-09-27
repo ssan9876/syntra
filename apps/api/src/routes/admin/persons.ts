@@ -19,6 +19,10 @@ import {
   deactivatePerson,
   explainPersonAccess,
   importPersons,
+  assertVerifiedEmailAddress,
+  domainIsCovered,
+  emailDomainOf,
+  verifiedEmailDomains,
   linkUserToPerson,
   unlinkUser,
   listContracts,
@@ -249,8 +253,8 @@ export async function registerAdminPersonRoutes(
             throw new ProblemError(
               409,
               'possible-duplicate',
-              'Somebody here already looks like this',
-              'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+              'Possible duplicate',
+              'Check the matches before creating a new record. Records cannot be merged later.',
               { candidates },
             );
           }
@@ -270,6 +274,7 @@ export async function registerAdminPersonRoutes(
           }
         }
 
+        await assertVerifiedEmailAddress(tx, body.businessEmail, 'businessEmail');
         const created = await createPerson(tx, body);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
@@ -365,8 +370,8 @@ export async function registerAdminPersonRoutes(
           throw new ProblemError(
             409,
             'service-account-person',
-            'A service account belongs to no person',
-            `${user.login} is a service account. Mark it as a person account first if it really is somebody's.`,
+            'Service accounts cannot be linked',
+            `${user.login} is a service account. Change it to a person account first.`,
           );
         }
 
@@ -482,7 +487,24 @@ export async function registerAdminPersonRoutes(
         ),
       );
 
-      const importable = rows.filter((row) => !claimedBy.has(row.externalId));
+      // A business email outside every verified domain is refused per row,
+      // like a claimed row: the rest of the file still imports.
+      const verified = await request.db((tx) => verifiedEmailDomains(tx));
+      const unverifiedDomain = (row: (typeof rows)[number]) => {
+        if (!row.businessEmail) return null;
+        const domain = emailDomainOf(row.businessEmail) ?? row.businessEmail.slice(row.businessEmail.lastIndexOf('@') + 1);
+        return domainIsCovered(domain, verified) ? null : domain;
+      };
+      const importable = rows.filter((row) => !claimedBy.has(row.externalId) && unverifiedDomain(row) === null);
+      for (const [index, row] of rows.entries()) {
+        const domain = claimedBy.has(row.externalId) ? null : unverifiedDomain(row);
+        if (domain !== null) {
+          errors.push({
+            line: index + 2,
+            message: `${row.externalId}: ${domain} is not a verified email domain for this organisation`,
+          });
+        }
+      }
       for (const [index, row] of rows.entries()) {
         const owner = claimedBy.get(row.externalId);
         if (owner === undefined) continue;
@@ -561,10 +583,10 @@ export async function registerAdminPersonRoutes(
             throw new ProblemError(
               409,
               'source-owned',
-              'This person is maintained by a person source',
+              'Fields set by a person source',
               `${clashing.join(', ')} ${clashing.length === 1 ? 'is' : 'are'} ` +
-                `maintained by the person source "${source?.name ?? existing.sourceId}"; ` +
-                `an edit here is reverted by its next run`,
+                `set by the person source "${source?.name ?? existing.sourceId}". ` +
+                `Change ${clashing.length === 1 ? 'it' : 'them'} in the source.`,
               {
                 errors: clashing.map((path) => ({
                   path,
@@ -601,6 +623,7 @@ export async function registerAdminPersonRoutes(
         // Looked up in this tenant first: the foreign key alone accepts another
         // tenant's org unit. See tenant-reference.ts in core.
         await assertReferenceInTenant(tx, 'orgUnit', body.orgUnitId, 'orgUnitId');
+        await assertVerifiedEmailAddress(tx, body.businessEmail, 'businessEmail');
         const updated = await tx.person.update({
           where: { id },
           data: {

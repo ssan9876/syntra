@@ -112,7 +112,7 @@ export function CredentialsTab() {
       });
       reload();
     } catch (cause) {
-      setNotice({ tone: 'warning', text: problem(cause, 'The scan did not run.') });
+      setNotice({ tone: 'warning', text: problem(cause, 'Scan failed.') });
     } finally {
       setScanning(false);
     }
@@ -293,7 +293,7 @@ function MetadataForm({ item, onSaved, onCancel }: { item: CredentialItem; onSav
       });
       onSaved();
     } catch (cause) {
-      setFailure(problem(cause, 'The change was not saved.'));
+      setFailure(problem(cause, 'Not saved.'));
     } finally {
       setBusy(false);
     }
@@ -308,7 +308,7 @@ function MetadataForm({ item, onSaved, onCancel }: { item: CredentialItem; onSav
           type="date"
           value={declared}
           onChange={setDeclared}
-          warning={item.discovery?.status === 'found' ? 'Overridden by the discovered expiry.' : undefined}
+          warning={item.discovery?.status === 'found' ? 'The discovered expiry is used instead.' : undefined}
         />
       )}
       <Field label="Note" value={note} onChange={setNote} maxLength={500} />
@@ -351,7 +351,7 @@ function RotationPanel({ item, onChanged }: { item: CredentialItem; onChanged(te
       setSecret('');
       onChanged(success);
     } catch (cause) {
-      setFailure(problem(cause, 'That step did not complete.'));
+      setFailure(problem(cause, 'Step failed.'));
       onChanged();
     } finally {
       setBusy(null);

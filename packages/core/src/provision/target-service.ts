@@ -2,6 +2,7 @@ import { validateContainerDn } from './org-unit-container-service.js';
 import { baseDnOf, targetPlacesAccountsInContainers } from './org-unit-mirror.js';
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
+  correlationKeyPolicyFor,
   targetConnectorFor,
   targetConfigSchemaFor,
   forgetAccessTokens,
@@ -26,6 +27,14 @@ import { conditionSchema, type Condition } from './condition.js';
 import { applyTargetSchedule, removeTargetSchedule } from './jobs.js';
 import type { GuardThresholds } from './guard.js';
 import type { LadderSettings } from './types.js';
+import {
+  EmailDomainNotVerifiedError,
+  assertTargetDomainsVerified,
+  entraUpnDomain,
+  isAddressAttribute,
+  unverifiedTemplateDomains,
+  verifiedEmailDomains,
+} from '../tenant/email-domains.js';
 
 const secretNameFor = (targetId: string) => `target/${targetId}/bind`;
 
@@ -332,7 +341,7 @@ function assertLadder(ladder: {
     throw new LadderConfigurationError(
       'ladder-revocation-after-disable',
       'ladder.entitlementRevocationDelayDays',
-      'entitlement revocations cannot be delayed past the disable: that describes an account whose holder is still employed as far as the directory is concerned and cannot do anything',
+      'entitlement revocations cannot be delayed past the disable',
     );
   }
   if (
@@ -342,7 +351,7 @@ function assertLadder(ladder: {
     throw new LadderConfigurationError(
       'ladder-archive-not-after-disable',
       'ladder.archiveAfterDays',
-      'the archive must fall strictly after the disable: archiving moves the object and strips its remaining entitlements',
+      'the archive must fall strictly after the disable',
     );
   }
 }
@@ -381,6 +390,7 @@ export async function createTarget(
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
     await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
+    assertTargetDomainsVerified(scalars.type, config, await verifiedEmailDomains(tx));
     const target = await tx.targetSystem.create({
       data: {
         tenantId: bound,
@@ -532,6 +542,14 @@ export async function updateTarget(
     const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!before) throw new TargetNotFoundError(targetId);
     await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
+    // Only a config that CHANGES the address domain is refused here: a target
+    // saved before domains were verified can still have its schedule edited,
+    // and its runs say why they fail until the domain is verified.
+    if (config !== undefined) {
+      const type = scalars.type ?? before.type;
+      const changed = type !== before.type || entraUpnDomain(config) !== entraUpnDomain(before.config);
+      if (changed) assertTargetDomainsVerified(type, config, await verifiedEmailDomains(tx));
+    }
 
     const ladder = {
       entitlementRevocationDelayDays:
@@ -567,7 +585,7 @@ export async function updateTarget(
       throw new LadderConfigurationError(
         'mirror-unsupported',
         'mirrorOrgUnits',
-        'this target does not place accounts in containers, so there is no tree of OUs to mirror org units into',
+        'this target has no containers to mirror org units into',
       );
     }
     const rootToCheck = orgUnitRootDn === undefined ? before.orgUnitRootDn : orgUnitRootDn;
@@ -938,7 +956,7 @@ export async function testTargetConfiguration(
       return {
         ok: false,
         message:
-          'a saved credential can only be borrowed for a target of the same type and, for Active Directory and Entra ID, the same transport',
+          'a saved credential can only be reused by a target of the same type and transport',
       };
     }
     if (saved === null) return { ok: false, message: 'no saved credential' };
@@ -1048,7 +1066,7 @@ const attributeTemplatesSchema = z
       .max(1024)
       .refine((template) => template.trim() !== '', {
         message:
-          'an attribute template may not be blank: it would write a zero-length value, which the directory refuses on every run',
+          'an attribute template may not be blank',
       }),
   )
   .superRefine((templates, ctx) => {
@@ -1064,9 +1082,7 @@ const attributeTemplatesSchema = z
           code: z.ZodIssueCode.custom,
           path: [name],
           message:
-            `an account profile may not write ${name}: it is written by the ` +
-            `provisioning actions themselves, which the guard counts and the ` +
-            `ladder sequences, and update_account is neither`,
+            `an account profile may not write ${name}; provisioning actions set it`,
         });
       }
     }
@@ -1104,7 +1120,7 @@ export const accountProfileSchema = z.object({
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['sensitiveApprovalReason'],
-      message: 'a reason of at least 20 characters is required before sending personal email to a target',
+      message: 'give a reason of at least 20 characters to send personal email to this target',
     });
   }
 });
@@ -1118,6 +1134,30 @@ export function sensitiveProfileMappings(attributeTemplates: Record<string, stri
       sourceField: 'person.personalEmail' as const,
       classification: 'sensitive' as const,
     }));
+}
+
+/**
+ * Refuses a profile that writes a literal domain nobody verified: the
+ * `contoso.com` of `%person.givenName%@contoso.com` in an address attribute,
+ * or in the account name of a target whose names are addresses. A domain that
+ * comes from a placeholder is checked when it renders, per person.
+ */
+async function assertProfileDomainsVerified(
+  tx: TenantClient,
+  target: { type: string; config: unknown },
+  profile: { correlationKeyTemplate: string; attributeTemplates: Record<string, string> },
+): Promise<void> {
+  const verified = await verifiedEmailDomains(tx);
+  const templates: Array<[string, string]> = Object.entries(profile.attributeTemplates)
+    .filter(([name]) => isAddressAttribute(name))
+    .map(([name, template]) => [`attributeTemplates.${name}`, template]);
+  if (correlationKeyPolicyFor(target.type, target.config).charset === 'email') {
+    templates.unshift(['correlationKeyTemplate', profile.correlationKeyTemplate]);
+  }
+  for (const [field, template] of templates) {
+    const [domain] = unverifiedTemplateDomains(template, verified);
+    if (domain !== undefined) throw new EmailDomainNotVerifiedError(field, domain);
+  }
 }
 
 export async function upsertAccountProfile(
@@ -1135,6 +1175,7 @@ export async function upsertAccountProfile(
     // than a foreign-key violation two statements later.
     const target = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!target) throw new TargetNotFoundError(targetId);
+    await assertProfileDomainsVerified(tx, target, profile);
 
     // One statement rather than find-then-branch. `targetSystemId` is
     // `@unique` — the Task 1 deviation — so it is a valid unique selector, and

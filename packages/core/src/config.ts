@@ -28,7 +28,7 @@ const schema = z.object({
     // is in the repository.
     .refine(
       (v) => !/^change-me/i.test(v),
-      'SESSION_SECRET is the placeholder from .env.example; generate one with 32 random bytes, base64 encoded (see .env.example)',
+      'SESSION_SECRET is still the .env.example placeholder. Set it to 32 random bytes, base64 encoded.',
     ),
   // MASTER_KEY and every other key-management variable are validated by
   // `parseKeyManagement` below, because whether MASTER_KEY is required depends
@@ -350,19 +350,19 @@ function parseTrustProxy(raw: string | undefined): false | string {
   if (!raw || raw === 'false') return false;
   if (raw === 'true') {
     throw new Error(
-      'TRUST_PROXY must not be `true` — that trusts X-Forwarded-For from any client, letting anyone choose their own source address. Give a hop count (1) or the proxy addresses to trust (10.0.0.0/8).',
+      'TRUST_PROXY=true trusts X-Forwarded-For from any client. Set it to the proxy addresses, e.g. TRUST_PROXY=10.0.0.0/8.',
     );
   }
   if (/^\d+$/.test(raw)) {
     throw new Error(
-      `TRUST_PROXY must not be a hop count — Fastify stopped trusting them in 5.12.1 (GHSA-3m5p-2c4r-xxw2) because a count cannot check which proxy actually connected, and it now trusts nothing at all when given one. Name the proxies instead, as addresses or CIDRs: TRUST_PROXY=10.0.0.0/8 rather than TRUST_PROXY=${raw}.`,
+      `TRUST_PROXY=${raw} is a hop count, which is no longer supported. Set it to the proxy addresses or CIDRs, e.g. TRUST_PROXY=10.0.0.0/8.`,
     );
   }
   const entries = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
   const bad = entries.filter((entry) => !isIpRangeUsable(entry));
   if (entries.length === 0 || bad.length > 0) {
     throw new Error(
-      `TRUST_PROXY must be a hop count or a list of addresses and CIDRs; this is neither: ${bad.join(', ') || raw}`,
+      `TRUST_PROXY must be a list of addresses or CIDRs. Not valid: ${bad.join(', ') || raw}`,
     );
   }
   return entries.join(',');

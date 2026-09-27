@@ -127,7 +127,7 @@ export function graphTransport(options: GraphTransportOptions): Transport & {
         ? ` (AADSTS${String(body.error_codes[0])})`
         : '';
       throw new Error(
-        `Microsoft identity platform refused the mail token request: HTTP ${response.status}, ${code}${aadsts}. Check MAIL_GRAPH_TENANT_ID, MAIL_GRAPH_CLIENT_ID and MAIL_GRAPH_CLIENT_SECRET.`,
+        `Mail sign-in to Microsoft failed: HTTP ${response.status}, ${code}${aadsts}. Check MAIL_GRAPH_TENANT_ID, MAIL_GRAPH_CLIENT_ID and MAIL_GRAPH_CLIENT_SECRET.`,
       );
     }
     const lifetimeS = typeof body.expires_in === 'number' ? body.expires_in : Number(body.expires_in ?? 0);
@@ -214,7 +214,7 @@ async function graphError(response: Response): Promise<Error> {
   // not propagated yet, which takes up to two hours.
   const hint =
     response.status === 403
-      ? ' The application is not allowed to send as MAIL_GRAPH_SENDER: check that its Exchange Online management scope covers that mailbox (Test-ServicePrincipalAuthorization), and allow up to two hours after changing it.'
+      ? ' The app cannot send as MAIL_GRAPH_SENDER. Check that its Exchange Online management scope covers that mailbox; changes take up to two hours.'
       : '';
-  return new Error(`Microsoft Graph refused sendMail: HTTP ${response.status}, ${code}${detail}.${hint}`);
+  return new Error(`Microsoft Graph rejected the email: HTTP ${response.status}, ${code}${detail}.${hint}`);
 }

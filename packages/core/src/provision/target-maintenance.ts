@@ -38,8 +38,8 @@ export function urgentLeaverOverrideAllowed(actionTypes: readonly string[]): boo
 export class MaintenanceWindowClosedError extends Error {
   constructor(readonly targetId: string, readonly overrideAllowed: boolean) {
     super(overrideAllowed
-      ? `target ${targetId} is outside its maintenance window; a confirmed urgent-leaver override with a reason is available`
-      : `target ${targetId} is outside its maintenance window and the selected actions are not eligible for an urgent-leaver override`);
+      ? `Target ${targetId} is outside its maintenance window. An urgent-leaver override with a reason is allowed.`
+      : `Target ${targetId} is outside its maintenance window. These actions do not qualify for an urgent-leaver override.`);
     this.name = 'MaintenanceWindowClosedError';
   }
 }

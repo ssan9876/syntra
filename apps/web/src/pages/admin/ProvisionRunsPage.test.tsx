@@ -134,7 +134,7 @@ describe('ProvisionRunsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
     expect(
-      await screen.findByText(/A run has been queued/),
+      await screen.findByText(/Run queued/),
     ).toBeVisible();
   });
 
@@ -149,7 +149,7 @@ describe('ProvisionRunsPage', () => {
         title: 'Background jobs are not running',
         status: 503,
         detail:
-          'the run could not be enqueued; the API is up but the job scheduler is not',
+          'The run was not started. Check the API log.',
       },
     });
     renderPage();
@@ -159,7 +159,7 @@ describe('ProvisionRunsPage', () => {
 
     expect(
       await screen.findByText(
-        'the run could not be enqueued; the API is up but the job scheduler is not',
+        'The run was not started. Check the API log.',
       ),
     ).toBeVisible();
   });

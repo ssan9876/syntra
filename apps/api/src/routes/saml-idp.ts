@@ -246,7 +246,7 @@ function singleValued(
     400,
     'saml-bad-request',
     'Duplicate SAML parameter',
-    `${name} was sent more than once, and only one occurrence can be the one that was signed.`,
+    `${name} was sent more than once.`,
   );
 }
 
@@ -303,10 +303,7 @@ async function signedRequestRefusal(
     }),
   );
   const shared =
-    `The application "${name}" requires signed ${refusal.message}s. That is the ` +
-    `default for a newly registered service provider: an unsigned request is ` +
-    `something anyone can send, and Syntra would issue an assertion for whoever ` +
-    `happened to be signed in.`;
+    `"${name}" requires signed ${refusal.message}s.`;
   const extensions = {
     application: name,
     applicationId: config.applicationId,
@@ -318,19 +315,17 @@ async function signedRequestRefusal(
     ? new ProblemError(
         409,
         'saml-no-certificate',
-        'This service provider requires signed requests but has no certificate registered',
-        `${shared} No signing certificate is registered for it, so there is nothing to ` +
-          `verify against. Register the service provider's signing certificate, or set ` +
-          `"wantAuthnRequestsSigned" to false for this application to accept unsigned requests.`,
+        'No signing certificate registered',
+        `${shared} Register the service provider's signing certificate, or set ` +
+          `"wantAuthnRequestsSigned" to false.`,
         extensions,
       )
     : new ProblemError(
         400,
         'saml-bad-signature',
         `Invalid ${refusal.message === 'LogoutRequest' ? 'logout' : 'request'} signature`,
-        `${shared} This request carried no signature that any registered certificate ` +
-          `verifies. Have the service provider sign its requests, or set ` +
-          `"wantAuthnRequestsSigned" to false for this application to accept unsigned requests.`,
+        `${shared} No registered certificate verifies this request. Have the service ` +
+          `provider sign its requests, or set "wantAuthnRequestsSigned" to false.`,
         extensions,
       );
 }
@@ -695,7 +690,8 @@ export async function registerSamlIdpRoutes(
     if (config.encryptAssertions) {
       throw new ProblemError(
         409, 'wsfed-encryption-unsupported',
-        'This application is configured to receive encrypted assertions, and WS-Federation has no agreed way to carry one. Turn encryption off for it, or use SAML.',
+        'WS-Federation cannot carry encrypted assertions',
+        'Turn encryption off for this application, or use SAML.',
       );
     }
 
@@ -751,7 +747,7 @@ export async function registerSamlIdpRoutes(
     if (!config.allowIdpInitiated) {
       throw new ProblemError(
         409, 'saml-idp-initiated-disabled',
-        'This application only accepts sign-ins that start at the application itself.',
+        'IdP-initiated sign-in is off for this application',
       );
     }
 
@@ -898,7 +894,7 @@ export async function registerSamlIdpRoutes(
     if (!nameId) {
       throw new ProblemError(
         409, 'saml-no-name-id',
-        `This application identifies users by "${ctx.config.nameIdClaim ?? 'email'}", and this account has no such value.`,
+        `This account has no "${ctx.config.nameIdClaim ?? 'email'}" value, which this application needs.`,
       );
     }
 
@@ -964,14 +960,14 @@ export async function registerSamlIdpRoutes(
     if (ctx.config.encryptAssertions && ctx.parked.protocol === 'wsfed') {
       throw new ProblemError(
         409, 'wsfed-encryption-unsupported',
-        'This application is configured to receive encrypted assertions, and WS-Federation has no agreed way to carry one.',
+        'WS-Federation cannot carry encrypted assertions',
       );
     }
     if (ctx.config.encryptAssertions) {
       if (!ctx.config.encryptionCertificate) {
         throw new ProblemError(
           409, 'saml-no-encryption-certificate',
-          'This application is configured to receive encrypted assertions but has no certificate registered',
+          'No encryption certificate registered',
         );
       }
       const assertion = xml.slice(

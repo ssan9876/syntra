@@ -226,7 +226,7 @@ describe('a flat target', () => {
         actorUserId: null,
         sourceIp: null,
       }),
-    ).rejects.toThrow(/this target has no containers/);
+    ).rejects.toThrow(/this target has no containers/i);
     expect(await withTenant(tenantId, (tx) => findPlacement(tx, personId, id))).toBeNull();
   });
 });

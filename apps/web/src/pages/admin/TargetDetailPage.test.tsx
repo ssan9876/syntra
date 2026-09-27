@@ -215,9 +215,9 @@ describe('TargetDetailPage', () => {
     renderExisting();
 
     expect(
-      await screen.findByText(/There is nothing to review here/),
+      await screen.findByText(/the previous run was still in progress/),
     ).toBeVisible();
-    expect(screen.queryByText(/Review the outstanding run/)).toBeNull();
+    expect(screen.queryByText(/is waiting for review/)).toBeNull();
     expect(
       screen.queryByRole('link', { name: 'Review runs' }),
     ).toBeNull();
@@ -237,7 +237,7 @@ describe('TargetDetailPage', () => {
     renderExisting();
 
     expect(
-      await screen.findByText(/Review the outstanding run/),
+      await screen.findByText(/is waiting for review/),
     ).toBeVisible();
     expect(
       screen.getByRole('link', { name: 'Review runs' }),
@@ -259,8 +259,8 @@ describe('TargetDetailPage', () => {
 
     renderExisting();
 
-    expect(await screen.findByText(/Two runs raced for this target/)).toBeVisible();
-    expect(screen.queryByText(/Review the outstanding run/)).toBeNull();
+    expect(await screen.findByText(/another run started at the same time/)).toBeVisible();
+    expect(screen.queryByText(/is waiting for review/)).toBeNull();
   });
 
   it('keeps the thresholds somebody typed when the create’s follow-up PATCH is refused', async () => {
@@ -773,10 +773,10 @@ describe('TargetDetailPage', () => {
       renderExisting();
 
       expect(
-        await screen.findByText('No account profile: accounts cannot be created.'),
+        await screen.findByText('No account profile. Add one under Account profile.'),
       ).toBeVisible();
       expect(
-        screen.getByText('No rule grants an account: nobody is provisioned.'),
+        screen.getByText('No rule grants an account. Add one under Business rules.'),
       ).toBeVisible();
     });
 
@@ -966,7 +966,7 @@ describe('TargetDetailPage', () => {
             JSON.stringify({
               status: 503,
               title: 'Background jobs are not running',
-              detail: 'the run could not be enqueued; the API is up but the job scheduler is not',
+              detail: 'The run was not started. Check the API log.',
             }),
             { status: 503, headers: { 'content-type': 'application/problem+json' } },
           ) as never,
@@ -979,7 +979,7 @@ describe('TargetDetailPage', () => {
     await screen.findByDisplayValue('Samba AD');
     await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-    expect(await screen.findByText(/the job scheduler is not/)).toBeVisible();
+    expect(await screen.findByText(/The run was not started/)).toBeVisible();
     expect(screen.queryByText('Runs for this target')).toBeNull();
   });
 
@@ -1204,10 +1204,10 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     mockMirroring();
     renderExisting();
     const warning = await screen.findByTestId('hand-typed-warning');
-    expect(screen.getByText('Mirroring is on, but 2 org units use a DN typed by hand')).toBeInTheDocument();
-    expect(warning).toHaveTextContent(/A typed DN always wins over the mirror/);
-    expect(warning).toHaveTextContent(/Switching writes nothing to the directory/);
-    expect(warning).toHaveTextContent(/a container move always holds the run for a person to confirm/);
+    expect(screen.getByText('2 org units use a typed DN')).toBeInTheDocument();
+    expect(warning).toHaveTextContent(/A typed DN overrides the mirror/);
+    expect(warning).toHaveTextContent(/After switching, the next run proposes each move/);
+    expect(warning).toHaveTextContent(/waits for review/);
     const itRow = screen.getByTestId('hand-typed-u-it');
     expect(itRow).toHaveTextContent(`Typed: OU=IT,${ROOT}`);
     expect(itRow).toHaveTextContent(`Mirrored: OU=IT,OU=contoso.local,${ROOT}`);
@@ -1240,8 +1240,8 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
     expect(await screen.findByText('Switched 2 org units to mirrored')).toBeInTheDocument();
     expect(
-      screen.getByText(/Nothing has moved in the directory yet\. The next run proposes moving 1 OU/),
-    ).toHaveTextContent(/holds for a person to confirm before anything moves/);
+      screen.getByText(/Nothing moved yet\. The next run proposes moving 1 OU/),
+    ).toHaveTextContent(/waits for review/);
     await waitFor(() => expect(screen.queryByTestId('hand-typed-warning')).toBeNull());
   });
 
@@ -1266,7 +1266,7 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     await screen.findByTestId('hand-typed-warning');
     await userEvent.type(screen.getByLabelText(/org-unit root/i), 'X');
     expect(screen.getByRole('button', { name: 'Switch all to mirrored' })).toBeDisabled();
-    expect(screen.getByText(/Save the org-unit settings first/)).toBeInTheDocument();
+    expect(screen.getByText(/Save the target first/)).toBeInTheDocument();
   });
 
   it('leads with the mirroring checkbox', async () => {

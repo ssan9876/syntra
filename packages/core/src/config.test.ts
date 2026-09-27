@@ -75,7 +75,7 @@ describe('loadConfig — TRUST_PROXY', () => {
     // address the policy engine's IP condition and every rate-limit key are
     // built on.
     expect(() => loadConfig({ ...valid, TRUST_PROXY: 'true' })).toThrow(
-      /TRUST_PROXY must not be `true`/,
+      /TRUST_PROXY=true trusts X-Forwarded-For/,
     );
   });
 
@@ -85,13 +85,13 @@ describe('loadConfig — TRUST_PROXY', () => {
     // unset. A value whose meaning reversed underneath the operator has to be
     // refused rather than carried forward silently.
     expect(() => loadConfig({ ...valid, TRUST_PROXY: '1' })).toThrow(
-      /must not be a hop count/,
+      /is a hop count, which is no longer supported/,
     );
   });
 
   it('refuses a hop count of zero as a hop count too, not as junk', () => {
     expect(() => loadConfig({ ...valid, TRUST_PROXY: '0' })).toThrow(
-      /must not be a hop count/,
+      /is a hop count, which is no longer supported/,
     );
   });
 

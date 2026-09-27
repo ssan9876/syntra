@@ -380,7 +380,7 @@ describe('refreshEntitlements', () => {
     expect(error.unidentifiable).toBe(3);
     expect(error.known).toBe(1);
     expect(error.message).toContain('blank anchor');
-    expect(error.message).not.toContain('no entitlements at all');
+    expect(error.message).not.toContain('returned no entitlements');
   });
 
   it('skips a blank-anchored group without condemning the ones it could identify', async () => {
@@ -528,7 +528,7 @@ describe('refreshEntitlements', () => {
         targetId,
         reader([group('guid-1', 'Finance')]),
       ),
-    ).rejects.toThrow(/configuration or credential missing/);
+    ).rejects.toThrow(/has no configuration or credential/);
   });
 
   it('refuses a target in another tenant', async () => {
@@ -541,7 +541,7 @@ describe('refreshEntitlements', () => {
         targetId,
         reader([group('guid-1', 'Finance')]),
       ),
-    ).rejects.toThrow(/configuration or credential missing/);
+    ).rejects.toThrow(/has no configuration or credential/);
   });
 });
 

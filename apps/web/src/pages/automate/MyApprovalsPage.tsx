@@ -35,9 +35,7 @@ export function MyApprovalsPage() {
     if (decision === 'reject' && comment.trim() === '') {
       // The server refuses this too. Saying so here saves a round trip and a
       // second press of the button.
-      setProblem(
-        'Say why you are refusing it. The requester will read exactly this.',
-      );
+      setProblem('Add a comment to refuse. The requester sees it.');
       return;
     }
     setBusy(approval.id);
@@ -60,7 +58,7 @@ export function MyApprovalsPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong recording that decision.',
+          : 'The decision was not saved. Try again.',
       );
     } finally {
       setBusy(null);
@@ -81,9 +79,7 @@ export function MyApprovalsPage() {
             </Panel>
           )}
           {data && (data.approvals ?? []).length === 0 && (
-            <Empty title="Nothing is waiting for you">
-              Requests routed to you appear here.
-            </Empty>
+            <Empty title="No approvals waiting" />
           )}
           {data &&
             (data.approvals ?? []).map((approval) => (

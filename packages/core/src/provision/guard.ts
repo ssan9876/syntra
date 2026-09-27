@@ -276,7 +276,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     const value = input.thresholds[key];
     if (!isPercent(value)) {
       hard.push(
-        `the ${key} threshold is ${value}, which is not a percentage between 0 and 100; a guard cannot compare a share against a value it cannot compare against`,
+        `the ${key} threshold is ${value}, not a percentage between 0 and 100`,
       );
     }
   }
@@ -285,7 +285,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   // this axis off while it continued to look exactly like an axis.
   if (!isCount(input.thresholds.maxContainerCreatesPerRun)) {
     hard.push(
-      `the maxContainerCreatesPerRun cap is ${input.thresholds.maxContainerCreatesPerRun}, which is not a count; a cap nobody can state is not a cap`,
+      `the maxContainerCreatesPerRun cap is ${input.thresholds.maxContainerCreatesPerRun}, not a whole number`,
     );
   }
 
@@ -293,7 +293,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     const value = input[key];
     if (!isCount(value)) {
       hard.push(
-        `${key} is ${value}, which is not a population count; the guard has nothing to measure this run against`,
+        `${key} is ${value}, not a valid count`,
       );
     }
   }
@@ -302,7 +302,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     !isCount(input.previousPersonsWithActiveContract)
   ) {
     hard.push(
-      `previousPersonsWithActiveContract is ${input.previousPersonsWithActiveContract}, which is not a population count; the guard has nothing to measure this run against`,
+      `previousPersonsWithActiveContract is ${input.previousPersonsWithActiveContract}, not a valid count`,
     );
   }
   if (hard.length > 0) {
@@ -336,7 +336,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   // run has applied here before, and now the target returns nothing.
   if (input.accountsAtTarget === 0 && input.hasEverApplied) {
     hard.push(
-      'the target returned no accounts at all, and a run has been applied against it before, so it is not a target that was simply never populated; an empty target and an unreachable one look identical from here, and the safe reading is the second',
+      'the target returned no accounts at all, but runs have been applied to it before — check that it is reachable, then run again',
     );
   }
 
@@ -379,9 +379,9 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
       // to compute and nothing has gone wrong; the first-run confirmation
       // below is where an administrator sees it.
       unmeasurable.push(
-        `the ${population.verb} axis has no denominator on this run: the target holds no accounts at all, so the ${population.threshold(
+        `${population.verb} threshold (${population.threshold(
           input.thresholds,
-        )}% threshold cannot be applied to the ${count} ${population.noun} this run would ${population.verb}`,
+        )}%) not applied: the target holds no accounts, so the ${count} ${population.noun} to ${population.verb} cannot be measured as a share`,
       );
       continue;
     }
@@ -393,7 +393,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
       // a field the connector never populated, `continue`, and the
       // most-emphasised control in the spec silently off.
       cannotEvaluate.push(
-        `cannot evaluate the ${population.verb} axis: the plan would ${population.verb} ${count} ${population.noun} while the target inventory reports none at all, so the plan and the denominator did not come from the same read`,
+        `cannot evaluate the ${population.verb} threshold: the plan would ${population.verb} ${count} ${population.noun} but the target reports none — run again for a fresh read`,
       );
       continue;
     }
@@ -427,7 +427,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   ).length;
   if (containerCreates > input.thresholds.maxContainerCreatesPerRun) {
     tripped.push(
-      `would create ${containerCreates} containers, above the limit of ${input.thresholds.maxContainerCreatesPerRun} per run (maxContainerCreatesPerRun — an absolute count, not a percentage)`,
+      `would create ${containerCreates} containers, above the limit of ${input.thresholds.maxContainerCreatesPerRun} per run`,
     );
   }
 
@@ -454,7 +454,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
   ).length;
   if (containerMoves > 0) {
     tripped.push(
-      `would move ${containerMoves} container${containerMoves === 1 ? '' : 's'} and every account inside ${containerMoves === 1 ? 'it' : 'them'}; a container move is always confirmed by a person`,
+      `would move ${containerMoves} container${containerMoves === 1 ? '' : 's'} and every account inside ${containerMoves === 1 ? 'it' : 'them'} — container moves always need confirmation`,
     );
   }
 
@@ -493,10 +493,10 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
     if (holders === undefined || !isCount(holders) || holders === 0) {
       const observed =
         holders === undefined
-          ? 'the target inventory carries no holder count at all for it'
-          : `the target inventory reports ${holders} holders for it`;
+          ? 'the target reports no holder count for it'
+          : `the target reports ${holders} holders`;
       cannotEvaluate.push(
-        `cannot evaluate the per-entitlement axis for "${name}": the plan would revoke it from ${count} holders while ${observed}, so the plan and the denominator did not come from the same read`,
+        `cannot evaluate the per-entitlement threshold for "${name}": the plan would revoke it from ${count} holders but ${observed} — run again for a fresh read`,
       );
       continue;
     }
@@ -545,7 +545,7 @@ export function evaluateProvisionGuard(input: GuardInput): GuardVerdict {
       blocked: true,
       requiresConfirmation: true,
       reasons: [
-        'this target has never had a run applied, so the first run is confirmed by a person whatever the thresholds say',
+        'this target has never had a run applied: the first run is confirmed by a person',
         ...tripped,
         ...unmeasurable,
       ],

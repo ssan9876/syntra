@@ -336,7 +336,7 @@ export async function* paginate(
   for (let page = 0; ; page += 1) {
     if (page >= MAX_PAGES) {
       throw new PagingError(
-        `${spec.path} did not stop paging after ${MAX_PAGES} pages; refusing to return a partial list`,
+        `Incomplete read: ${spec.path} was still paging after ${MAX_PAGES} pages. No partial list was returned.`,
       );
     }
 
@@ -385,7 +385,7 @@ export async function* paginate(
         if (offset >= total) return;
         if (items.length === 0) {
           throw new PagingError(
-            `${spec.path} stopped answering at ${offset} of ${total} items; refusing to return a partial list`,
+            `Incomplete read: ${spec.path} stopped answering at ${offset} of ${total} items. No partial list was returned.`,
           );
         }
         continue;

@@ -193,12 +193,10 @@ export async function runAnchorJob(
  * template renders is a NAME and never an id, so `audit_chain_broken` itself
  * must not be what a recipient reads.
  */
-const INTEGRITY_HEADLINE = 'The audit log cannot be shown to be intact';
+const INTEGRITY_HEADLINE = 'Audit log integrity check failed';
 
 const NOBODY_TO_TELL =
-  'a critical audit-integrity finding was raised and no active user holds ' +
-  'audit.read, so nobody was notified; this is recorded rather than dropped ' +
-  'because a silent zero here is indistinguishable from a working notifier';
+  'Critical audit-integrity finding not sent: no active user has audit.read.';
 
 /**
  * Verify, then TELL SOMEBODY.

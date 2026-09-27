@@ -74,7 +74,7 @@ export function ResetPassword() {
       if (cause instanceof ApiError) {
         setError(cause.problem.detail ?? cause.problem.title);
       } else {
-        setError('That could not be completed. Request a new link.');
+        setError('Password not reset. Request a new link.');
       }
     } finally {
       setBusy(false);

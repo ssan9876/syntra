@@ -159,7 +159,7 @@ describe('OrgUnitDetailPage', () => {
     renderPage();
 
     await screen.findByRole('heading', { name: 'Finance' });
-    expect(screen.getByText(/nobody is in this unit/i)).toBeInTheDocument();
+    expect(screen.getByText(/no users in this unit/i)).toBeInTheDocument();
   });
 
   describe('editing', () => {

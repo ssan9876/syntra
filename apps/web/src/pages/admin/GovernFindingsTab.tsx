@@ -43,25 +43,25 @@ const SEVERITY_TONE: Record<Finding['severity'], Tone> = {
  * has not read the schema, and `access_without_contract` is a column name.
  */
 const HEADLINE: Record<string, string> = {
-  unattributable_holding: 'Nothing in Syntra explains this access',
-  unexplained_gain: 'Access appeared and Syntra did not cause it',
-  access_without_contract: 'Holds access with no active contract',
-  orphan_account: 'An account that belongs to nobody Syntra knows',
-  privileged_uncertified: 'Privileged access that nobody has reviewed',
-  stale_source: 'A source nobody has read recently enough to trust',
-  coverage_gap: 'A region of the world this snapshot could not describe',
-  campaign_low_coverage: 'A review closed with too many items undecided',
-  dispatch_not_applied: 'A revocation was sent and never confirmed',
-  sod_violation: 'One person holds both sides of a duty separation',
-  sod_laundering: 'Two people approved each other into opposite sides of a rule',
-  approval_reciprocity: 'Two people repeatedly decide for each other',
+  unattributable_holding: 'No source explains this access',
+  unexplained_gain: 'Access gained outside Syntra',
+  access_without_contract: 'Access with no active contract',
+  orphan_account: 'Account with no known owner',
+  privileged_uncertified: 'Privileged access never reviewed',
+  stale_source: 'Source not read recently',
+  coverage_gap: 'Snapshot has a coverage gap',
+  campaign_low_coverage: 'Review closed with items undecided',
+  dispatch_not_applied: 'Revocation sent, never confirmed',
+  sod_violation: 'One person holds both sides of an SoD rule',
+  sod_laundering: 'Two people approved each other onto opposite sides of an SoD rule',
+  approval_reciprocity: 'Two people often approve for each other',
   // No `lapsed_exception` row: a lapse ages the violation's OWN `sod_violation`
   // finding, so there is no second row to headline. A map entry for a kind
   // nothing raises is a queue column that is always empty and always looks
   // like a bug.
-  audit_chain_broken: 'The audit log cannot be shown to be intact',
-  no_human_decision: 'Access granted by a workflow with no approver',
-  unmergeable_actor: 'An account with no linked person is making decisions',
+  audit_chain_broken: 'Audit log chain is broken',
+  no_human_decision: 'Access granted with no approver',
+  unmergeable_actor: 'Decisions by an account with no linked person',
 };
 
 /**
@@ -162,7 +162,7 @@ export function GovernFindingsTab() {
           {data && sorted.length === 0 && status === 'open' && (
             <div className="p-6">
               <Empty
-                title="No findings yet"
+                title="No findings"
                 action={
                   <Link to="/admin/govern?tab=snapshots" className={buttonClasses('secondary')}>
                     Build a snapshot
@@ -208,7 +208,7 @@ export function GovernFindingsTab() {
                               'Reason for accepting',
                             );
                             if (reason === null || reason.trim() === '') return;
-                            const until = window.prompt('Accept until (YYYY-MM-DD)?');
+                            const until = window.prompt('Accept until (YYYY-MM-DD)');
                             if (until === null || until.trim() === '') return;
                             void api(`/api/admin/govern/findings/${finding.id}/accept`, {
                               method: 'POST',
@@ -223,12 +223,12 @@ export function GovernFindingsTab() {
                                 setActionError(
                                   cause instanceof ApiError
                                     ? (cause.problem.detail ?? cause.problem.title)
-                                    : 'Could not accept this finding.',
+                                    : 'Finding could not be accepted.',
                                 ),
                               );
                           }}
                         >
-                          Accept with an expiry
+                          Accept
                         </Button>
                       )}
                     </td>

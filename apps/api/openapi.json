@@ -63,6 +63,9 @@
       "name": "Directory sync runs"
     },
     {
+      "name": "Email domains"
+    },
+    {
       "name": "Employee lifecycle"
     },
     {
@@ -7623,6 +7626,234 @@
         "responses": {
           "204": {
             "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/email-domains": {
+      "get": {
+        "operationId": "getEmailDomains",
+        "tags": [
+          "Email domains"
+        ],
+        "summary": "List email domains",
+        "description": "Every domain added to the tenant, verified or not, with the exact TXT `record` to publish at its apex. Only a verified domain, or a subdomain of one, may appear in an address Syntra writes: a business email entered by hand, an account name or `mail` a profile generates, an Entra ID userPrincipalName.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postEmailDomains",
+        "tags": [
+          "Email domains"
+        ],
+        "summary": "Add an email domain",
+        "description": "Adds the domain unverified and returns the TXT record that proves control of it. An internationalised name is stored as punycode. `400 invalid-domain` for something that is not a domain name, `409 duplicate-domain` when it is already added. Audited as `tenant.email_domain.added`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "domain": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253
+                  }
+                },
+                "required": [
+                  "domain"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/email-domains/{id}": {
+      "delete": {
+        "operationId": "deleteEmailDomainsById",
+        "tags": [
+          "Email domains"
+        ],
+        "summary": "Remove an email domain",
+        "description": "Addresses in the domain are refused from then on, and provisioning makes people whose addresses are in it unprocessable on the targets that would write them. Audited as `tenant.email_domain.removed`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/email-domains/{id}/verify": {
+      "post": {
+        "operationId": "postEmailDomainsByIdVerify",
+        "tags": [
+          "Email domains"
+        ],
+        "summary": "Check an email domain for its verification record",
+        "description": "Looks up the TXT records at the domain's apex. With the record present the domain is verified from now on; without it, `lastCheckError` says what was found. A domain already verified is returned unchanged. Audited as `tenant.email_domain.verified` or `tenant.email_domain.verification_failed`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

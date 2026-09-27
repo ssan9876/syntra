@@ -107,8 +107,8 @@ export function guardedFetch(options: GuardedFetchOptions = {}): GuardedFetch {
       for (const entry of resolved) {
         if (classifyAddress(entry.address) === 'blocked') {
           throw new Error(
-            `${url.hostname} resolves to ${entry.address}, which is inside this deployment's own network. ` +
-              'Set OUTBOUND_ALLOW_PRIVATE=true if that is intended.',
+            `${url.hostname} resolves to ${entry.address}, a private network address. ` +
+              'Set OUTBOUND_ALLOW_PRIVATE=true to allow it.',
           );
         }
       }
@@ -153,7 +153,7 @@ export function guardedFetch(options: GuardedFetchOptions = {}): GuardedFetch {
           if (status >= 300 && status < 400) {
             res.destroy();
             reject(
-              new Error(`${url.href} answered with a redirect, which is not followed`),
+              new Error(`${url.href} answered with a redirect; redirects are not followed`),
             );
             return;
           }

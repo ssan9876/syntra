@@ -85,13 +85,13 @@ export function AccountSessions({ userId }: { userId: string }) {
 
   const toast = useToast();
 
-  const act = async (path: string, method: 'DELETE' | 'POST', done: string) => {
+  const act = async (path: string, method: 'DELETE' | 'POST', done: string, failed: string) => {
     setFailure(null);
     setBusy(true);
     try {
       const res = await fetch(path, { method });
       if (!res.ok) {
-        setFailure('Could not end that session.');
+        setFailure(failed);
         return;
       }
       toast({ title: done });
@@ -110,7 +110,7 @@ export function AccountSessions({ userId }: { userId: string }) {
             variant="danger"
             disabled={busy}
             onClick={() =>
-              act(`/api/admin/users/${userId}/sessions/revoke`, 'POST', 'Signed out everywhere')
+              act(`/api/admin/users/${userId}/sessions/revoke`, 'POST', 'Signed out everywhere', 'Could not sign out everywhere.')
             }
           >
             Sign out everywhere
@@ -149,7 +149,7 @@ export function AccountSessions({ userId }: { userId: string }) {
                   size="sm"
                   disabled={busy}
                   onClick={() =>
-                    act(`/api/admin/users/${userId}/sessions/${session.id}`, 'DELETE', 'Session revoked')
+                    act(`/api/admin/users/${userId}/sessions/${session.id}`, 'DELETE', 'Session revoked', `Could not revoke the session from ${describeAgent(session.userAgent)}.`)
                   }
                 >
                   Revoke

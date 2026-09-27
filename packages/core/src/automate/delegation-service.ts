@@ -83,7 +83,7 @@ export async function createApprovalDelegation(
       ) {
         throw new DelegationRefusedError(
           'not-permitted',
-          'You can record an absence for yourself; delegating on somebody else’s behalf needs automate.manage.',
+          'You can only delegate for yourself. Delegating for others needs automate.manage.',
         );
       }
     }
@@ -104,7 +104,7 @@ export async function createApprovalDelegation(
     if (days > settings.maxDelegationDays) {
       throw new DelegationRefusedError(
         'too-long',
-        `A delegation may run for at most ${settings.maxDelegationDays} days. An indefinite delegation is a permanent transfer of authority that nobody ever re-decides.`,
+        `Delegation can last at most ${settings.maxDelegationDays} days.`,
       );
     }
 
@@ -123,7 +123,7 @@ export async function createApprovalDelegation(
     if (chained !== null) {
       throw new DelegationRefusedError(
         'not-transitive',
-        'Delegation is not transitive: one of these two already holds a delegation, and chaining them would route approvals to somebody neither party chose.',
+        'One of these people already has a delegation. Delegations cannot be chained.',
       );
     }
 
@@ -264,7 +264,7 @@ export async function upsertResourceDelegation(
     if (input.capabilities.length === 0) {
       throw new DelegationRefusedError(
         'no-capabilities',
-        'A delegation with no capabilities does nothing; remove it instead.',
+        'Pick at least one capability, or remove the delegation.',
       );
     }
     // Applications and local groups only.
@@ -285,7 +285,7 @@ export async function upsertResourceDelegation(
     if (input.resourceType === 'entitlement') {
       throw new DelegationRefusedError(
         'entitlement-not-delegable',
-        'A target entitlement cannot be delegated. It is granted through a catalog product and a Provision run, so that the approval and the target write stay in one place; delegate the application or the local group instead.',
+        'Target entitlements cannot be delegated. Delegate the application or local group instead.',
       );
     }
     // The resource and the delegate are this tenant's, looked up rather than
@@ -454,7 +454,7 @@ export async function delegatedGrant(
     if (input.resourceType === 'entitlement') {
       throw new DelegationRefusedError(
         'entitlement-not-delegable',
-        'A target entitlement cannot be granted by a delegated manager; it goes through a catalog product and a Provision run.',
+        'Delegated managers cannot grant target entitlements. Request it from the catalog.',
       );
     }
 
@@ -475,7 +475,7 @@ export async function delegatedGrant(
       if (group.sourceId !== null) {
         throw new DelegationRefusedError(
           'group-is-synced',
-          `${group.name} is owned by the directory source ${group.source?.name ?? 'unknown'}, which rewrites its membership on every run.`,
+          `${group.name} is synced from "${group.source?.name ?? 'unknown'}" and cannot be changed here.`,
         );
       }
     }
@@ -520,7 +520,7 @@ export async function delegatedGrant(
       ) {
         throw new DelegationRefusedError(
           'outside-audience',
-          'One of these people is outside the audience for this resource, so it is not yours to grant them.',
+          'One of these people is outside the audience for this resource.',
         );
       }
 

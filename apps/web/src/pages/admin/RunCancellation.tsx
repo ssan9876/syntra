@@ -101,7 +101,7 @@ export function CancelRunButton({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `The ${noun} could not be cancelled.`,
+          : `The ${noun} was not cancelled. Try again.`,
       );
     } finally {
       setBusy(false);
@@ -126,8 +126,8 @@ export function CancelRunButton({
     <div className="w-full space-y-2 sm:max-w-md">
       <Alert tone="danger" title={`Cancel this ${noun}?`}>
         {isWorking
-          ? 'It stops at its next checkpoint. Work already done stays.'
-          : 'Cancelled now. Nothing it proposed is applied.'}
+          ? 'Stops at the next checkpoint. Finished work stays.'
+          : 'Cancels now. Nothing is applied.'}
       </Alert>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <div className="flex flex-wrap gap-2">
@@ -168,13 +168,13 @@ export function CancellationStatus({
   if (run.cancelState === 'requested') {
     body = (
       <Alert tone="warning" title="Cancellation requested">
-        Stops at its next checkpoint.
+        Stops at the next checkpoint.
       </Alert>
     );
   } else if (run.status === 'cancelled') {
     body = (
       <Alert tone="info" title={`This ${noun} was cancelled`}>
-        Applied items stay done.
+        Items already applied stay applied.
       </Alert>
     );
   } else if (run.cancelState === 'moot') {

@@ -98,7 +98,7 @@ describe('MfaChallenge', () => {
     await userEvent.type(await screen.findByLabelText(/code/i), '000000');
     await userEvent.click(screen.getByRole('button', { name: /verify/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/did not match/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/wrong code/i);
     expect(screen.getByRole('button', { name: /verify/i })).toBeEnabled();
   });
 

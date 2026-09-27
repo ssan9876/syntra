@@ -429,6 +429,27 @@ describe('runProvisionJob — the skip, made loud', () => {
     expect(row.lastSkippedAt).toBeNull();
   });
 
+  it('replaces a preview that proposes nothing instead of skipping behind it', async () => {
+    const empty = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({ data: { tenantId, targetSystemId: targetId, status: 'previewed' } }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { connector: target as never },
+    );
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(0);
+    const replaced = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: empty.id } }),
+    );
+    expect(replaced.status).toBe('failed');
+    expect(replaced.error).toBe('superseded by a later run');
+  });
+
   it('does nothing for a disabled target', async () => {
     await withTenant(tenantId, (tx) =>
       tx.targetSystem.update({ where: { id: targetId }, data: { enabled: false } }),
@@ -532,11 +553,15 @@ describe('runProvisionJob — the skip, made loud', () => {
   });
 
   it('does not start while a run is `previewed` and nobody has applied it', async () => {
-    await withTenant(tenantId, (tx) =>
-      tx.provisionRun.create({
+    // With something to apply: a preview that proposes nothing is replaced.
+    await withTenant(tenantId, async (tx) => {
+      const run = await tx.provisionRun.create({
         data: { tenantId, targetSystemId: targetId, status: 'previewed' },
-      }),
-    );
+      });
+      await tx.provisionAction.create({
+        data: { tenantId, runId: run.id, actionType: 'create_account', status: 'proposed' },
+      });
+    });
     await runProvisionJob(
       schedulerStub() as never,
       provider,
@@ -973,7 +998,7 @@ describe('runProvisionJob — a crashed run must not brick the schedule', () => 
     const row = await withTenant(tenantId, (tx) =>
       tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
     );
-    expect(row.lastSkipReason).toContain(startedAt.toISOString());
+    expect(row.lastSkipReason).toContain(`${startedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`);
   });
 });
 

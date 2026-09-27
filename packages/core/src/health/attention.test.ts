@@ -35,6 +35,13 @@ describe('attention summary', () => {
           steps: { create: { tenantId, key: 'targets', title: 'Targets', position: 0, status: 'running', responseCategory: 'read_back_incomplete' } },
         },
       });
+      // A failed operation whose case was resolved is not waiting either.
+      await tx.lifecycleOperation.create({
+        data: {
+          tenantId, kind: 'offboard', idempotencyKey: 'failed-resolved', status: 'failed', inputFingerprint: 'r', input: {},
+          caseStatus: 'resolved', resolvedAt: new Date(), resolutionCode: 'cancelled', resolutionSummary: 'test data',
+        },
+      });
       // Completed work is not waiting for anybody.
       await tx.lifecycleOperation.create({
         data: { tenantId, kind: 'onboard', idempotencyKey: 'done', status: 'completed', inputFingerprint: 'd', input: {} },
@@ -114,10 +121,10 @@ describe('attention summary', () => {
 
   it('says what a held run is waiting on', () => {
     expect(runAttentionSummary({ ...counters, status: 'blocked', requiresConfirmation: true, blockedReason: 'would create 1 of 2 accounts (50.0%), above the 20% threshold; x' }))
-      .toBe('Held for confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold');
+      .toBe('Needs confirmation: would create 1 of 2 accounts (50.0%), above the 20% threshold');
     expect(runAttentionSummary({ ...counters, status: 'blocked', requiresConfirmation: false, blockedReason: 'the target returned no accounts at all' }))
-      .toBe('Refused by the safety guard: the target returned no accounts at all');
+      .toBe('Blocked by the safety guard: the target returned no accounts at all');
     expect(runAttentionSummary({ ...counters, status: 'previewed', requiresConfirmation: false, blockedReason: null }))
-      .toBe('Waiting to be applied: no changes planned');
+      .toBe('Ready to apply: no changes');
   });
 });

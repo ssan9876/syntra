@@ -58,7 +58,7 @@ describe('EmployeeWorkPage', () => {
 
     await userEvent.click(blocked);
     expect(fetch).toHaveBeenLastCalledWith('/api/admin/employee-work?lane=blocked', expect.anything());
-    expect(await screen.findByText('Nothing matches these filters')).toBeVisible();
+    expect(await screen.findByText('No matching work')).toBeVisible();
   });
 
   it('names the next step for each kind of item', async () => {

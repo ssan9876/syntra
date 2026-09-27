@@ -201,7 +201,7 @@ export async function runWebhookJob(
       // five times; saying so is the only useful thing left.
       results.push({
         id: row.id,
-        attempt: { error: 'no signing secret is stored for this endpoint — rotate it' },
+        attempt: { error: 'Endpoint has no signing secret. Rotate it.' },
       });
       continue;
     }
@@ -273,7 +273,7 @@ export async function runWebhookJob(
         'error' in attempt
           ? attempt.error
           : // NEVER the response body. See `httpPoster`.
-            `the receiver answered ${status}`;
+            `Receiver returned HTTP ${status}.`;
 
       await tx.webhookDelivery.update({
         where: { id },

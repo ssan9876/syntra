@@ -79,7 +79,7 @@ export function evaluatePersonGuard(input: PersonGuardInput): PersonGuardVerdict
     return {
       blocked: true,
       requiresConfirmation: false,
-      reason: 'the source returned no records',
+      reason: 'Source returned no records.',
     };
   }
 

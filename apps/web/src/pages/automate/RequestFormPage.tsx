@@ -96,7 +96,7 @@ export function RequestFormPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong sending this request.',
+          : 'The request was not sent. Try again.',
       );
     } finally {
       setBusy(false);
@@ -188,8 +188,7 @@ export function RequestFormPage() {
 
               {replacesGrantId !== null && (
                 <Alert tone="info">
-                  This replaces the access you already hold. The current grant ends when this
-                  one is approved, so there is no gap and no second copy running beside it.
+                  Replaces your current access. The current grant ends when this one is approved.
                 </Alert>
               )}
               {/*

@@ -117,7 +117,7 @@ export function ProvisionRunsPage() {
     try {
       await api(`/api/admin/targets/${id}/runs`, { method: 'POST' });
       seen.current = runs.length;
-      setNotice('A run has been queued.');
+      setNotice('Run queued.');
       setWaiting(1);
     } catch (cause) {
       setProblem(

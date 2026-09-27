@@ -36,7 +36,7 @@ export function ImportTab() {
       );
     } catch (cause) {
       if (cause instanceof ApiError && cause.kind === 'csv-invalid') {
-        setError('Nothing in this file could be imported.');
+        setError('No rows imported.');
         setRejected(
           (cause.problem.errors ?? []).map((e) => ({
             line: e.line ?? 0,
@@ -44,9 +44,9 @@ export function ImportTab() {
           })),
         );
       } else if (cause instanceof ApiError && cause.problem.status === 403) {
-        setError('You do not have permission to import people.');
+        setError('You cannot import people.');
       } else {
-        setError('The import could not be completed.');
+        setError('Import failed.');
       }
     } finally {
       setBusy(false);

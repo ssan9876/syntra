@@ -82,7 +82,7 @@ export function WorkflowsTab() {
       );
       setStages(result.stages);
     } catch (cause) {
-      report(cause, 'That preview could not be run.');
+      report(cause, 'Preview failed.');
     }
   };
 
@@ -101,7 +101,7 @@ export function WorkflowsTab() {
       toast({ title: `Workflow “${newName.trim()}” created` });
       reload();
     } catch (cause) {
-      report(cause, 'That workflow could not be created.');
+      report(cause, 'Workflow not created.');
     } finally {
       setBusy(false);
     }
@@ -224,7 +224,7 @@ export function WorkflowsTab() {
                   // The screen that catches this before it is saved, rather than
                   // at 3am on somebody's request.
                   <Alert tone="danger">
-                    Nobody can decide this stage; requests wait for an administrator.
+                    No approver for this stage. Requests wait for an administrator.
                   </Alert>
                 )}
               </div>

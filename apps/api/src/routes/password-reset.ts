@@ -154,7 +154,7 @@ export async function registerPasswordResetRoutes(
         400,
         'factor-required',
         'A second factor is required',
-        'This account has a second factor registered, so resetting the password needs it too.',
+        'This account has a second factor. Provide it to reset the password.',
       );
     }
     if (outcome.reason === 'factor_invalid') {

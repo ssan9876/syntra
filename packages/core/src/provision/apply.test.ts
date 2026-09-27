@@ -1109,7 +1109,7 @@ describe('applyProvisionRun', () => {
       (a) => a.actionType === 'create_account',
     )!;
     expect(create.status).toBe('in_flight');
-    expect(create.message).toMatch(/whether it landed at the target is unknown/);
+    expect(create.message).toMatch(/checks whether it landed/);
     expect(result.inFlight).toBe(1);
     // The grant behind it fails, and that is right: the create's anchor was
     // never written, so there is no object to add to a group. It is counted as
@@ -1645,7 +1645,7 @@ describe('applyProvisionRun: the confirmation gate on one action', () => {
     expect(result.deferred).toBe(1);
     expect(
       (await actionsOf(run.id)).find((a) => a.id === enable.id)!.message,
-    ).toMatch(/requires an explicit confirmation/);
+    ).toMatch(/requires confirmation/);
     const events = await eventsOf('provision.run.apply');
     expect((events.at(-1)!.payload as { deferred?: number }).deferred).toBe(1);
   });

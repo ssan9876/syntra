@@ -94,7 +94,7 @@ export function StructureChanges({ actions }: { actions: readonly StructureActio
         )}
         {accountMoves.size > 0 && (
           <section>
-            <h3 className="font-medium text-ink">Accounts moving to a different OU</h3>
+            <h3 className="font-medium text-ink">Accounts changing OU</h3>
             <ul className="mt-1 space-y-2">
               {[...accountMoves].map(([to, list]) => (
                 <li key={to}>

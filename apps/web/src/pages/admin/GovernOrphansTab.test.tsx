@@ -69,7 +69,7 @@ describe('an orphan proposal', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Not them' }));
     await userEvent.type(screen.getByLabelText('Reason'), 'different person');
-    await userEvent.click(screen.getByRole('button', { name: 'Record it' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Deny match' }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.url).toContain('/orphans/prop-1/deny');

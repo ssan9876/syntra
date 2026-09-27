@@ -106,7 +106,7 @@ describe('BrandingTab', () => {
       'fetch',
       vi.fn(async (url: unknown, init?: RequestInit) =>
         init?.method === 'PUT'
-          ? json({ status: 400, title: 'That branding cannot be used', detail }, 400)
+          ? json({ status: 400, title: 'Branding refused', detail }, 400)
           : json(brand),
       ),
     );
@@ -166,7 +166,7 @@ describe('BrandingTab', () => {
     const box = await screen.findByLabelText('Support link');
     await userEvent.type(box, 'javascript:alert(1)');
     expect(box).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText(/https:\/\/ address or a mailto:/)).toBeInTheDocument();
+    expect(screen.getByText(/https:\/\/ or mailto: address/)).toBeInTheDocument();
     expect(screen.queryByText('Get help')).toBeNull();
   });
 

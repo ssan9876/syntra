@@ -72,21 +72,21 @@ export function GovernSnapshotDetailPage() {
       {snapshot && data && (
         <div className="space-y-6">
           {/* The uncomfortable numbers come FIRST, above the totals. */}
-          <Panel title="What nobody can explain">
+          <Panel title="Unexplained">
             <div className="grid grid-cols-3 gap-4 p-4">
               <div>
                 <p className="figure text-2xl font-semibold text-ink">{snapshot.unattributableCount}</p>
-                <p className="text-muted">holdings nobody can explain</p>
+                <p className="text-muted">holdings with no explaining source</p>
               </div>
               <div>
                 <p className="figure text-2xl font-semibold text-ink">{snapshot.coverageGapCount}</p>
-                <p className="text-muted">regions this snapshot could not describe</p>
+                <p className="text-muted">coverage gaps</p>
               </div>
               <div>
                 <p className="figure text-2xl font-semibold text-ink">
                   {snapshot.unattributedAccountCount}
                 </p>
-                <p className="text-muted">accounts belonging to nobody Syntra knows</p>
+                <p className="text-muted">accounts with no known owner</p>
               </div>
             </div>
           </Panel>
@@ -164,16 +164,16 @@ export function GovernSnapshotDetailPage() {
                             )
                               .then((result) => {
                                 const owner =
-                                  (result as { owner?: string }).owner ?? 'the owning subsystem';
+                                  (result as { owner?: string }).owner ?? 'its source';
                                 setActionError(null);
-                                toast({ title: `Refresh queued with ${owner}` });
+                                toast({ title: `Refresh of ${source.sourceName} queued with ${owner}` });
                                 reload();
                               })
                               .catch((cause: unknown) =>
                                 setActionError(
                                   cause instanceof ApiError
                                     ? (cause.problem.detail ?? cause.problem.title)
-                                    : 'Could not enqueue a refresh.',
+                                    : `Refresh of ${source.sourceName} could not be queued.`,
                                 ),
                               );
                           }}

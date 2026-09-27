@@ -230,30 +230,22 @@ export const text = (value: unknown, fallback = '') =>
  */
 export function skipAdvice(reason: string | null): string {
   if (reason !== null && reason.includes('is awaiting review')) {
-    return (
-      'A scheduled run does not start while a run is awaiting review, so that ' +
-      'the plan somebody was asked to approve is not superseded every night. ' +
-      'Review the outstanding run and this clears on the next schedule.'
-    );
+    // The server writes `run from 2026-08-01 03:00 UTC is awaiting review`
+    // (older rows: an ISO timestamp).
+    const from = /run from (.+?) is awaiting review/.exec(reason)?.[1];
+    const iso = from?.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC$/, '$1T$2Z');
+    const started = iso === undefined ? NaN : Date.parse(iso);
+    return Number.isNaN(started)
+      ? 'Skipped: a run is waiting for review. Apply or cancel it.'
+      : `Skipped: the run from ${new Date(started).toLocaleString()} is waiting for review. Apply or cancel it.`;
   }
   if (reason !== null && reason.includes('already in progress')) {
-    return (
-      'Two runs raced for this target and the second did not start. There is ' +
-      'nothing to review and nothing to do: the next schedule runs normally.'
-    );
+    return 'Skipped: another run started at the same time. Nothing to do.';
   }
   if (reason !== null && reason.includes('is still in progress')) {
-    return (
-      'There is nothing to review here: a run was still going when this ' +
-      'schedule fired. It clears when that run finishes — or six hours after ' +
-      'that run last showed any sign of progress, when a later run treats it ' +
-      'as the wreckage of a process that died and adopts it.'
-    );
+    return 'Skipped: the previous run was still in progress. Clears when it finishes, or after 6 hours without progress.';
   }
-  return (
-    'A scheduled run did not start. The reason was not recorded, so the runs ' +
-    'for this target are the place to look.'
-  );
+  return 'Skipped: no reason recorded. Check this target’s runs.';
 }
 
 /**

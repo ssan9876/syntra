@@ -238,7 +238,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
 
   // A fresh install has no targets, and the empty state says what a target is
   // rather than showing an empty table.
-  await expect(page.getByText('No target systems yet')).toBeVisible();
+  await expect(page.getByText('No targets yet')).toBeVisible();
 
   await page.getByRole('link', { name: 'New target' }).click();
   await expect(page.getByRole('heading', { name: 'New target' })).toBeVisible();
@@ -301,7 +301,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // there has to be a control for that or the page tells somebody to do
   // something the console cannot do.
   await page.getByRole('button', { name: 'Refresh entitlement catalog' }).click();
-  await expect(page.getByText(/entitlement.*read from the target/i)).toBeVisible();
+  await expect(page.getByText(/^Read \d+ entitlements?;/)).toBeVisible();
 
   await page.getByLabel('Name', { exact: true }).fill(RULE_NAME);
   await page.getByLabel('Field').selectOption('contract.department');
@@ -385,7 +385,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // not poll. On a loaded runner the click lands on a run still `running`,
   // whose detail shows no verdict at all and never will without a reload.
   // That is what failed the v1.9.0 release: a race, not a regression.
-  const blocked = page.getByText('This run is blocked');
+  const blocked = page.getByText('Run blocked');
   await expect(async () => {
     if ((await blocked.count()) === 0) {
       await page.reload();
@@ -400,7 +400,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   });
   await grant.uncheck();
   await page
-    .getByLabel('I have read the numbers above and want to apply this run anyway')
+    .getByLabel('Apply this run despite the numbers above')
     .check();
   await page.getByRole('button', { name: /Apply 1 action/ }).click();
   await expect(page.getByText(/now partially_applied/)).toBeVisible({
@@ -411,7 +411,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // so applying part of a run ends it: what was left out is superseded by the
   // next preview and worked out again against the world as it then is. The
   // plan's script drove a second apply here; the engine answers that 409.
-  await expect(page.getByText('Nothing further to apply')).toBeVisible();
+  await expect(page.getByText('Nothing left to apply')).toBeVisible();
   await expect(page.getByRole('button', { name: /^Apply/ })).toHaveCount(0);
 
   // And the question everybody asks.
@@ -421,10 +421,10 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await page.goto('/admin/users?tab=people');
   await page.getByRole('link', { name: PERSON_NAME }).click();
   await page
-    .getByRole('link', { name: 'Why does this person hold what they hold?' })
+    .getByRole('link', { name: 'Explain access' })
     .click();
   await expect(
-    page.getByRole('heading', { name: 'Why does this person hold this?' }),
+    page.getByRole('heading', { name: 'Access explained' }),
   ).toBeVisible();
   // The account was created; the entitlement was deliberately left out of the
   // apply, so it is not held. An access view that showed it anyway would be

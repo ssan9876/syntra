@@ -133,6 +133,6 @@ describe('the two conditions that block outright', () => {
     });
     if (!verdict.blocked) throw new Error('unreachable');
     expect(verdict.confirmable).toBe(true);
-    expect(verdict.reasons.join(' ')).toContain('first');
+    expect(verdict.reasons.join(' ')).toContain('First sweep');
   });
 });

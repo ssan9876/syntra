@@ -190,7 +190,7 @@ describe('vault with an external master-key provider', () => {
     for (const [name, value] of [['a', 'first'], ['b', 'second'], ['c', 'third']] as const) {
       expect(await withTenant(tenantId, (tx) => getSecret(tx, aws, name))).toBe(value);
     }
-    await expect(withTenant(tenantId, (tx) => getSecret(tx, provider, 'a'))).rejects.toThrow(/not by the local MASTER_KEY/);
+    await expect(withTenant(tenantId, (tx) => getSecret(tx, provider, 'a'))).rejects.toThrow(/not the local MASTER_KEY/);
 
     // And running it again is harmless.
     expect(await withTenant(tenantId, (tx) => rewrapSecrets(tx, composite, aws))).toEqual({ rewrapped: 3 });

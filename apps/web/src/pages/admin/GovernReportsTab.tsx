@@ -35,13 +35,13 @@ function ExportReportButton({ systemId, snapshotId }: { systemId: string; snapsh
       });
       setNotice({
         tone: 'info',
-        text: res.scope === 'org_units' ? 'Export requested, limited to your organizational scope.' : 'Export requested.',
+        text: res.scope === 'org_units' ? 'Export requested for your org units only.' : 'Export requested.',
         queued: true,
       });
     } catch (cause) {
       setNotice({
         tone: 'danger',
-        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The export could not be requested.',
+        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Export request failed.',
         queued: false,
       });
     } finally {
@@ -58,7 +58,7 @@ function ExportReportButton({ systemId, snapshotId }: { systemId: string; snapsh
         {notice && (
           <Alert tone={notice.tone}>
             {notice.text}{' '}
-            {notice.queued && <Link className="link" to="/admin/activity?tab=exports">Follow it in Exports</Link>}
+            {notice.queued && <Link className="link" to="/admin/activity?tab=exports">Open Exports</Link>}
           </Alert>
         )}
       </div>
@@ -115,9 +115,9 @@ interface SystemReport {
 }
 
 const BUCKET_LABEL: Record<string, string> = {
-  unattributable: 'Nothing explains this',
+  unattributable: 'No source explains it',
   no_active_contract: 'No active contract',
-  unattributed_account: 'Belongs to nobody Syntra knows',
+  unattributed_account: 'No known owner',
   other: 'Explained',
 };
 
@@ -155,7 +155,7 @@ export function GovernReportsTab() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <Panel title="Who has access to this system">
+      <Panel title="Access by system">
         <form
           className="flex items-end gap-3 p-4"
           onSubmit={(event) => {
@@ -190,7 +190,7 @@ export function GovernReportsTab() {
             label="System"
             value={systemId}
             onChange={setSystemId}
-            placeholder="the target system's id"
+            placeholder="Target system id"
           />
           <Select
             label="Point in time"
@@ -204,22 +204,22 @@ export function GovernReportsTab() {
               })),
             ]}
           />
-          <Button type="submit">Run the report</Button>
+          <Button type="submit">Run report</Button>
         </form>
       </Panel>
 
       {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
       {header && (
-        <Panel title="What this report is built from">
+        <Panel title="Sources">
           <dl className="grid grid-cols-2 gap-2 p-4">
             <dt className="text-muted">Assembled</dt>
             <dd className="text-ink">{new Date(header.asOf).toLocaleString()}</dd>
-            <dt className="text-muted">Holdings nobody can explain</dt>
+            <dt className="text-muted">Unexplained holdings</dt>
             <dd className="text-ink">{header.unattributableCount}</dd>
-            <dt className="text-muted">Regions this could not describe</dt>
+            <dt className="text-muted">Coverage gaps</dt>
             <dd className="text-ink">{header.coverageGapCount}</dd>
-            <dt className="text-muted">Accounts belonging to nobody</dt>
+            <dt className="text-muted">Accounts with no owner</dt>
             <dd className="text-ink">{header.unattributedAccountCount}</dd>
           </dl>
           <ul className="border-t border-border-subtle p-4">
@@ -243,20 +243,20 @@ export function GovernReportsTab() {
             Holders: {renderCount(data.body.holderCount)}
             {typeof data.body.withheldForScope === 'number' && data.body.withheldForScope > 0 && (
               <span className="ml-2 text-warning">
-                {data.body.withheldForScope} row(s) withheld: outside your organizational scope.
+                {data.body.withheldForScope} row(s) hidden: outside your org units.
               </span>
             )}
           </p>
           {data.body.rows.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nobody holds anything in this system" />
+              <Empty title="No holders" />
             </div>
           ) : (
             <Table stickyHeader label="Holders">
               <thead>
                 <tr>
                   <th scope="col">Who</th>
-                  <th scope="col">Why they are on this list</th>
+                  <th scope="col">Reason listed</th>
                   <th scope="col">What they hold</th>
                 </tr>
               </thead>

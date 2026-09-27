@@ -166,7 +166,7 @@ describe('the password rules', () => {
     pending();
     renderPage();
     await screen.findByLabelText(/^new password$/i);
-    expect(screen.queryByText(/at least twelve characters/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/at least 12 characters/i)).not.toBeInTheDocument();
   });
 
   it('states the length rule only while it is being broken', async () => {
@@ -175,11 +175,11 @@ describe('the password rules', () => {
     const box = await screen.findByLabelText(/^new password$/i);
 
     await userEvent.type(box, 'short');
-    expect(await screen.findByText(/at least twelve characters/i)).toBeInTheDocument();
+    expect(await screen.findByText(/at least 12 characters/i)).toBeInTheDocument();
 
     await userEvent.type(box, 'enough-to-pass-now');
     await waitFor(() =>
-      expect(screen.queryByText(/at least twelve characters/i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/at least 12 characters/i)).not.toBeInTheDocument(),
     );
   });
 

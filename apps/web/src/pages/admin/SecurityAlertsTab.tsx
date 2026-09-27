@@ -57,14 +57,14 @@ export function SecurityAlertsTab() {
         method: 'PUT',
         body: JSON.stringify({ emailCategories: [...chosen].sort(), alertDays: parsedDays }),
       });
-      setNotice({ tone: 'success', text: 'Security notification policy saved.' });
+      setNotice({ tone: 'success', text: 'Policy saved.' });
       setEdited(null);
       setDays(null);
       reload();
     } catch (cause) {
       setNotice({
         tone: 'warning',
-        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The policy was not saved.',
+        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Policy not saved. Try again.',
       });
     } finally {
       setBusy(false);

@@ -133,7 +133,7 @@ export async function resolveDeliveryAddress(
     const person = await tx.person.findUnique({ where: { id: personId } });
     return person?.personalEmail
       ? { to: person.personalEmail, reason: 'personal email' }
-      : { to: null, reason: 'this person has no personal email address recorded' };
+      : { to: null, reason: 'the person has no personal email address' };
   }
   const contracts = await tx.contract.findMany({
     where: { personId, managerPersonId: { not: null } },
@@ -142,12 +142,12 @@ export async function resolveDeliveryAddress(
   });
   const managerPersonId = contracts[0]?.managerPersonId ?? null;
   if (managerPersonId === null) {
-    return { to: null, reason: 'no contract for this person names a manager' };
+    return { to: null, reason: 'no contract names a manager' };
   }
   const manager = await tx.person.findUnique({ where: { id: managerPersonId } });
   return manager?.businessEmail
     ? { to: manager.businessEmail, reason: 'manager business email' }
-    : { to: null, reason: 'the named manager has no business email address recorded' };
+    : { to: null, reason: 'the manager has no business email address' };
 }
 
 export interface CredentialLinkFacts {
@@ -333,7 +333,7 @@ export type ResendRecipient = 'profile' | PickupRecipientKind;
 
 export class NoTargetAccountError extends Error {
   constructor() {
-    super('this person has no account on this target');
+    super('This person has no account on this target.');
     this.name = 'NoTargetAccountError';
   }
 }
@@ -341,14 +341,14 @@ export class NoTargetAccountError extends Error {
 /** Nothing to link to: the account was never created by Provision, or its secret is gone. */
 export class NoInitialSecretError extends Error {
   constructor() {
-    super('there is no initial password in the vault for this account, so there is nothing to send a link to');
+    super('No initial password is stored for this account.');
     this.name = 'NoInitialSecretError';
   }
 }
 
 export class NoDeliveryAddressError extends Error {
   constructor(reason: string) {
-    super(`the sign-in details cannot be sent: ${reason}`);
+    super(`Sign-in details not sent: ${reason}.`);
     this.name = 'NoDeliveryAddressError';
   }
 }
@@ -418,7 +418,7 @@ export async function sendCredentialPickup(
       const configured = profile?.initialPasswordDelivery ?? 'vaultOnly';
       if (configured !== 'manager' && configured !== 'personalEmail') {
         throw new NoDeliveryAddressError(
-          "this target's account profile keeps initial passwords in the vault and sends them to nobody; choose a recipient",
+          'the account profile does not send initial passwords. Choose a recipient',
         );
       }
       recipientKind = configured;
@@ -431,7 +431,7 @@ export async function sendCredentialPickup(
     if (recipientKind === 'admin') {
       const me = await tx.user.findUnique({ where: { id: input.actorUserId }, select: { email: true } });
       to = me?.email ? me.email : null;
-      reason = 'your own account has no email address';
+      reason = 'your account has no email address';
     } else {
       ({ to, reason } = await resolveDeliveryAddress(tx, account.personId, recipientKind));
     }

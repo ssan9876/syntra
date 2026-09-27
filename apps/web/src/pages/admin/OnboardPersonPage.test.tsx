@@ -384,7 +384,7 @@ describe('OnboardPersonPage', () => {
     await user.type(screen.getByLabelText('Family name'), 'Okafor');
 
     expect(
-      await screen.findByText(/would not be placed/i, undefined, { timeout: 3000 }),
+      await screen.findByText(/Account has no container/i, undefined, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add someone/i })).toBeDisabled();
   });
@@ -412,7 +412,7 @@ describe('OnboardPersonPage', () => {
         timeout: 3000,
       }),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/would not be placed/i)).toBeNull();
+    expect(screen.queryByText(/Account has no container/i)).toBeNull();
     expect(screen.getByRole('button', { name: /add someone/i })).not.toBeDisabled();
   });
 
@@ -462,10 +462,10 @@ describe('OnboardPersonPage', () => {
 describe('OnboardPersonPage duplicate warning', () => {
   const DUPLICATE = {
     type: 'https://syntra.dev/problems/possible-duplicate',
-    title: 'Somebody here already looks like this',
+    title: 'Possible duplicate',
     status: 409,
     detail:
-      'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+      'Check the matches before creating a new record. Records cannot be merged later.',
     candidates: [
       {
         id: 'p1',

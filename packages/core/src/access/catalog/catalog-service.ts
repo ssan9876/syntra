@@ -38,10 +38,8 @@ export class EntityIdTakenError extends Error {
     readonly heldBy: string,
   ) {
     super(
-      `"${heldBy}" is already registered with the entity ID ${entityId}. ` +
-        'A service provider is identified by that value, so two applications ' +
-        'cannot share one — give this instance a different entity ID in its ' +
-        'own SSO settings, then register it by hand.',
+      `Entity ID ${entityId} is already used by "${heldBy}". ` +
+        'Give this instance a different entity ID in its SSO settings, then register it by hand.',
     );
     this.name = 'EntityIdTakenError';
   }

@@ -60,7 +60,7 @@ export function usePersonReceipts(personId: string): PersonReceipts {
           setForbidden(true);
           keepPolling = false;
         } else {
-          setProblem('Could not load saved provisioning receipts.');
+          setProblem('Could not load provisioning receipts.');
         }
       } finally {
         if (current) setRefreshing(false);
@@ -85,7 +85,7 @@ export function usePersonReceipts(personId: string): PersonReceipts {
     } catch (cause) {
       setProblem(cause instanceof ApiError
         ? `Could not retry ${receipt.targetName}: ${cause.problem.detail ?? cause.problem.title}`
-        : `Could not retry ${receipt.targetName}. Your saved records have been kept.`);
+        : `Could not retry ${receipt.targetName}. Saved receipts kept.`);
     } finally {
       setBusy(null);
     }

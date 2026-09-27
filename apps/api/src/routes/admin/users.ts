@@ -110,26 +110,25 @@ function raiseIfRefused(outcome: DeactivateOutcome): void {
       throw new ProblemError(
         409,
         'writeback-not-enabled',
-        'Write-back is not enabled for this source',
-        `This account is owned by ${outcome.sourceName}, and Syntra is not ` +
-          `permitted to change accounts there. Enable write-back on that ` +
-          `source, or disable the account in the directory itself.`,
+        'Write-back not enabled',
+        `This account comes from ${outcome.sourceName}. Enable write-back on ` +
+          `the source, or disable the account in the directory.`,
       );
     case 'no_credential':
       throw new ProblemError(
         500,
         'source-credential-missing',
-        'The source credential could not be read',
-        `The stored bind credential for ${outcome.sourceName} could not be ` +
-          `unsealed, so nothing was changed.`,
+        'Source credential unreadable',
+        `The bind credential for ${outcome.sourceName} could not be unsealed. ` +
+          `Nothing was changed.`,
       );
     case 'directory_failed':
       // 502: an upstream system answered, and said no.
       throw new ProblemError(
         502,
         'directory-write-failed',
-        'The directory refused the change',
-        `Nothing was changed. The directory reported: ${outcome.message}.`,
+        'Directory refused the change',
+        `${outcome.message}. Nothing was changed.`,
       );
   }
 }
@@ -497,8 +496,8 @@ export async function registerAdminUserRoutes(
               throw new ProblemError(
                 409,
                 'second-account',
-                'They already have an account',
-                `${person.givenName} ${person.familyName} already signs in as ${existing.login}. A contractor with two contracts legitimately has two accounts, so confirm to create this one as well.`,
+                'Person already has an account',
+                `${person.givenName} ${person.familyName} already signs in as ${existing.login}. Confirm to create a second account.`,
                 { existingAccount: existing },
               );
             }
@@ -706,15 +705,15 @@ export async function registerAdminUserRoutes(
             throw new ProblemError(
               409,
               'delete-not-enabled',
-              'This account cannot be deleted',
-              `${outcome.sourceName} is not configured to let Syntra delete objects in it, and removing only the Syntra record would leave the next sync run free to create the account again`,
+              'Account cannot be deleted',
+              `Deletes are not enabled on ${outcome.sourceName}.`,
             );
           case 'no_credential':
             throw new ProblemError(
               409,
               'no-credential',
-              'This account cannot be deleted',
-              `the bind credential for ${outcome.sourceName} could not be unsealed`,
+              'Account cannot be deleted',
+              `The bind credential for ${outcome.sourceName} could not be unsealed.`,
             );
           case 'directory_failed':
             // 502: Syntra worked, the directory refused. Nothing was changed
@@ -723,8 +722,8 @@ export async function registerAdminUserRoutes(
             throw new ProblemError(
               502,
               'directory-failed',
-              'The directory refused the delete',
-              `${outcome.message}; nothing was changed in Syntra either`,
+              'Directory refused the delete',
+              `${outcome.message}. Nothing was changed.`,
             );
         }
       }
@@ -763,8 +762,8 @@ export async function registerAdminUserRoutes(
           throw new ProblemError(
             409,
             'service-account-person',
-            'This account belongs to a person',
-            'A service account belongs to no person. Unlink the person first if this account really is used only by an integration.',
+            'Account is linked to a person',
+            'Unlink the person before making it a service account.',
           );
         }
 
@@ -856,7 +855,7 @@ export async function registerAdminUserRoutes(
             409,
             'conflict',
             'Setup link already being created',
-            'Another setup link was being created for this user at the same time. Try again.',
+            'Try again.',
           );
         }
         throw cause;
@@ -970,7 +969,7 @@ export async function registerAdminUserRoutes(
             409,
             'source-owned',
             'Managed by a directory source',
-            'This account is read from a directory source, and the next sync run would overwrite the change. Edit it where it comes from.',
+            'This account is synced from a directory source. Edit it in the directory.',
           );
         }
 
@@ -1086,7 +1085,7 @@ export async function registerAdminUserRoutes(
             409,
             'directory-owned-password',
             'Password not held here',
-            'This account’s password lives in the directory that syncs it, and Syntra can only change a directory password when the current one is supplied. Change it in the directory, or send a password link instead.',
+            'This password is held in the directory. Change it there, or send a password link.',
           );
         case 'weak_password':
           // 422 rather than 400: the body parsed, and the value was understood

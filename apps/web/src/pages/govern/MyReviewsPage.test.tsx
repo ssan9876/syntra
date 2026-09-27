@@ -98,7 +98,7 @@ describe('MyReviewsPage', () => {
     // away and why.
     expect(
       within(privileged).getByText(
-        /has to be decided on its own, with a comment, because this is privileged access/,
+        /Decide on its own, with a comment: privileged access/,
       ),
     ).toBeInTheDocument();
     expect(within(privileged).queryByLabelText('Include in bulk')).toBeNull();

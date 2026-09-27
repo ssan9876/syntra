@@ -115,7 +115,7 @@ describe('the roles screen', () => {
           title: 'Cannot be saved',
           status: 409,
           detail:
-            'That would leave nobody able to administer roles, and there is no way back from it but a database client. Give somebody else rbac.manage first.',
+            'Nobody would hold rbac.manage. Give it to another account first.',
         },
         409,
       ),
@@ -126,7 +126,7 @@ describe('the roles screen', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText(/nobody able to administer roles/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nobody would hold rbac.manage/)).toBeInTheDocument();
   });
 
   /**
@@ -155,7 +155,7 @@ describe('the roles screen', () => {
     const sent = mockApi();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    await user.click(await screen.findByRole('button', { name: 'Grant role' }));
     const picker = screen.getByLabelText('Account');
     // jdoe already holds it: offering them again invites an assignment the
     // unique index refuses.
@@ -199,7 +199,7 @@ describe('the roles screen', () => {
     await screen.findByRole('heading', { name: /Owner/ });
     // No control that opens onto an empty picker.
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: 'Grant to someone' })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('button', { name: 'Grant role' })).not.toBeInTheDocument(),
     );
     expect(user).toBeTruthy();
   });
@@ -501,7 +501,7 @@ describe('granting within one org unit', () => {
     const sent = mockScoped();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    await user.click(await screen.findByRole('button', { name: 'Grant role' }));
     await user.selectOptions(screen.getByLabelText('Scope'), 'ou2');
     await user.selectOptions(screen.getByLabelText('Account'), 'u2');
     await user.click(screen.getByRole('button', { name: 'Grant' }));
@@ -521,7 +521,7 @@ describe('granting within one org unit', () => {
     const sent = mockScoped();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    await user.click(await screen.findByRole('button', { name: 'Grant role' }));
     expect(screen.getByLabelText('Scope')).toHaveDisplayValue('Everywhere in this tenant');
     await user.selectOptions(screen.getByLabelText('Account'), 'u2');
     await user.click(screen.getByRole('button', { name: 'Grant' }));
@@ -545,7 +545,7 @@ describe('granting within one org unit', () => {
     mockScoped();
     renderPage();
 
-    await user.click(await screen.findByRole('button', { name: 'Grant to someone' }));
+    await user.click(await screen.findByRole('button', { name: 'Grant role' }));
     const picker = screen.getByLabelText('Account');
 
     await user.selectOptions(screen.getByLabelText('Scope'), 'ou1');

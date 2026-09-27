@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import {
   entraTargetConnector,
   forgetEntraTokens,
@@ -151,6 +151,7 @@ const stateOf = (receiptId: string, operationId: string) =>
 beforeEach(async () => {
   await resetDatabase();
   tenantId = (await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } })).id;
+  await verifyTestEmailDomains(tenantId);
   forgetEntraTokens();
   graph = await startFakeGraphServer({
     tenantId: TENANT_GUID,
@@ -176,7 +177,7 @@ describe('a receipt whose person already has an account at the target', () => {
 
     const after = await stateOf(first.receiptId, first.operationId);
     expect(after.receipt.status).toBe('applied');
-    expect(after.receipt.message).toMatch(/confirmed by read-back/);
+    expect(after.receipt.message).toMatch(/confirmed by read-back/i);
     expect(after.step.status).toBe('succeeded');
     expect(after.operation.status).toBe('completed');
     // The empty preview is closed like an applied empty run, not left
@@ -213,7 +214,7 @@ describe('a receipt whose person already has an account at the target', () => {
 
     const after = await stateOf(receiptId, operationId);
     expect(after.receipt.status).toBe('verification_pending');
-    expect(after.receipt.message).toMatch(/needed no changes.*did not match.*Manual verification is required/);
+    expect(after.receipt.message).toMatch(/No changes needed.*did not match.*Manual verification is required/);
     expect(after.step.status).toBe('running');
     expect(after.step.responseCategory).toBe('read_back_incomplete');
     expect(after.operation.status).not.toBe('completed');

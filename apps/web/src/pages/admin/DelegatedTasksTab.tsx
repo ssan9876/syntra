@@ -127,7 +127,7 @@ export function DelegatedTasksTab() {
           {!data && loading && <SkeletonRows rows={3} cols={4} />}
           {data && tasks.length === 0 && !adding && (
             <div className="p-6">
-              <Empty title="Nothing is delegated yet" />
+              <Empty title="No tasks yet" />
             </div>
           )}
 
@@ -174,7 +174,7 @@ export function DelegatedTasksTab() {
                             {audience.ids.length} group{audience.ids.length === 1 ? '' : 's'}
                           </Status>
                         )}
-                        {audience.kind === 'other' && <Status tone="neutral">A rule</Status>}
+                        {audience.kind === 'other' && <Status tone="neutral">Custom rule</Status>}
                       </td>
                       <td>
                         <div className="row-actions">
@@ -261,7 +261,7 @@ function TaskRuns({ taskId }: { taskId: string }) {
 
   const runs = data?.runs ?? [];
   if (runs.length === 0) {
-    return <div className="p-4 text-muted">Nobody has run this yet.</div>;
+    return <div className="p-4 text-muted">No runs yet.</div>;
   }
 
   return (
@@ -357,7 +357,7 @@ function TaskForm({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+          : 'Task not saved.',
       );
     } finally {
       setBusy(false);

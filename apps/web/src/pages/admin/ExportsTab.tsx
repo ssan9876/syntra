@@ -72,7 +72,7 @@ const LABEL: Record<ExportRow['status'], string> = {
  * one revocation cannot say different things.
  */
 function describeChange(row: Pick<ExportRow, 'kind' | 'status'>): string {
-  const erased = row.status === 'revoked' || row.status === 'expired' ? '; its file has been erased' : '';
+  const erased = row.status === 'revoked' || row.status === 'expired' ? ', file erased' : '';
   return `${KIND[row.kind] ?? row.kind} export: ${LABEL[row.status].toLowerCase()}${erased}`;
 }
 
@@ -131,11 +131,11 @@ export function ExportsTab() {
     try {
       await api(`/api/admin/exports/${row.id}/revoke`, { method: 'POST', body: JSON.stringify({}) });
       setAnnouncement(describeChange({ ...row, status: 'revoked' }));
-      toast({ title: 'Export revoked', body: 'Its file has been erased.' });
+      toast({ title: 'Export revoked', body: `${KIND[row.kind] ?? row.kind} file erased.` });
       reload();
     } catch (cause) {
       setProblem(
-        cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The export could not be revoked.',
+        cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Export could not be revoked.',
       );
     } finally {
       setBusy(null);

@@ -68,6 +68,21 @@ const tenant = await prisma.tenant.upsert({
   },
 });
 
+// The demo tenant's address domains, verified so its people and the browser
+// tests can be given business emails. Outside the seeded-marker check, so a
+// database seeded before domains existed gets them too.
+await withTenant(tenant.id, (tx) =>
+  tx.emailDomain.createMany({
+    data: ['acme.localhost', 'acme.test'].map((domain) => ({
+      tenantId: tenant.id,
+      domain,
+      verificationToken: 'seed',
+      verifiedAt: new Date(),
+    })),
+    skipDuplicates: true,
+  }),
+);
+
 await withTenant(tenant.id, async (tx) => {
   const seeded = seedMarkerFound({
     adminUser: (await tx.user.findFirst({ where: { login: 'admin' } })) !== null,

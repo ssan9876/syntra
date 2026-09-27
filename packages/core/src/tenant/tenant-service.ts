@@ -289,8 +289,7 @@ export async function updateTenant(
 export class DomainTakenError extends Error {
   constructor(readonly domain: string) {
     super(
-      `the hostname "${domain}" already reaches another tenant — a request ` +
-        `arriving on it would resolve to whichever was found first`,
+      `Hostname "${domain}" is already used by another tenant.`,
     );
     this.name = 'DomainTakenError';
   }
@@ -331,10 +330,8 @@ export async function assertDomainsFree(
 export class PasskeysWouldBreakError extends Error {
   constructor(readonly count: number) {
     super(
-      `changing the primary domain will invalidate ${count} registered security ` +
-        `${count === 1 ? 'key' : 'keys'}: WebAuthn binds each one to the domain it ` +
-        `was created against, and they cannot be migrated. Whoever holds them will ` +
-        `have to enrol again.`,
+      `Changing the primary domain will invalidate ${count} registered security ` +
+        `${count === 1 ? 'key' : 'keys'}. Their owners will have to enrol again.`,
     );
     this.name = 'PasskeysWouldBreakError';
   }
