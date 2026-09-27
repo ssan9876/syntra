@@ -76,6 +76,18 @@ describe('dnWithin and domainRootOf', () => {
   });
 });
 
+describe('dnWithin on untidy input', () => {
+  it('ignores spaces around commas and equals signs', () => {
+    expect(dnWithin('CN=a , OU = Staff ,DC=acme,DC=test', ' OU=Staff,  DC = acme,DC=test ')).toBe(true);
+  });
+
+  it('stays fast on a long run of spaces', () => {
+    const started = Date.now();
+    expect(dnWithin(`CN=a,OU=${' '.repeat(50_000)}x,DC=acme,DC=test`, 'OU=Staff,DC=acme,DC=test')).toBe(false);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
 describe('adTargetConnector delete_account', () => {
   it('deletes a disabled account inside the base DN', async () => {
     directory.entries.push({ dn: 'CN=ann,OU=Staff,DC=acme,DC=test', entryUUID: 'u-1', userAccountControl: '514' });

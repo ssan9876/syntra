@@ -978,7 +978,14 @@ function rangedAttributeIn(entry: Record<string, unknown>): string | undefined {
 
 /** A DN folded for comparison: case and the spaces around `,` and `=`. */
 function foldDn(dn: string): string {
-  return dn.trim().replace(/\s*([,=])\s*/g, '$1').toLowerCase();
+  // Split and trim rather than a `\s*([,=])\s*` regex, which backtracks
+  // polynomially on a long run of spaces.
+  return dn
+    .split(',')
+    .map((rdn) => rdn.split('=').map((part) => part.trim()).join('='))
+    .join(',')
+    .trim()
+    .toLowerCase();
 }
 
 /** Whether `dn` sits anywhere below `container`. */
