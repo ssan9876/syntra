@@ -233,7 +233,7 @@ async function recordSkip(
   reason: string,
   detail: Record<string, unknown> = {},
 ): Promise<void> {
-  oplog('warn', `provisioning run skipped: ${reason}`, { tenantId, targetSystemId, ...detail });
+  oplog('warn', `provisioning run skipped: ${reason.replace(/^Skipped:\s*/, '')}`, { tenantId, targetSystemId, ...detail });
   await withTenant(tenantId, async (tx) => {
     await tx.targetSystem.update({
       where: { id: targetSystemId },
@@ -343,9 +343,9 @@ export async function runProvisionJob(
 
       if (!abandoned) {
         const reason = awaitingReview
-          ? `Skipped: run from ${minuteUtc(inFlight.startedAt)} is awaiting review. Apply or cancel it.`
-          : `Skipped: run from ${minuteUtc(aliveAt)} is still in progress.`;
-        oplog('warn', `provisioning run skipped: ${reason}`, {
+          ? `Skipped: run from ${minuteUtc(inFlight.startedAt)} is awaiting review (${inFlight.status}). Apply or cancel it.`
+          : `Skipped: run from ${minuteUtc(aliveAt)} is still in progress (${inFlight.status}).`;
+        oplog('warn', `provisioning run skipped: ${reason.replace(/^Skipped:\s*/, '')}`, {
           tenantId: payload.tenantId,
           targetSystemId: payload.targetSystemId,
           blockedRunId: inFlight.id,

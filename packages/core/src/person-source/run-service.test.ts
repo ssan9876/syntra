@@ -290,7 +290,7 @@ describe('previewImportRun', () => {
     expect(second.mappingFailures).toBe(5);
     expect(second.personsAbsent).toBe(0);
     expect(await changesOf(second.id)).toEqual([]);
-    expect(second.mappingFailureReasons.join(' ')).toMatch(/no leaver is proposed/);
+    expect(second.mappingFailureReasons.join(' ')).toMatch(/No leavers are proposed/);
 
     const stillHere = await withTenant(tenantId, (tx) =>
       tx.person.count({ where: { status: 'active' } }),

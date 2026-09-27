@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { entraIdDocument, forgetEntraTokens } from '@syntra/connectors';
 import { vi } from 'vitest';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 // `localMasterKeyProvider`, which is what packages/core/src/vault/master-key.ts
 // actually exports. There is no `staticMasterKeyProvider`; the existing
 // `auth/authorize.test.ts` and `auth/mfa/totp.test.ts` both import this one.
@@ -42,6 +42,7 @@ const config = {
 beforeEach(async () => {
   await resetDatabase();
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+  await verifyTestEmailDomains(t.id);
   tenantId = t.id;
 });
 

@@ -1,5 +1,5 @@
 import { prisma } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import { loadConfig, memoryTransport, type Scheduler, type TxtLookup } from '@syntra/core';
 import { buildApp } from './app.js';
 
@@ -114,12 +114,18 @@ export async function buildTestApp(
      * test asks real DNS about a domain.
      */
     txtLookup?: TxtLookup;
+    /**
+     * Email domains verified for the tenant. Defaults to the ones test
+     * fixtures use; pass `[]` for a tenant with none.
+     */
+    verifiedDomains?: readonly string[];
   } = {},
 ) {
   await resetDatabase();
   const tenant = await prisma.tenant.create({
     data: { name: 'Acme', slug: 'acme' },
   });
+  await verifyTestEmailDomains(tenant.id, options.verifiedDomains);
 
   const config = loadConfig({
     DATABASE_URL:

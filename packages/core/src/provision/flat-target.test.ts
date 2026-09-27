@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import {
   entraTargetConnector,
   forgetEntraTokens,
@@ -148,6 +148,7 @@ async function previewAndApply(targetId: string, connector: TargetConnector<neve
 beforeEach(async () => {
   await resetDatabase();
   const t = await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+  await verifyTestEmailDomains(t.id);
   tenantId = t.id;
 });
 

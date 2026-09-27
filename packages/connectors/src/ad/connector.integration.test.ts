@@ -1132,7 +1132,7 @@ describe('adTargetConnector — the account lifecycle', () => {
       entitlementDns: [`CN=Vanished,${groupsOu}`],
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/membership/i);
+    expect(result.message).toMatch(/not archived/i);
 
     // And it did NOT move: the archive is retried whole rather than half-done.
     const { searchEntries } = await admin.search(archiveOu, {

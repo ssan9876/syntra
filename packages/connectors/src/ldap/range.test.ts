@@ -240,6 +240,6 @@ describe('readRangedAttribute', () => {
 
     await expect(
       readRangedAttribute(client, 'CN=Big', 'member', { pageStep: 2 }),
-    ).rejects.toThrow(/did not advance/);
+    ).rejects.toThrow(/same range window twice/);
   });
 });

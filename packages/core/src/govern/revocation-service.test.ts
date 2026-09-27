@@ -990,7 +990,7 @@ describe('reflectRevocationOutcomes — the vocabulary rule', () => {
       tx.governFinding.findFirstOrThrow({ where: { kind: 'dispatch_not_applied' } }),
     );
     expect((finding.detail as { statement?: string }).statement).toContain(
-      'still shows the holding',
+      'still shows the access',
     );
     const item = await withTenant(tenantId, (tx) =>
       tx.campaignItem.findFirstOrThrow({ where: { resourceId: entitlementIds[0]! } }),

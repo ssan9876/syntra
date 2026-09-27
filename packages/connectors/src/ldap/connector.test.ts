@@ -302,7 +302,7 @@ describe('ldapConnector.write', () => {
       reason: 'unused',
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/not implemented/i);
+    expect(result.message).toMatch(/not supported/i);
   });
 });
 

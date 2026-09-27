@@ -458,7 +458,7 @@ describe('verifyIncremental', () => {
     expect(finding.severity).toBe('critical');
     expect(finding.detail).toMatchObject({ checkpointSequence: 4 });
     expect(String((finding.detail as Record<string, unknown>)['statement'])).toContain(
-      'does not carry a valid signature',
+      'Checkpoint signature is not valid',
     );
   });
 

@@ -153,7 +153,7 @@ describe('lifecycle operations', () => {
       tenantId, personId, kind: 'onboard', idempotencyKey: 'hire-HR-1046', input: {},
       steps: [{ key: 'targets', title: 'Provision targets', required: true }],
     });
-    await expect(assertRetryAfterVerification(tenantId, operation.id)).rejects.toThrow(/read-back/i);
+    await expect(assertRetryAfterVerification(tenantId, operation.id)).rejects.toThrow(/Read the target back/);
     const step = operation.steps[0]!;
     await withTenant(tenantId, (tx) => tx.lifecycleObservation.create({
       data: {

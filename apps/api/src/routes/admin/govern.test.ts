@@ -532,7 +532,7 @@ describe('Refresh now enqueues somebody else’s job and says whose', () => {
     );
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({
-      detail: expect.stringContaining('never reads a source itself'),
+      detail: expect.stringContaining('Nothing was queued'),
     });
   });
 });

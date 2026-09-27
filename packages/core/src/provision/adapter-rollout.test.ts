@@ -267,7 +267,7 @@ describe('canary and rollback', () => {
     await expect(setTargetAdapterSelection(tenantId, actor, targetId, { channel: 'canary', version: null, reason: 'Try the untested one' }, { catalog: uncertified }))
       .rejects.toThrow(/is not certified/);
     await expect(setTargetAdapterSelection(tenantId, actor, targetId, { channel: 'stable', version: '9.9.9', reason: 'Pin to nothing at all' }, { catalog: uncertified }))
-      .rejects.toThrow(/no activeDirectory adapter release 9\.9\.9/);
+      .rejects.toThrow(/activeDirectory adapter release 9\.9\.9 is not in the connector catalog/);
   });
 });
 

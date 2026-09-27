@@ -233,7 +233,7 @@ describe('refusals', () => {
   });
 
   it('refuses an image whose content does not match its type', async () => {
-    await refused({ kind: 'image', dataUri: dataUri('image/png', jpeg()) }, /actually a JPEG/);
+    await refused({ kind: 'image', dataUri: dataUri('image/png', jpeg()) }, /labelled PNG but is a JPEG/);
   });
 
   it('refuses markup dressed as a PNG', async () => {

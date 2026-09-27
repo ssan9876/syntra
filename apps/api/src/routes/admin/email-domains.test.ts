@@ -23,7 +23,7 @@ describe('email domains', () => {
   it('adds a domain unverified, verifies it from DNS, and records both', async () => {
     const published = new Map<string, string[]>();
     const lookup: TxtLookup = async (name) => published.get(name) ?? [];
-    ctx = await buildTestApp({ txtLookup: lookup });
+    ctx = await buildTestApp({ txtLookup: lookup, verifiedDomains: [] });
     const cookie = await adminCookie([PERMISSIONS.TENANT_MANAGE]);
     const call = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: Record<string, unknown>) =>
       ctx.app.inject({ method, url, headers: { host: ctx.host, cookie }, ...(payload === undefined ? {} : { payload }) });
@@ -70,7 +70,7 @@ describe('email domains', () => {
   });
 
   it('refuses a business email outside every verified domain, and accepts one inside', async () => {
-    ctx = await buildTestApp({ txtLookup: async () => [] });
+    ctx = await buildTestApp({ txtLookup: async () => [], verifiedDomains: [] });
     const cookie = await adminCookie([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.IDENTITY_WRITE, PERMISSIONS.IDENTITY_READ]);
     const create = (businessEmail: string) => ctx.app.inject({
       method: 'POST', url: '/api/admin/persons', headers: { host: ctx.host, cookie },

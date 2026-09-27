@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
-import { resetDatabase } from '@syntra/db/src/test-support.js';
+import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import {
   entraTargetConnector,
   forgetEntraTokens,
@@ -151,6 +151,7 @@ const stateOf = (receiptId: string, operationId: string) =>
 beforeEach(async () => {
   await resetDatabase();
   tenantId = (await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } })).id;
+  await verifyTestEmailDomains(tenantId);
   forgetEntraTokens();
   graph = await startFakeGraphServer({
     tenantId: TENANT_GUID,
