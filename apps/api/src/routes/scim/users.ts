@@ -2,9 +2,11 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { TenantClient } from '@syntra/db';
 import { Prisma } from '@syntra/db';
 import {
+  EmailInUseError,
   PERMISSIONS,
   ScimError,
   createPerson,
+  personOwnedEmail,
   matchPersonForAccount,
   createUser,
   deactivateUser,
@@ -92,6 +94,12 @@ async function assertOwned(tx: TenantClient, id: string, sourceId: string) {
       'This account is owned by another source and cannot be changed through SCIM.',
     );
   }
+}
+
+/** The person's business email for a linked login, or null. */
+async function linkedPersonEmail(tx: TenantClient, id: string): Promise<string | null> {
+  const row = await tx.user.findUnique({ where: { id }, select: { personId: true } });
+  return personOwnedEmail(tx, row?.personId);
 }
 
 /** Case-insensitively, matching the index and `createUser`'s own check. */
@@ -215,11 +223,14 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
         }
 
         const personId = await linkedPersonId(tx, input);
+        // A person's login carries the person's business email.
+        const personEmail = await personOwnedEmail(tx, personId);
 
         const user = await createUser(tx, {
           login: input.userName,
-          email: input.email ?? '',
+          email: personEmail ?? input.email ?? '',
           displayName: input.displayName,
+          ...(personId === null ? {} : { personId }),
         });
 
         // Ownership, the anchor and the person link in one update.
@@ -283,12 +294,14 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
         if (before.status === 'active' && !input.active) {
           await deactivateUser(tx, id, 'deactivated over SCIM');
         }
+        // A linked login's email is the person's; the IdP does not set it.
+        const personEmail = await linkedPersonEmail(tx, id);
 
         const row = await tx.user.update({
           where: { id },
           data: {
             login: input.userName,
-            email: input.email ?? '',
+            email: personEmail ?? input.email ?? '',
             displayName: input.displayName,
             // Only when the payload carries one. A full replace that omits
             // externalId -- which some Okta profile mappings do -- would
@@ -358,6 +371,8 @@ export async function registerScimUserRoutes(app: FastifyInstance): Promise<void
               await audit(request, tx, 'scim.user_updated', id, { displayName: true });
               break;
             case 'setEmail':
+              // Ignored for a linked login: the person owns the address.
+              if ((await linkedPersonEmail(tx, id)) !== null) break;
               await tx.user.update({ where: { id }, data: { email: operation.value } });
               await audit(request, tx, 'scim.user_updated', id, { email: true });
               break;
@@ -480,6 +495,10 @@ async function createdPersonId(
     });
     return person.id;
   } catch (cause) {
+    // Rejected: another person already has this address.
+    if (cause instanceof EmailInUseError) {
+      throw new ScimError(409, 'uniqueness', cause.message);
+    }
     if (
       cause instanceof Prisma.PrismaClientKnownRequestError &&
       cause.code === 'P2002'

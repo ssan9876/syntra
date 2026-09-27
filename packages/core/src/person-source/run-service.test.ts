@@ -650,3 +650,112 @@ describe('a read that throws a message PostgreSQL will not store', () => {
     expect(run.mappingFailureReasons.join(' ')).not.toContain(NUL);
   });
 });
+
+/**
+ * One business email per person. A source row whose address another person
+ * already has is rejected on the run, never written.
+ */
+describe('business email uniqueness', () => {
+  const emailRule = { recordType: 'person' as const, sourceColumn: 'email', targetField: 'businessEmail', transform: 'lowercase' as const, isCorrelation: false };
+
+  beforeEach(async () => {
+    await withTenant(tenantId, (tx) => setPersonMappings(tx, sourceId, [...rules, emailRule]));
+  });
+
+  it('withholds an update to an address another person has', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([row('1', { email: 'ada@example.test' })]));
+    const first = await previewImportRun(tenantId, provider, sourceId);
+    await applyImportRun(tenantId, first.id);
+    await withTenant(tenantId, (tx) => tx.person.create({
+      data: { tenantId, givenName: 'Grace', familyName: 'Hopper', businessEmail: 'grace@example.test' },
+    }));
+
+    connectorFor.mockReturnValue(new FakePersonSource([row('1', { email: 'GRACE@example.test' })]));
+    const second = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(second.mappingFailures).toBe(1);
+    expect(second.mappingFailureReasons).toContain('Employee "1": Grace Hopper already has grace@example.test. Row withheld.');
+    expect(second.personsAbsent).toBe(0);
+    expect(await changesOf(second.id)).toEqual([]);
+  });
+
+  it('withholds a new person whose address an inactive person has', async () => {
+    await withTenant(tenantId, (tx) => tx.person.create({
+      data: { tenantId, givenName: 'Grace', familyName: 'Hopper', businessEmail: 'grace@example.test', status: 'inactive' },
+    }));
+    connectorFor.mockReturnValue(new FakePersonSource([row('9', { email: 'grace@example.test' })]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(1);
+    expect(run.mappingFailureReasons).toContain('Employee "9": Grace Hopper already has grace@example.test. Row withheld.');
+    expect(await changesOf(run.id)).toEqual([]);
+    expect(await listDuplicateReviews(tenantId)).toEqual([]);
+  });
+
+  it('withholds every row of a file that repeats an address', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([
+      row('1', { email: 'ada@example.test' }),
+      row('2', { email: 'Ada@Example.test' }),
+      row('3', { email: 'other@example.test' }),
+    ]));
+
+    const run = await previewImportRun(tenantId, provider, sourceId);
+
+    expect(run.mappingFailures).toBe(2);
+    expect(run.mappingFailureReasons).toContain('Business email "ada@example.test" appears on more than one row. All its rows were withheld.');
+    const created = (await changesOf(run.id)).filter((change) => change.changeType === 'create_person');
+    expect(created.map((change) => change.externalId)).toEqual(['3']);
+  });
+
+  it('refuses keeping two people on one address in duplicate review', async () => {
+    const actor = await withTenant(tenantId, async (tx) => {
+      await tx.person.create({
+        data: { tenantId, givenName: 'Existing', familyName: 'Person', businessEmail: 'ada@example.test' },
+      });
+      return (await tx.user.create({ data: { tenantId, login: 'reviewer', email: 'reviewer@example.test', displayName: 'Reviewer' } })).id;
+    });
+    connectorFor.mockReturnValue(new FakePersonSource([row('new-1', { email: 'ada@example.test' })]));
+    await previewImportRun(tenantId, provider, sourceId);
+    const reviews = await listDuplicateReviews(tenantId);
+
+    await expect(
+      resolveDuplicateReview(tenantId, reviews[0]!.id, actor, 'keep_separate', 'They are two different people'),
+    ).rejects.toThrow('Existing Person already has ada@example.test. Link to this person or skip the incoming HR record.');
+    expect(await listDuplicateReviews(tenantId)).toHaveLength(1);
+  });
+
+  it('fails a create at apply when the address was taken after the preview', async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([row('1', { email: 'ada@example.test' })]));
+    const run = await previewImportRun(tenantId, provider, sourceId);
+    await withTenant(tenantId, (tx) => tx.person.create({
+      data: { tenantId, givenName: 'Grace', familyName: 'Hopper', businessEmail: 'ADA@example.test' },
+    }));
+
+    const result = await applyImportRun(tenantId, run.id);
+
+    expect(result.failed).toBeGreaterThan(0);
+    const create = (await changesOf(run.id)).find((change) => change.changeType === 'create_person');
+    expect(create?.status).toBe('failed');
+    expect(create?.message).toBe('Grace Hopper already has ada@example.test.');
+  });
+
+  it("carries a changed address onto the person's linked login", async () => {
+    connectorFor.mockReturnValue(new FakePersonSource([row('1', { email: 'ada@example.test' })]));
+    const first = await previewImportRun(tenantId, provider, sourceId);
+    await applyImportRun(tenantId, first.id);
+    const userId = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.findFirstOrThrow({ where: { externalId: '1' } });
+      return (await tx.user.create({
+        data: { tenantId, login: 'ada', email: 'ada@example.test', displayName: 'Ada', personId: person.id },
+      })).id;
+    });
+
+    connectorFor.mockReturnValue(new FakePersonSource([row('1', { email: 'ada.lovelace@example.test' })]));
+    const second = await previewImportRun(tenantId, provider, sourceId);
+    await applyImportRun(tenantId, second.id);
+
+    const user = await withTenant(tenantId, (tx) => tx.user.findUniqueOrThrow({ where: { id: userId } }));
+    expect(user.email).toBe('ada.lovelace@example.test');
+  });
+});

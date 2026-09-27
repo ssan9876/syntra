@@ -351,6 +351,11 @@ interface ExistingSnapshot {
    * three object types, so one map serves all of them.
    */
   fields: Map<string, Record<string, string>>;
+  /**
+   * Fields the source does not write, keyed by row id. A login linked to a
+   * person takes its email from the person, never from the directory.
+   */
+  locked?: Map<string, ReadonlySet<string>>;
 }
 
 interface DiffInput {
@@ -492,7 +497,7 @@ function computeDiff(input: DiffInput) {
     const rows = input.existing.objects.filter((e) => e.objectType === type);
     const correlations = correlate(ofType, rows, input.sourceId);
     const absent = absentAnchors(ofType, rows, input.sourceId, unmappable[type]);
-    changes.push(...diffObjects(correlations, absent, input.existing.fields));
+    changes.push(...diffObjects(correlations, absent, input.existing.fields, input.existing.locked));
 
     if (type === 'group') {
       for (const correlation of correlations) {
@@ -660,12 +665,33 @@ async function loadExisting(
     fields.set(o.id, { name: o.name, parentAnchor: placement(o.parentId) });
   }
 
+  // A linked login's email is its person's business email. Only when the
+  // person has one: otherwise the login keeps the directory's address.
+  const linkedPersonIds = [...new Set(users.flatMap((u) => (u.personId ? [u.personId] : [])))];
+  const withEmail = linkedPersonIds.length === 0
+    ? new Set<string>()
+    : new Set(
+        (
+          await tx.person.findMany({
+            where: { id: { in: linkedPersonIds }, businessEmail: { not: null } },
+            select: { id: true, businessEmail: true },
+          })
+        )
+          .filter((p) => p.businessEmail!.trim() !== '')
+          .map((p) => p.id),
+      );
+  const locked = new Map<string, ReadonlySet<string>>();
+  for (const u of users) {
+    if (u.personId && withEmail.has(u.personId)) locked.set(u.id, new Set(['email']));
+  }
+
   const userField = correlationFieldFor(rules, 'user', 'login');
   const groupField = correlationFieldFor(rules, 'group', 'name');
   const unitField = correlationFieldFor(rules, 'orgUnit', 'name');
 
   return {
     fields,
+    locked,
     objects: [
       ...users.map((u) => ({
         id: u.id,

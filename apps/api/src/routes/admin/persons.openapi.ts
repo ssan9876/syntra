@@ -26,7 +26,13 @@ export const personsOpenApi = describeAdminRoutes('Persons', {
     summary: "Explain a person's access in every target system",
     params: idParam,
   },
-  'POST /persons': { summary: 'Create a person', body: createPersonRequest, status: 201 },
+  'POST /persons': {
+    summary: 'Create a person',
+    description:
+      'A `businessEmail` another person already has, in any case, is refused with `email-in-use` (409), whatever `allowDuplicate` says.',
+    body: createPersonRequest,
+    status: 201,
+  },
   'POST /persons/:id/contracts': {
     summary: 'Add a contract to a person',
     body: createContractRequest,
@@ -35,6 +41,8 @@ export const personsOpenApi = describeAdminRoutes('Persons', {
   },
   'POST /persons/:id/link-user': {
     summary: 'Link a user account to a person',
+    description:
+      "The account's email becomes the person's `businessEmail` when they have one. Refused with `email-in-use` when another unlinked active local account already has that address.",
     body: linkUserRequest,
     params: idParam,
     status: 204,
@@ -50,13 +58,13 @@ export const personsOpenApi = describeAdminRoutes('Persons', {
   'POST /persons/import': {
     summary: 'Import persons from CSV',
     description:
-      'The CSV travels as a string in the JSON body. A file with no usable rows is refused with a `csv-invalid` problem listing the row errors; rows naming a person owned by an HR source are refused rather than applied.',
+      'The CSV travels as a string in the JSON body. A file with no usable rows is refused with a `csv-invalid` problem listing the row errors; rows naming a person owned by an HR source, and rows whose business email another person has, are refused rather than applied.',
     body: importRequest,
   },
   'PATCH /persons/:id': {
     summary: 'Update a person',
     description:
-      'For a source-owned person, fields the source maps are refused, because the next import would revert them.',
+      "For a source-owned person, fields the source maps are refused, because the next import would revert them. A `businessEmail` another person has is refused with `email-in-use`; a new one is carried onto the person's linked accounts.",
     body: patchPersonRequest,
     params: idParam,
   },

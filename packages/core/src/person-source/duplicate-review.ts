@@ -10,6 +10,17 @@ export class DuplicateReviewNotFoundError extends Error {
   }
 }
 
+/**
+ * `keep_separate` on a review raised by a shared business email: two people
+ * cannot share one, so the choice is to link or to skip.
+ */
+export class DuplicateResolutionRefusedError extends Error {
+  constructor(readonly reviewId: string, message: string) {
+    super(message);
+    this.name = 'DuplicateResolutionRefusedError';
+  }
+}
+
 export class PersonSourceLinkNotFoundError extends Error {
   constructor(readonly linkId: string) {
     super(`no such person source link ${linkId}`);
@@ -82,17 +93,23 @@ export function resolveDuplicateReview(
       include: { change: { select: { externalId: true } } },
     });
     if (!review) throw new DuplicateReviewNotFoundError(reviewId);
+    if (resolution === 'keep_separate') {
+      const candidate = await tx.person.findUnique({
+        where: { id: review.candidatePersonId },
+        select: { givenName: true, familyName: true },
+      });
+      const name = candidate ? `${candidate.givenName} ${candidate.familyName}` : 'The existing person';
+      throw new DuplicateResolutionRefusedError(
+        reviewId,
+        `${name} already has ${review.matchedValue}. Link to this person or skip the incoming HR record.`,
+      );
+    }
     const reviewedAt = new Date();
     await tx.personDuplicateReview.updateMany({
       where: { changeId: review.changeId, status: 'open' },
       data: { status: 'resolved', resolution, note, reviewedByUserId: actorUserId, reviewedAt },
     });
-    if (resolution === 'keep_separate') {
-      await tx.personImportChange.update({
-        where: { id: review.changeId },
-        data: { status: 'proposed', message: 'Kept as a separate person despite a matching business email.' },
-      });
-    } else if (resolution === 'link_existing') {
+    if (resolution === 'link_existing') {
       if (review.change.externalId === null) {
         throw new Error('Cannot link a source record that has no external ID.');
       }

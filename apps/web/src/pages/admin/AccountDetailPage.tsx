@@ -60,7 +60,11 @@ interface AccountDetail {
    * otherwise the linked person's. See `orgUnitLabel`.
    */
   effectiveOrgUnit?: EffectiveOrgUnit | null;
-  person: { id: string; givenName: string; familyName: string } | null;
+  /**
+   * `businessEmail` is this account's email when set: a linked account takes
+   * its person's address, changed on the person.
+   */
+  person: { id: string; givenName: string; familyName: string; businessEmail?: string | null } | null;
 }
 
 interface SourceRow {
@@ -204,6 +208,8 @@ export function AccountDetailPage() {
     ? (sourcesData?.sources ?? []).find((s) => s.id === data.sourceId)
     : null;
   const local = data.sourceId === null;
+  // A linked account's email is its person's business email.
+  const personEmail = data.person?.businessEmail ? data.person.businessEmail : null;
   // Whether Syntra may disable the account where it actually lives. A status
   // changed locally on a source-owned account is undone by the next run, so
   // the control is not offered where the write cannot follow.
@@ -487,7 +493,7 @@ export function AccountDetailPage() {
             }}
             build={(v) => ({
               displayName: v.displayName ?? '',
-              email: v.email ?? '',
+              ...(personEmail ? {} : { email: v.email ?? '' }),
               // Null, not ''. The schema takes a uuid or null — null takes the
               // account out of the hierarchy — and '' satisfies neither.
               orgUnitId: v.orgUnitId ? v.orgUnitId : null,
@@ -504,10 +510,16 @@ export function AccountDetailPage() {
                 <Field
                   label="Email"
                   type="email"
-                  value={v.email ?? ''}
+                  value={personEmail ?? v.email ?? ''}
                   name="email"
                   onChange={(x) => set('email', x)}
                   error={errs.email}
+                  disabled={personEmail !== null}
+                  warning={
+                    personEmail !== null && data.person
+                      ? `Business email of ${data.person.givenName} ${data.person.familyName}. Change it on ${data.person.givenName} ${data.person.familyName}.`
+                      : undefined
+                  }
                 />
                 <Select
                   label="Org unit"

@@ -81,6 +81,40 @@ describe('diffObjects', () => {
     expect(changes[0]!.after).toEqual({ email: 'new@acme.test' });
   });
 
+  it("leaves a linked login's email to its person", () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: object('a1', { login: 'jdoe', email: 'ldap@acme.test', displayName: 'J Doe' }),
+          existing: existing('u1'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe', email: 'jo.doe@acme.test', displayName: 'Jo' }]]),
+      new Map([['u1', new Set(['email'])]]),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.before).toEqual({ displayName: 'Jo' });
+    expect(changes[0]!.after).toEqual({ displayName: 'J Doe' });
+  });
+
+  it('proposes nothing when only a locked field differs', () => {
+    const changes = diffObjects(
+      [
+        {
+          kind: 'matched',
+          object: object('a1', { login: 'jdoe', email: 'ldap@acme.test' }),
+          existing: existing('u1'),
+        },
+      ],
+      [],
+      new Map([['u1', { login: 'jdoe', email: 'jo.doe@acme.test' }]]),
+      new Map([['u1', new Set(['email'])]]),
+    );
+    expect(changes).toEqual([]);
+  });
+
   it('proposes a reactivation for a matched object that is inactive', () => {
     const changes = diffObjects(
       [

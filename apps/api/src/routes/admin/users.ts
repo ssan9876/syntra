@@ -23,6 +23,8 @@ import {
   type MasterKeyProvider,
   hasPermission,
   linkUserToPerson,
+  personOwnedEmail,
+  userHoldingEmail,
   matchPersonForAccount,
   recordEvent,
   setPasswordAsAdmin,
@@ -397,7 +399,7 @@ export async function registerAdminUserRoutes(
    *
    * `person` is embedded rather than left as `personId` because the screen
    * links back to the person and cannot render a name from an id. It is a
-   * three-field projection, not the person record: contracts and access belong
+   * four-field projection, not the person record: contracts and access belong
    * to the person's own screen, and duplicating them here would be two places
    * to keep true.
    */
@@ -422,7 +424,9 @@ export async function registerAdminUserRoutes(
         const person = user.personId
           ? await tx.person.findUnique({
               where: { id: user.personId },
-              select: { id: true, givenName: true, familyName: true },
+              // The business email too: it is this login's email, and the
+              // console says where to change it.
+              select: { id: true, givenName: true, familyName: true, businessEmail: true },
             })
           : null;
 
@@ -518,14 +522,19 @@ export async function registerAdminUserRoutes(
           }
         }
 
+        // A person's login carries the person's business email, whatever the
+        // form sent.
+        const personEmail = personId ? await personOwnedEmail(tx, personId) : null;
+
         let created;
         try {
           created = await createUser(tx, {
             login: body.login,
-            email: body.email,
+            email: personEmail ?? body.email,
             displayName: body.displayName,
             ...(body.orgUnitId ? { orgUnitId: body.orgUnitId } : {}),
             kind,
+            ...(personId ? { personId } : {}),
           });
         } catch (error) {
           // Both pre-checks in `createUser` raise a plain Error so the domain
@@ -973,19 +982,34 @@ export async function registerAdminUserRoutes(
           );
         }
 
-        if (body.email !== undefined) {
+        // A linked login's email is the person's business email, changed on
+        // the person. Sending the same address back is not a change.
+        const personEmail = await personOwnedEmail(tx, existing.personId);
+        if (
+          personEmail !== null &&
+          body.email !== undefined &&
+          body.email.trim().toLowerCase() !== personEmail.trim().toLowerCase()
+        ) {
+          const person = await tx.person.findUniqueOrThrow({
+            where: { id: existing.personId! },
+            select: { givenName: true, familyName: true },
+          });
+          const name = `${person.givenName} ${person.familyName}`;
+          throw new ProblemError(
+            409,
+            'email-set-by-person',
+            'Email set by the person',
+            `${existing.login} uses the business email of ${name}. Change it on ${name}.`,
+            { errors: [{ path: 'email', message: `set by ${name}` }] },
+          );
+        }
+
+        if (body.email !== undefined && personEmail === null) {
           // Same rule as the create path and the partial index behind it:
           // active, locally managed accounts only, case-insensitively.
           // Excluding this account is what lets a rename leave the address
           // alone without colliding with itself.
-          const sharing = await tx.user.findFirst({
-            where: {
-              email: { equals: body.email, mode: 'insensitive' },
-              sourceId: null,
-              status: 'active',
-              id: { not: id },
-            },
-          });
+          const sharing = await userHoldingEmail(tx, body.email, { exceptUserId: id });
           if (sharing) {
             throw new ProblemError(
               409,
@@ -1005,7 +1029,7 @@ export async function registerAdminUserRoutes(
           where: { id },
           data: {
             ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
-            ...(body.email === undefined ? {} : { email: body.email }),
+            ...(body.email === undefined || personEmail !== null ? {} : { email: body.email }),
             ...(body.orgUnitId === undefined ? {} : { orgUnitId: body.orgUnitId }),
           },
         });

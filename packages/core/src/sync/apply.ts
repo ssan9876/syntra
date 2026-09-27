@@ -5,6 +5,7 @@ import { recordEvent } from '../audit/audit-service.js';
 import { endSessions } from '../auth/end-sessions.js';
 import { unassignableFields } from './mapping.js';
 import { DISABLED_IN_SOURCE } from './diff.js';
+import { personOwnedEmail } from '../identity/person-email.js';
 
 interface ChangeRow {
   id: string;
@@ -198,10 +199,18 @@ async function performChange(
 
     case 'update_user': {
       const unit = await resolveUnit(tx, sourceId, after.parentAnchor);
+      // A linked login's email is its person's business email. The preview
+      // leaves it out; this covers a run previewed before the link was made.
+      const { email: _email, ...rest } = writable(after);
+      const target = await tx.user.findUnique({
+        where: { id: change.targetId! },
+        select: { personId: true },
+      });
+      const personOwned = (await personOwnedEmail(tx, target?.personId)) !== null;
       await tx.user.update({
         where: { id: change.targetId! },
         data: {
-          ...writable(after),
+          ...(personOwned ? rest : writable(after)),
           ...(unit === undefined ? {} : { orgUnitId: unit }),
         },
       });

@@ -23,11 +23,17 @@ describe('DuplicateReviewsTab', () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }));
     render(<MemoryRouter><DuplicateReviewsTab reviews={[review]} loading={false} error={null} reload={reload} /></MemoryRouter>);
     expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Keep as separate people' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Skip incoming HR record' }));
     expect(screen.getByText(/at least 10 characters/)).toBeVisible();
-    await userEvent.type(screen.getByLabelText('Decision note'), 'Different employees confirmed');
-    await userEvent.click(screen.getByRole('button', { name: 'Keep as separate people' }));
+    await userEvent.type(screen.getByLabelText('Decision note'), 'Contractor record, not an employee');
+    await userEvent.click(screen.getByRole('button', { name: 'Skip incoming HR record' }));
     await waitFor(() => expect(reload).toHaveBeenCalledOnce());
-    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ resolution: 'keep_separate', note: 'Different employees confirmed' });
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({ resolution: 'skip_source_record', note: 'Contractor record, not an employee' });
+  });
+
+  it('does not offer keeping two people on one business email', () => {
+    render(<MemoryRouter><DuplicateReviewsTab reviews={[review]} loading={false} error={null} reload={vi.fn()} /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: /separate/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Link to this person' })).toBeVisible();
   });
 });

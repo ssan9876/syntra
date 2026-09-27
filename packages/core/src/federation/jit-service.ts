@@ -1,6 +1,7 @@
 import { withTenant } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { createUser } from '../directory/user-service.js';
+import { personOwnedEmail } from '../identity/person-email.js';
 import type { UpstreamIdpRecord } from './upstream-service.js';
 
 export interface UpstreamProfile {
@@ -100,10 +101,17 @@ export async function linkOrProvision(
         // attribute either collides with somebody else's account or silently
         // renames the one an administrator is looking at. A changed upstream
         // login is an attribute change, and the link is what carries identity.
+        // Nor the email of a login linked to a person: the person's business
+        // email is its address.
+        const linked = await tx.user.findUnique({
+          where: { id: link.userId },
+          select: { personId: true },
+        });
+        const personEmail = await personOwnedEmail(tx, linked?.personId);
         await tx.user.update({
           where: { id: link.userId },
           data: {
-            ...(profile.email ? { email: profile.email } : {}),
+            ...(profile.email && personEmail === null ? { email: profile.email } : {}),
             ...(profile.displayName ? { displayName: profile.displayName } : {}),
           },
         });

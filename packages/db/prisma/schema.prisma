@@ -403,7 +403,9 @@ model User {
   /// Case-SENSITIVE. The case-insensitive login rule, and the local-only email
   /// rule, are functional indexes in migration
   /// `20260922000000_user_duplicate_guards` — Prisma has no syntax for a
-  /// functional or a partial index, so neither can be declared here.
+  /// functional or a partial index, so neither can be declared here. Since
+  /// `20261110000000_person_email_unique` the email rule leaves out logins
+  /// linked to a person: they carry the person's business email.
   /// `createUser` pre-checks both so the caller gets a domain error rather
   /// than a driver one.
   @@unique([tenantId, login])
@@ -543,6 +545,9 @@ model Person {
   erasedCaseId               String?       @db.Uuid
   privacyCases               PrivacyCase[]
 
+  /// `businessEmail` is unique per tenant, case-insensitively, through the
+  /// partial functional index in migration `20261110000000_person_email_unique`
+  /// -- Prisma cannot declare one. `assertPersonEmailFree` pre-checks it.
   @@unique([tenantId, externalId])
   @@index([orgUnitId])
   @@index([tenantId])

@@ -81,6 +81,8 @@ export function OnboardPersonPage() {
     startDate: new Date().toISOString().slice(0, 10),
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  // A person's login uses their business email when they have one.
+  const loginEmail = v.businessEmail?.trim() ? v.businessEmail.trim() : (v.loginEmail ?? '');
   const [problem, setProblem] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState(false);
@@ -155,7 +157,7 @@ export function OnboardPersonPage() {
     if (!v.familyName?.trim()) found.familyName = 'Enter a family name';
     if (!v.startDate) found.startDate = 'Enter a start date';
     if (wantsLogin && !v.login?.trim()) found.login = 'Enter a login';
-    if (wantsLogin && !v.loginEmail?.trim()) found.email = 'Enter the login email';
+    if (wantsLogin && !loginEmail.trim()) found.email = 'Enter the login email';
     return found;
   }
 
@@ -254,7 +256,7 @@ export function OnboardPersonPage() {
           method: 'POST',
           body: JSON.stringify({
             login: v.login ?? '',
-            email: v.loginEmail ?? '',
+            email: loginEmail,
             // Falls back to the person's name rather than being sent empty:
             // the schema requires a display name, and "what shall I call this
             // account" has an obvious answer when nobody typed one.
@@ -593,9 +595,11 @@ export function OnboardPersonPage() {
                 name="email"
                 label="Email"
                 type="email"
-                value={v.loginEmail ?? ''}
+                value={loginEmail}
                 onChange={(x) => set('loginEmail', x)}
                 error={errors.email}
+                disabled={Boolean(v.businessEmail?.trim())}
+                warning={v.businessEmail?.trim() ? 'Same as Business email.' : undefined}
               />
             </>
           )}

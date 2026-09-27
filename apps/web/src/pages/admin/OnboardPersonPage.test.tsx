@@ -80,6 +80,36 @@ describe('OnboardPersonPage', () => {
     expect(screen.getByRole('button', { name: 'Add someone' })).toBeDisabled();
   });
 
+  it('uses the business email for the login', async () => {
+    const user = userEvent.setup();
+    const sent: Record<string, unknown>[] = [];
+    mockRoutes({
+      '/api/admin/org-units': () => json({ orgUnits: [] }),
+      '/api/admin/targets': () => json({ targets: [] }),
+      '/api/admin/persons': () => json({ id: 'p1' }, 201),
+      '/api/admin/persons/p1/contracts': () => json({ id: 'c1' }, 201),
+      '/api/admin/users': (init) => {
+        sent.push(JSON.parse(String(init?.body)));
+        return json({ id: 'u1' }, 201);
+      },
+      '/api/admin/persons/p1/link-user': () => json({ ok: true }),
+    });
+    renderPage();
+    await fillMinimum(user);
+    await user.type(screen.getByLabelText('Business email'), 'maya.okafor@acme.test');
+    await user.click(screen.getByLabelText('Also create a Syntra login'));
+    await user.type(screen.getByLabelText('Login'), 'mokafor');
+
+    const email = screen.getByLabelText('Email');
+    expect(email).toBeDisabled();
+    expect(email).toHaveValue('maya.okafor@acme.test');
+    expect(screen.getByText('Same as Business email.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add someone' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ login: 'mokafor', email: 'maya.okafor@acme.test' });
+  });
+
   it('creates the person, then their contract, in that order', async () => {
     const user = userEvent.setup();
     const calls: string[] = [];
