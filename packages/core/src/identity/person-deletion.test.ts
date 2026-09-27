@@ -134,7 +134,7 @@ describe('hardDeletePerson', () => {
 
   it('refuses while a privacy case is open, naming it', async () => {
     await giveThePersonHistory();
-    await withTenant(tenantId, (tx) => tx.privacyCase.updateMany({ data: { status: 'open' } }));
+    await withTenant(tenantId, (tx) => tx.privacyCase.updateMany({ data: { status: 'open', closedAt: null, closedByUserId: null } }));
 
     await expect(purge()).rejects.toMatchObject({
       code: 'open-privacy-case',
