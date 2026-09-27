@@ -112,7 +112,7 @@ describe('BreakGlass request page', () => {
     await userEvent.type(screen.getByLabelText('Sealed credential'), 'syntra_bg_sealed');
     await userEvent.type(screen.getByLabelText('Reason'), 'All security keys lost in the fire');
     await userEvent.click(screen.getByRole('button', { name: 'Request emergency access' }));
-    expect(await screen.findByText(/Every administrator has been told/)).toBeVisible();
+    expect(await screen.findByText(/All administrators notified/)).toBeVisible();
     const sent = fetch.mock.calls[0]!;
     expect(JSON.parse(String(sent[1]?.body))).toMatchObject({ login: 'glass', credential: 'syntra_bg_sealed', durationMinutes: 60 });
   });
