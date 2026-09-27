@@ -71,7 +71,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
     if ((await countHoldersOf(tx, PERMISSIONS.RBAC_MANAGE)) > 0) return;
     throw new RoleRefusedError(
       'would-strand-rbac',
-      'That would leave nobody able to administer roles, and there is no way back from it but a database client. Give somebody else rbac.manage first.',
+      'Nobody would hold rbac.manage. Give it to another account first.',
     );
   };
 
@@ -102,7 +102,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
         const created = await request.db(async (tx) => {
           const preset = ROLE_PRESETS.find((candidate) => candidate.key === key)!;
           if (await tx.role.findFirst({ where: { name: preset.name }, select: { id: true } })) {
-            throw new ProblemError(409, 'role-exists', 'A role with this name already exists', `Edit the existing "${preset.name}" role instead of creating it again.`);
+            throw new ProblemError(409, 'role-exists', 'Role already exists', `Edit the "${preset.name}" role instead.`);
           }
           const role = await createRoleFromPreset(tx, key);
           await recordEvent(tx, {

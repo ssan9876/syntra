@@ -57,7 +57,7 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
         403,
         'no-person',
         'Not available to you',
-        'This account is not linked to a person record, and reviewing is done as a person because a certification names a human.',
+        'Your account is not linked to a person record.',
       );
     }
     return user.personId;
@@ -207,7 +207,7 @@ export async function registerGovernPortalRoutes(app: FastifyInstance): Promise<
             lastCertifiedBy:
               cert === undefined
                 ? null
-                : (certifiers.get(cert.lastCertifiedByPersonId) ?? 'somebody no longer here'),
+                : (certifiers.get(cert.lastCertifiedByPersonId) ?? 'a former reviewer'),
             // §8 rule 5: the reviewer is told the AGE and the SLA before they
             // decide, on the item, and the decision records it.
             // Computed here rather than read: `ageHours` belongs to

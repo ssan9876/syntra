@@ -115,7 +115,7 @@ describe('the roles screen', () => {
           title: 'Cannot be saved',
           status: 409,
           detail:
-            'That would leave nobody able to administer roles, and there is no way back from it but a database client. Give somebody else rbac.manage first.',
+            'Nobody would hold rbac.manage. Give it to another account first.',
         },
         409,
       ),
@@ -126,7 +126,7 @@ describe('the roles screen', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Edit' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText(/nobody able to administer roles/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nobody would hold rbac.manage/)).toBeInTheDocument();
   });
 
   /**

@@ -187,7 +187,7 @@ describe('PoliciesPage', () => {
           ? json(
               {
                 status: 400,
-                title: 'That rule cannot be stored as written',
+                title: 'Invalid policy rule',
                 detail: 'ipRanges holds something that is not an address or CIDR: 10.0.0.0/33',
               },
               400,

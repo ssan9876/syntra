@@ -157,7 +157,7 @@ describe('UpdatesPage', () => {
           type: 'https://syntra.dev/problems/not-newer',
           title: 'That version is not newer',
           status: 422,
-          detail: 'This deployment is running 1.4.0, and 1.5.0 is not newer than it.',
+          detail: 'Running 1.4.0; 1.5.0 is not newer.',
         },
         422,
       ),
@@ -167,7 +167,7 @@ describe('UpdatesPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: /update to 1\.5\.0/i }));
     await userEvent.click(screen.getByRole('button', { name: /^update now$/i }));
 
-    expect(await screen.findByText(/is not newer than it/)).toBeInTheDocument();
+    expect(await screen.findByText(/1.5.0 is not newer/)).toBeInTheDocument();
   });
 
   it('reports the step an update is on in words', async () => {

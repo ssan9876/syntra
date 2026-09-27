@@ -92,7 +92,7 @@ export async function registerAutomatePortalRoutes(
         403,
         'no-person',
         'Not available to you',
-        'This account is not linked to a person record, so it cannot ask for anything or hold anything.',
+        'Your account is not linked to a person record.',
       );
     }
     return user.personId;
@@ -276,7 +276,7 @@ export async function registerAutomatePortalRoutes(
         403,
         'forbidden',
         'Forbidden',
-        'You can ask for things for yourself and for the people who report to you.',
+        'You can request only for yourself and your direct reports.',
       );
     }
     return subject;

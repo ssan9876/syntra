@@ -46,7 +46,7 @@ async function domainError<T>(fn: () => Promise<T>): Promise<T> {
       throw new ProblemError(
         400,
         'invalid-policy-rule',
-        'That rule cannot be stored as written',
+        'Invalid policy rule',
         cause.message,
       );
     }

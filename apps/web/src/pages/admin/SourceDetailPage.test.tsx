@@ -715,7 +715,7 @@ describe('deleting a source', () => {
           json(
             {
               type: 'https://syntra.dev/problems/source-counts-changed',
-              title: 'The numbers changed',
+              title: 'Counts changed',
               status: 409,
               detail:
                 'this source now owns 1200 user(s), 3 group(s) and 2 organizational unit(s), not the 12, 3 and 2 that were confirmed',

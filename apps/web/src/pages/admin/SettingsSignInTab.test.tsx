@@ -150,7 +150,7 @@ describe('SettingsSignInTab', () => {
               type: 'https://syntra.dev/problems/would-lock-you-out',
               title: 'Set up your own second factor first',
               status: 409,
-              detail: 'Enrol from the Security page, then save this again.',
+              detail: 'Self-enrolment is off, so this would lock you out. Set one up on the Security page, then save.',
             },
             409,
           )
@@ -163,7 +163,7 @@ describe('SettingsSignInTab', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
 
-    expect(await screen.findByText(/enrol from the security page/i)).toBeInTheDocument();
+    expect(await screen.findByText(/set one up on the security page/i)).toBeInTheDocument();
   });
 
   it('says a security key cannot be registered when the tenant has no domain', async () => {
@@ -351,7 +351,7 @@ describe('SettingsSignInTab and the security-key requirement', () => {
               type: 'https://syntra.dev/problems/security-key-session-required',
               title: 'Elevate with your security key first',
               status: 409,
-              detail: 'Leave the console, elevate again using your key, then save this again.',
+              detail: 'Your session did not use a security key. Elevate with your key, then save.',
             },
             409,
           )
@@ -365,7 +365,7 @@ describe('SettingsSignInTab and the security-key requirement', () => {
     await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
 
     expect(
-      await screen.findByText(/elevate again using your key/i),
+      await screen.findByText(/elevate with your key/i),
     ).toBeInTheDocument();
   });
 

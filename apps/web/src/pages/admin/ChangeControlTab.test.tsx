@@ -85,7 +85,7 @@ describe('held changes across the console', () => {
       calls.push(init ?? {});
       const headers = new Headers(init?.headers);
       if (!headers.has('x-syntra-change-reason')) {
-        return json({ type: 'https://syntra.dev/problems/change-approval-required', title: 'A second administrator must approve this change', status: 409, detail: 'Held here.', summary: 'Grant role "Owner" to svc' }, 409);
+        return json({ type: 'https://syntra.dev/problems/change-approval-required', title: 'Approval required', status: 409, detail: 'Held here.', summary: 'Grant role "Owner" to svc' }, 409);
       }
       return json({ status: 'pending_approval', changeRequest: { id: 'cr-9', summary: 'Grant role "Owner" to svc', changeClass: 'role_grant' } }, 202);
     });

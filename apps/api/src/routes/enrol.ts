@@ -84,7 +84,7 @@ export async function registerEnrolRoutes(
       throw new ProblemError(
         400,
         'wrong-factor-type',
-        'That is not the kind of factor this account needs',
+        'Wrong factor type',
       );
     }
     return attempt;

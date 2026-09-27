@@ -91,7 +91,7 @@ export async function registerAdminOperationsRoutes(
           );
         }
         if (cause instanceof JobNotQueuedError) {
-          throw new ProblemError(503, 'job-not-queued', 'The job was not queued', `${cause.message}. Nothing was changed; try again once the job queue is healthy.`);
+          throw new ProblemError(503, 'job-not-queued', 'Job not queued', `${cause.message}. Nothing was changed. Try again when the job queue is back.`);
         }
         throw cause;
       }

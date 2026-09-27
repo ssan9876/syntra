@@ -122,8 +122,8 @@ export async function registerOidcLogoutRoutes(
       throw new ProblemError(
         400,
         'oidc-logout-needs-hint',
-        'This logout needs an id_token_hint',
-        'Ending a session is destructive and this endpoint is reachable by a plain cross-site GET, so it will not act without an id_token this identity provider issued for the session being ended.',
+        'id_token_hint required',
+        'Send the id_token issued for the session being ended.',
       );
     }
 

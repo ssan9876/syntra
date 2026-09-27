@@ -966,7 +966,7 @@ describe('TargetDetailPage', () => {
             JSON.stringify({
               status: 503,
               title: 'Background jobs are not running',
-              detail: 'the run could not be enqueued; the API is up but the job scheduler is not',
+              detail: 'The run was not started. Check the API log.',
             }),
             { status: 503, headers: { 'content-type': 'application/problem+json' } },
           ) as never,
@@ -979,7 +979,7 @@ describe('TargetDetailPage', () => {
     await screen.findByDisplayValue('Samba AD');
     await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
-    expect(await screen.findByText(/the job scheduler is not/)).toBeVisible();
+    expect(await screen.findByText(/The run was not started/)).toBeVisible();
     expect(screen.queryByText('Runs for this target')).toBeNull();
   });
 

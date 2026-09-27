@@ -126,7 +126,7 @@ export async function registerAdminSessionRoutes(app: FastifyInstance): Promise<
           403,
           'step-up-required',
           'Confirm it is you first',
-          `Revoking sessions across the organization needs a console session started in the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
+          `Revoking sessions across the organization needs a console session from the last ${STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then retry.`,
         );
       }
 

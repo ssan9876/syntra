@@ -113,7 +113,7 @@ export async function registerAdminProvisionRunRoutes(
           503,
           'scheduler-unavailable',
           'Background jobs are not running',
-          'the run could not be enqueued; the API is up but the job scheduler is not',
+          'The run was not started. Check the API log.',
         );
       }
       // Enqueued rather than run in the request: a full target read outlasts a
@@ -251,7 +251,7 @@ export async function registerAdminProvisionRunRoutes(
           409,
           'run-unconfirmable',
           'This run cannot be applied',
-          `it was blocked for a reason that cannot be confirmed away: ${run.blockedReason ?? ''}`,
+          `Blocked, and this cannot be confirmed away: ${run.blockedReason ?? ''}`,
         );
       }
       if (run.status === 'blocked' && !body.confirm) {
@@ -322,10 +322,10 @@ export async function registerAdminProvisionRunRoutes(
         // The adapter gates. Nothing was attempted and the run is left as it
         // was previewed; the detail says what to do instead.
         if (cause instanceof AdapterWritesBlockedError) {
-          throw new ProblemError(409, 'adapter-writes-blocked', 'The adapter may not write', cause.message);
+          throw new ProblemError(409, 'adapter-writes-blocked', 'Adapter writes blocked', cause.message);
         }
         if (cause instanceof AdapterVersionChangedError) {
-          throw new ProblemError(409, 'adapter-version-changed', 'The plan is for a different adapter release', cause.message, {
+          throw new ProblemError(409, 'adapter-version-changed', 'Adapter version changed since the plan', cause.message, {
             plannedVersion: cause.plannedVersion,
             currentVersion: cause.currentVersion,
           });
@@ -374,7 +374,7 @@ export async function registerAdminProvisionRunRoutes(
           503,
           'scheduler-unavailable',
           'Background jobs are not running',
-          'the approval was not recorded: the run that would act on it could not be enqueued',
+          'The approval was not recorded. Check the API log.',
         );
       }
       let approval;

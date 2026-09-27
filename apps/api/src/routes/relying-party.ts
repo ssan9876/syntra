@@ -62,6 +62,6 @@ export function assertWebAuthnUsable(
     'Security keys are not available on this address',
     tenant.primaryDomain
       ? `This tenant registers security keys against ${rp.id}. Sign in at that address to use one.`
-      : 'An administrator must set this tenant a primary domain before security keys can be used. Until then, use an authenticator app.',
+      : 'No primary domain is set. Use an authenticator app, or ask an administrator to set the domain.',
   );
 }

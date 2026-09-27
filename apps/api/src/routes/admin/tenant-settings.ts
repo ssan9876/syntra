@@ -62,7 +62,7 @@ export async function applyTenantSettings(
         409,
         'would-lock-you-out',
         'Set up your own second factor first',
-        'Requiring a factor for the console while self-enrolment is off refuses anyone who does not already hold one — including you. Enrol from the Security page, then save this again.',
+        'Self-enrolment is off, so this would lock you out. Set one up on the Security page, then save.',
       );
     }
   }
@@ -109,7 +109,7 @@ export async function applyTenantSettings(
         409,
         'security-keys-unavailable',
         'Security keys need a primary domain',
-        'Requiring a security key for the console with no primary domain set would refuse every administrator. Set the domain first.',
+        'No primary domain is set. Set one first.',
       );
     }
     // 2. Moving the domain while it is on invalidates every key at once,
@@ -120,8 +120,8 @@ export async function applyTenantSettings(
       throw new ProblemError(
         409,
         'security-key-policy-pins-domain',
-        'Turn off the security-key requirement before moving the domain',
-        'Moving the primary domain invalidates every registered security key, including every administrator’s, and the console would then refuse all of them.',
+        'Security keys are required for the console',
+        'Changing the primary domain invalidates every security key. Turn off the security-key requirement first.',
       );
     }
     // 3. Switching it on from a session a key did not establish. The caller
@@ -138,7 +138,7 @@ export async function applyTenantSettings(
           409,
           'would-lock-you-out',
           'Register a security key first',
-          'Requiring a security key for the console refuses anyone who does not hold one — including you. Register one from the Security page, elevate with it, then save this again.',
+          'You have no security key. Register one on the Security page, elevate with it, then save.',
         );
       }
       if (actor.satisfiedFactor !== 'webauthn') {
@@ -146,7 +146,7 @@ export async function applyTenantSettings(
           409,
           'security-key-session-required',
           'Elevate with your security key first',
-          'Your current console session was not established with a security key, and turning this on would end it. Leave the console, elevate again using your key, then save this again.',
+          'Your session did not use a security key. Elevate with your key, then save.',
         );
       }
     }

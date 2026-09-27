@@ -215,7 +215,7 @@ export const deprecationOverrideRequest = z.object({
 function adapterProblem(error: unknown): never {
   if (error instanceof AdapterRolloutNotFoundError) throw new ProblemError(404, 'not-found', 'Target not found');
   if (error instanceof AdapterSelectionError) {
-    throw new ProblemError(409, 'adapter-selection-refused', 'The adapter change was refused', error.message);
+    throw new ProblemError(409, 'adapter-selection-refused', 'Adapter change refused', error.message);
   }
   throw error;
 }
@@ -239,7 +239,7 @@ function adoptionProblem(cause: unknown): unknown {
     return new ProblemError(
       409,
       'nothing-to-adopt',
-      'There is no account to adopt',
+      'No account to adopt',
       cause.message,
     );
   }
@@ -255,7 +255,7 @@ function adoptionProblem(cause: unknown): unknown {
     return new ProblemError(
       409,
       'anchor-already-bound',
-      'That object is already taken',
+      'Object already linked',
       cause.message,
     );
   }
@@ -418,12 +418,12 @@ export async function registerAdminTargetRoutes(
           throw new ProblemError(
             400,
             'no-such-container',
-            'That container does not exist',
+            'Container not found',
             cause.message,
           );
         }
         if (cause instanceof NoAccountToMoveError || cause instanceof NoCorrelationKeyError) {
-          throw new ProblemError(409, 'nothing-to-move', 'There is no account to move', cause.message);
+          throw new ProblemError(409, 'nothing-to-move', 'No account to move', cause.message);
         }
         // A 409 rather than `moved: false`: nothing was attempted, and the
         // administrator needs to know it was the emergency stop and not the
@@ -433,7 +433,7 @@ export async function registerAdminTargetRoutes(
             409,
             'external-writes-paused',
             'External writes are paused',
-            `${cause.message}. The placement is recorded and the next run proposes the move once writes resume.`,
+            `${cause.message}. The placement is saved and the move is proposed once writes resume.`,
             { scope: cause.scope },
           );
         }
@@ -441,8 +441,8 @@ export async function registerAdminTargetRoutes(
           throw new ProblemError(
             409,
             'adapter-write-refused',
-            'The adapter may not make this write',
-            `${cause.message}. The placement is recorded.`,
+            'Adapter write refused',
+            `${cause.message}. The placement is saved.`,
           );
         }
         throw cause;
@@ -837,7 +837,7 @@ export async function registerAdminTargetRoutes(
       const body = deprecationOverrideRequest.parse(request.body);
       const now = new Date();
       if (body.expiresAt.getTime() - now.getTime() > MAX_DEPRECATION_OVERRIDE_MS) {
-        throw new ProblemError(400, 'invalid-expiry', 'Override expiry is too far away', 'A deprecation override may last at most 30 days.');
+        throw new ProblemError(400, 'invalid-expiry', 'Expiry too far away', 'Overrides can last up to 30 days.');
       }
       await grantDeprecationOverride(request.tenantId, request.session.userId, id, body, { now }).catch(adapterProblem);
       return targetAdapterReport(request.tenantId, id);
@@ -1003,8 +1003,8 @@ export async function registerAdminTargetRoutes(
         throw new ProblemError(
           409,
           'target-not-empty',
-          'This target still holds accounts',
-          'deleting it removes Syntra record of every account it manages; the accounts themselves are never touched',
+          'Target still has accounts',
+          'Deleting it removes Syntra’s records of these accounts. The accounts themselves are not changed.',
           { counts: result.counts },
         );
       }
@@ -1094,7 +1094,7 @@ export async function registerAdminTargetRoutes(
       const body = writeStopRequest.parse(request.body);
       const now = new Date();
       if (body.expiresAt && body.expiresAt.getTime() > now.getTime() + 30 * 86_400_000) {
-        throw new ProblemError(400, 'invalid-expiry', 'Pause expiry is too far away', 'Emergency stops may expire no more than 30 days from now.');
+        throw new ProblemError(400, 'invalid-expiry', 'Expiry too far away', 'Emergency stops can last up to 30 days.');
       }
       try {
         return await pauseTargetExternalWrites(request.tenantId, id, request.session.userId, body.reason, body.expiresAt, now);
@@ -1143,7 +1143,7 @@ export async function registerAdminTargetRoutes(
       const body = writeStopRequest.parse(request.body);
       const now = new Date();
       if (body.expiresAt && body.expiresAt.getTime() > now.getTime() + 30 * 86_400_000) {
-        throw new ProblemError(400, 'invalid-expiry', 'Pause expiry is too far away', 'Emergency stops may expire no more than 30 days from now.');
+        throw new ProblemError(400, 'invalid-expiry', 'Expiry too far away', 'Emergency stops can last up to 30 days.');
       }
       try {
         return await pauseTenantExternalWrites(request.tenantId, request.session.userId, body.reason, body.expiresAt, now);

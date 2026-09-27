@@ -462,10 +462,10 @@ describe('OnboardPersonPage', () => {
 describe('OnboardPersonPage duplicate warning', () => {
   const DUPLICATE = {
     type: 'https://syntra.dev/problems/possible-duplicate',
-    title: 'Somebody here already looks like this',
+    title: 'Possible duplicate',
     status: 409,
     detail:
-      'Check whether this is the same person before creating a second record — two people cannot be merged afterwards.',
+      'Check the matches before creating a new record. Records cannot be merged later.',
     candidates: [
       {
         id: 'p1',

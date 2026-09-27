@@ -106,7 +106,7 @@ describe('BrandingTab', () => {
       'fetch',
       vi.fn(async (url: unknown, init?: RequestInit) =>
         init?.method === 'PUT'
-          ? json({ status: 400, title: 'That branding cannot be used', detail }, 400)
+          ? json({ status: 400, title: 'Branding refused', detail }, 400)
           : json(brand),
       ),
     );

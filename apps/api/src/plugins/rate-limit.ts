@@ -86,7 +86,7 @@ export function perTenantRateLimit(
       429,
       'rate-limited',
       'Too many requests',
-      `This organization has made too many authentication attempts. Try again in ${outcome.ttlInSeconds} seconds.`,
+      `Too many sign-in attempts for this organization. Try again in ${outcome.ttlInSeconds} seconds.`,
     );
   };
 }

@@ -235,7 +235,7 @@ describe('AccountsTab', () => {
           title: 'Not available to you',
           status: 403,
           detail:
-            'This account is not linked to a person record, so it cannot ask for anything or hold anything.',
+            'Your account is not linked to a person record.',
         },
         403,
       ),
@@ -459,7 +459,7 @@ describe('AccountsTab person picker', () => {
       return json(
         {
           type: 'https://syntra.dev/problems/second-account',
-          title: 'They already have an account',
+          title: 'Person already has an account',
           status: 409,
           detail: 'Kaycen Tyre already signs in as ktyre.',
           existingAccount: { id: 'u9', login: 'ktyre' },
