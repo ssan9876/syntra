@@ -58,7 +58,8 @@ export interface PersonDeletionCounts {
 }
 
 export interface HardDeletePersonInput {
-  actorUserId: string;
+  /** Null for the scheduled purge, which acts on no one's instruction at the time. */
+  actorUserId: string | null;
   /** Why, in the administrator's words. Recorded on the audit event. */
   reason: string;
   sourceIp?: string | null | undefined;

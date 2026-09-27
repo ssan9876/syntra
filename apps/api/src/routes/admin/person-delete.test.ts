@@ -227,3 +227,30 @@ describe('DELETE /api/admin/persons/:id', () => {
     expect(await db((tx) => tx.person.count())).toBe(1);
   });
 });
+
+describe('the automatic deletion policy', () => {
+  const put = (cookie: string, afterDays: number | null) =>
+    ctx.app.inject({
+      method: 'PUT',
+      url: '/api/admin/person-purge-policy',
+      headers: { host: ctx.host, cookie: `syntra_session=${cookie}` },
+      payload: { afterDays },
+    });
+
+  it('is read by an administrator and changed only by a holder of the Data deletion role', async () => {
+    const owner = await elevated('owner');
+    expect((await call('GET', '/api/admin/person-purge-policy', owner)).json()).toEqual({ afterDays: null });
+
+    // Not even the Owner, until the role is granted.
+    expect((await put(owner, 30)).statusCode).toBe(403);
+
+    expect((await grantDataDeletion(owner, ownerId)).statusCode).toBeLessThan(300);
+    const saved = await put(owner, 30);
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({ afterDays: 30 });
+    expect((await put(owner, 0)).statusCode).toBe(400);
+
+    const event = await db((tx) => tx.auditEvent.findFirstOrThrow({ where: { action: 'person.purge_policy.updated' } }));
+    expect(event.payload).toEqual({ before: null, after: 30 });
+  });
+});

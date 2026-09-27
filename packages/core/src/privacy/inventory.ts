@@ -286,6 +286,7 @@ const RAW = {
     passwordMinLength: 'none',
     selfEnrolmentEnabled: 'none',
     lockoutThreshold: 'none',
+    personPurgeAfterDays: 'none',
     lockoutWindowMinutes: 'none',
     lockoutDurationMinutes: 'none',
     passwordMaxAgeDays: 'none',

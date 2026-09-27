@@ -10,6 +10,7 @@ import { SecurityAlertsTab } from './SecurityAlertsTab.js';
 import { ChangeControlTab } from './ChangeControlTab.js';
 import { BreakGlassTab } from './BreakGlassTab.js';
 import { DomainsTab } from './DomainsTab.js';
+import { PersonPurgeTab } from './PersonPurgeTab.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -42,6 +43,7 @@ export function TenantSettingsPage() {
           // Which domains an address may be in. Every business email typed
           // in, and every address provisioning writes, is checked against it.
           { id: 'domains', label: 'Domains', content: <DomainsTab /> },
+          { id: 'data-deletion', label: 'Data deletion', content: <PersonPurgeTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
           // What Syntra signs in with and what it trusts, with expiry and

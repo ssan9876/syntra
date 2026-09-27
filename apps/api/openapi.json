@@ -17184,6 +17184,126 @@
         }
       }
     },
+    "/api/admin/person-purge-policy": {
+      "get": {
+        "operationId": "getPersonPurgePolicy",
+        "tags": [
+          "Persons"
+        ],
+        "summary": "Read the automatic person deletion policy",
+        "description": "`afterDays`: days after a departure before an inactive person is deleted for good, once their accounts on targets that delete accounts are deleted. `null` is off.\n\nRequires `identity.read`.",
+        "x-syntra-permission": [
+          "identity.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putPersonPurgePolicy",
+        "tags": [
+          "Persons"
+        ],
+        "summary": "Set the automatic person deletion policy",
+        "description": "Requires `person.purge`. `afterDays` from 1 to 3650, or `null` to switch it off. Audited as `person.purge_policy.updated`. A daily pass deletes inactive people past the date whose accounts on deleting targets are gone. People owned by a person source are skipped. A pass that would delete more than 10% of all people deletes nobody and is audited as `person.purge.held`.\n\nRequires `person.purge`.",
+        "x-syntra-permission": [
+          "person.purge"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "afterDays": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "afterDays"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/person-source-links": {
       "get": {
         "operationId": "getPersonSourceLinks",

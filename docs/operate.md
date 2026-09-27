@@ -2224,6 +2224,27 @@ Other connectors refuse the setting.
   reported missing; if it comes back at the target it is reported as
   unexpected status and never deleted again.
 
+### Deleting people from Syntra
+
+Syntra deactivates by default (above). Two exceptions delete a person for
+good, with their contracts, target account records, lifecycle operations,
+exceptions and duplicate reviews. Linked logins are unlinked and deactivated.
+The audit trail keeps an event with ids and counts, not the name.
+
+- **By hand.** *Delete permanently* on an inactive person. Needs the built-in
+  **Data deletion** role (`person.purge`), a fresh elevation, a reason and the
+  full name typed back. Nobody holds the role by default, the Owner included;
+  only an Owner can grant or remove it.
+- **Automatically.** *Settings → Data deletion → Days after leaving*
+  (`personPurgeAfterDays`, off until set; changed only with `person.purge`).
+  A daily pass at 03:30 deletes an inactive person that many days after their
+  departure, once every account they hold on a target with *Delete accounts
+  after N days inactive* is deleted. People owned by a person source are
+  skipped, since the next import would create them again. Accounts on targets
+  that never delete are left disabled and no longer tracked. A pass that would
+  delete more than 10% of all people (and more than five) deletes nobody,
+  logs a warning and is audited as `person.purge.held`.
+
 ### First runs against a small directory
 
 Two guard refusals meet everybody on a small or rebuilt directory. Both are

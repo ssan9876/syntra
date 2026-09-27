@@ -2441,7 +2441,7 @@ Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pa
 
 #### `Tenant`
 
-No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `brandSupportUrl`, `brandSupportLabel`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
+No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `personPurgeAfterDays`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `brandSupportUrl`, `brandSupportLabel`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
 
 #### `TenantDeletionRequest`
 

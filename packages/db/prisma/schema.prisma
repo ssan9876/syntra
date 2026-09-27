@@ -41,6 +41,10 @@ model Tenant {
   /// This is not the API rate limit and does not replace it. A rate limit
   /// keyed on the caller's address is spent by one attacker and refills; a
   /// password guessed on the thousandth try is guessed for good.
+  /// Days after a person's departure before Syntra deletes them for good,
+  /// once their accounts on targets that delete accounts are gone. Null is
+  /// off. Changed only by a holder of `person.purge`.
+  personPurgeAfterDays   Int?
   lockoutThreshold       Int      @default(0)
   /// How long failures accumulate toward the threshold, measured from the
   /// first failure of the current run rather than the most recent one — so a

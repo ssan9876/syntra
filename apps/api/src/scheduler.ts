@@ -24,6 +24,8 @@ import {
   registerWebhookJobs,
   registerLifecycleJobs,
   registerWriteStopJobs,
+  registerPersonPurgeJobs,
+  schedulePersonPurge,
   registerPrivilegedAccessJobs,
   registerExportJobs,
   registerCredentialJobs,
@@ -156,6 +158,17 @@ export async function scheduleBackgroundWork(
     } catch (cause) {
       failure('write stop expiry');
       logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule write stop expiry');
+    }
+  }
+
+  for (const tenant of tenants) {
+    try {
+      // Daily; a no-op read while the tenant's purge policy is off.
+      attempt('person purge');
+      await schedulePersonPurge(scheduler, tenant.id);
+    } catch (cause) {
+      failure('person purge');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule person purge');
     }
   }
 
@@ -481,6 +494,7 @@ export async function startSyncScheduler(
     registerProvisionJobs(scheduler, provider, transport, { publicUrl: config.publicUrl });
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     registerWriteStopJobs(scheduler);
+    registerPersonPurgeJobs(scheduler);
     // The transport is NOT optional: a break-glass activation that takes
     // effect after its delay is mailed to every tenant.manage holder.
     registerPrivilegedAccessJobs(scheduler, transport);

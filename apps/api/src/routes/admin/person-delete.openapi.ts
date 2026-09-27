@@ -1,5 +1,6 @@
 import { deletePersonRequest, idParam } from '@syntra/contracts';
 import { describeAdminRoutes } from '../../openapi/describe.js';
+import { personPurgePolicyRequest } from './person-delete.js';
 
 /** The OpenAPI description of the route in `person-delete.ts`. See openapi/describe.ts. */
 export const personDeleteOpenApi = describeAdminRoutes('Persons', {
@@ -16,5 +17,18 @@ export const personDeleteOpenApi = describeAdminRoutes('Persons', {
     body: deletePersonRequest,
     params: idParam,
     status: 204,
+  },
+  'GET /person-purge-policy': {
+    summary: 'Read the automatic person deletion policy',
+    description: '`afterDays`: days after a departure before an inactive person is deleted for good, once their accounts on targets that delete accounts are deleted. `null` is off.',
+  },
+  'PUT /person-purge-policy': {
+    summary: 'Set the automatic person deletion policy',
+    description: [
+      'Requires `person.purge`. `afterDays` from 1 to 3650, or `null` to switch it off. Audited as `person.purge_policy.updated`.',
+      'A daily pass deletes inactive people past the date whose accounts on deleting targets are gone. People owned by a person source are skipped.',
+      'A pass that would delete more than 10% of all people deletes nobody and is audited as `person.purge.held`.',
+    ].join(' '),
+    body: personPurgePolicyRequest,
   },
 });

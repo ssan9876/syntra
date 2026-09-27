@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import { deletePersonRequest, idParam } from '@syntra/contracts';
 import {
   PERMISSIONS,
@@ -7,7 +8,9 @@ import {
   hardDeletePerson,
   isRecentElevation,
   personFullName,
+  readPersonPurgePolicy,
   recordEvent,
+  setPersonPurgePolicy,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requirePermission } from '../../plugins/require-permission.js';
@@ -25,6 +28,11 @@ import { requireSession } from '../../plugins/require-session.js';
  * Refusals about a real person of this tenant are audited as failures, with
  * ids and a code only. A missing or foreign id is not audited.
  */
+/** `{ afterDays }`: days after departure before a person is deleted; null is off. */
+export const personPurgePolicyRequest = z
+  .object({ afterDays: z.number().int().min(1).max(3650).nullable() })
+  .strict();
+
 export async function registerAdminPersonDeleteRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -111,6 +119,25 @@ export async function registerAdminPersonDeleteRoutes(app: FastifyInstance): Pro
           await refuse(request, id, 'open_privacy_case');
           throw new ProblemError(409, 'open-privacy-case', 'Open privacy case', outcome.message);
       }
+    },
+  );
+
+  app.get(
+    '/person-purge-policy',
+    { preHandler: requirePermission(PERMISSIONS.IDENTITY_READ) },
+    async (request) => request.db((tx) => readPersonPurgePolicy(tx)),
+  );
+
+  // Switching automatic deletion on, or shortening it, deletes people; so it
+  // needs the same permission as deleting one by hand.
+  app.put(
+    '/person-purge-policy',
+    { preHandler: requirePermission(PERMISSIONS.PERSON_PURGE) },
+    async (request) => {
+      const body = personPurgePolicyRequest.parse(request.body);
+      return request.db((tx) =>
+        setPersonPurgePolicy(tx, body.afterDays, { userId: request.session.userId, sourceIp: request.ip }),
+      );
     },
   );
 }
