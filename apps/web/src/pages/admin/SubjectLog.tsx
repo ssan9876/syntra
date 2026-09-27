@@ -117,8 +117,8 @@ export function SubjectLog({ subjects }: { subjects: string[] }) {
         // Leads, as it does on the full log. Rendering a tampered log as if it
         // were trustworthy is worse than having no log.
         <div className="p-4">
-          <Alert tone="danger" title="This audit log has been altered">
-            Verification failed at entry {data.brokenAtSequence}.
+          <Alert tone="danger" title="Audit log altered">
+            Chain broken at entry {data.brokenAtSequence}.
           </Alert>
         </div>
       )}

@@ -144,7 +144,7 @@ describe('SubjectLog', () => {
     mockAudit({ events: EVENTS, chainValid: false, brokenAtSequence: 4 });
     render(<SubjectLog subjects={['u1']} />);
 
-    expect(await screen.findByText(/has been altered/i)).toBeInTheDocument();
+    expect(await screen.findByText('Audit log altered')).toBeInTheDocument();
     expect(screen.getByText(/entry 4/)).toBeInTheDocument();
   });
 
