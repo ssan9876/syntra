@@ -429,6 +429,27 @@ describe('runProvisionJob — the skip, made loud', () => {
     expect(row.lastSkippedAt).toBeNull();
   });
 
+  it('replaces a preview that proposes nothing instead of skipping behind it', async () => {
+    const empty = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.create({ data: { tenantId, targetSystemId: targetId, status: 'previewed' } }),
+    );
+    await runProvisionJob(
+      schedulerStub() as never,
+      provider,
+      { tenantId, targetSystemId: targetId },
+      { connector: target as never },
+    );
+    const row = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findUniqueOrThrow({ where: { id: targetId } }),
+    );
+    expect(row.consecutiveSkippedRuns).toBe(0);
+    const replaced = await withTenant(tenantId, (tx) =>
+      tx.provisionRun.findUniqueOrThrow({ where: { id: empty.id } }),
+    );
+    expect(replaced.status).toBe('failed');
+    expect(replaced.error).toBe('superseded by a later run');
+  });
+
   it('does nothing for a disabled target', async () => {
     await withTenant(tenantId, (tx) =>
       tx.targetSystem.update({ where: { id: targetId }, data: { enabled: false } }),

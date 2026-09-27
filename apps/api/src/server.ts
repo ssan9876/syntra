@@ -1,5 +1,6 @@
 import { prisma } from '@syntra/db';
 import { buildInfo, keyManagementWarnings, loadConfig, masterKeyProviderFor } from '@syntra/core';
+import { setOperationalLog } from '@syntra/connectors';
 import { startTelemetry } from './telemetry.js';
 import { buildApp } from './app.js';
 import { startSyncScheduler } from './scheduler.js';
@@ -24,6 +25,11 @@ const telemetry = await startTelemetry(process.env, {
 // is allowed to fail to start without keeping the API down. So the app is
 // handed a way to ask for the scheduler, and asks only when a source changes.
 const app = await buildApp(config, { scheduler: () => recovery?.current() ?? null });
+
+// Background work (jobs, provisioning and sync runs) logs through the app's
+// logger, so its failures reach the same journal and redaction as requests.
+const operational = app.log.child({ component: 'background' });
+setOperationalLog((level, fields, message) => operational[level](fields, message));
 
 // Every failure here -- pg-boss unable to start, a bad cron expression on one
 // tenant's source, a transient DB error -- is logged inside

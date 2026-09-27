@@ -188,7 +188,10 @@ export async function readAttentionSummary(
     // Lifecycle work is read with `provision.read` too: it is what the
     // lifecycle-operations routes are gated on.
     const open = { status: { notIn: TERMINAL_OPERATION } };
-    const failedWhere = { status: 'failed' };
+    // A failed operation whose case somebody resolved is dealt with: without
+    // the case filter it stayed on the list for ever, with nothing left to
+    // press that would remove it.
+    const failedWhere = { status: 'failed', caseStatus: { not: 'resolved' } };
     const verifyingWhere = {
       ...open,
       steps: { some: { key: 'targets', status: 'running', responseCategory: 'read_back_incomplete' } },

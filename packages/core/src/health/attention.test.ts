@@ -35,6 +35,13 @@ describe('attention summary', () => {
           steps: { create: { tenantId, key: 'targets', title: 'Targets', position: 0, status: 'running', responseCategory: 'read_back_incomplete' } },
         },
       });
+      // A failed operation whose case was resolved is not waiting either.
+      await tx.lifecycleOperation.create({
+        data: {
+          tenantId, kind: 'offboard', idempotencyKey: 'failed-resolved', status: 'failed', inputFingerprint: 'r', input: {},
+          caseStatus: 'resolved', resolvedAt: new Date(), resolutionCode: 'cancelled', resolutionSummary: 'test data',
+        },
+      });
       // Completed work is not waiting for anybody.
       await tx.lifecycleOperation.create({
         data: { tenantId, kind: 'onboard', idempotencyKey: 'done', status: 'completed', inputFingerprint: 'd', input: {} },

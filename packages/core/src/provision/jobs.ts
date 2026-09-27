@@ -1,5 +1,6 @@
 import { withTenant } from '@syntra/db';
 import type { TargetConnector } from '@syntra/connectors';
+import { oplog } from '@syntra/connectors';
 import { recordEvent } from '../audit/audit-service.js';
 import type { Transport } from '../notify/notification-service.js';
 import type { Scheduler } from '../jobs/scheduler.js';
@@ -229,6 +230,7 @@ async function recordSkip(
   reason: string,
   detail: Record<string, unknown> = {},
 ): Promise<void> {
+  oplog('warn', `provisioning run skipped: ${reason}`, { tenantId, targetSystemId, ...detail });
   await withTenant(tenantId, async (tx) => {
     await tx.targetSystem.update({
       where: { id: targetSystemId },
@@ -307,7 +309,15 @@ export async function runProvisionJob(
     if (inFlight) {
       // A person asking for a run replaces a plan nobody applied; the
       // schedule does not, so the review screen is not overwritten nightly.
-      const replacesPreview = payload.requested === true && inFlight.status === 'previewed';
+      //
+      // A preview that proposes nothing is not a decision anybody is waiting
+      // to make, and letting it hold the schedule is how a target stopped
+      // running for good after an unapplied preview of zero changes.
+      const emptyPreview =
+        inFlight.status === 'previewed' &&
+        !inFlight.requiresConfirmation &&
+        (await tx.provisionAction.count({ where: { runId: inFlight.id, status: 'proposed' } })) === 0;
+      const replacesPreview = inFlight.status === 'previewed' && (payload.requested === true || emptyPreview);
       const awaitingReview = awaitingDecision(inFlight) && !replacesPreview;
       // `lastProgressAt`, falling back to `startedAt` for a row written before
       // that column existed. `startedAt` alone is stamped at preview and never
@@ -332,6 +342,11 @@ export async function runProvisionJob(
         const reason = awaitingReview
           ? `a run from ${inFlight.startedAt.toISOString()} is awaiting review (${inFlight.status}), so this scheduled run did not start`
           : `a run from ${aliveAt.toISOString()} is still in progress (${inFlight.status}), so this scheduled run did not start`;
+        oplog('warn', `provisioning run skipped: ${reason}`, {
+          tenantId: payload.tenantId,
+          targetSystemId: payload.targetSystemId,
+          blockedRunId: inFlight.id,
+        });
         await tx.targetSystem.update({
           where: { id: payload.targetSystemId },
           data: {

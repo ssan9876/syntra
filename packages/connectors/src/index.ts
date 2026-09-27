@@ -36,3 +36,4 @@ export * from './ad/sid.js';
 export * from './ad/connector.js';
 export * from './observability/redact.js';
 export * from './observability/tracing.js';
+export * from './observability/oplog.js';
