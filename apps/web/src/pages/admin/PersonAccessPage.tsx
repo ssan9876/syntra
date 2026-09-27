@@ -20,7 +20,7 @@ export function PersonAccessPage() {
   return (
     <>
       <PageHeader
-        title="Why does this person hold this?"
+        title="Access explained"
       />
 
       <div className="space-y-6">
@@ -37,7 +37,7 @@ export function PersonAccessPage() {
             <div className="p-6">
               {/* Not the same statement as "no such person", which the API
                   answers with a 404 for exactly this reason. */}
-              <Empty title="This person holds no target-system accounts" />
+              <Empty title="No target accounts" />
             </div>
           </Panel>
         )}

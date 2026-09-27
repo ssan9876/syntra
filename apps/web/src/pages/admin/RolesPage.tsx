@@ -143,7 +143,7 @@ export function RolesPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `${presetName} could not be added.`,
+          : `${presetName} not added. Try again.`,
       );
     } finally {
       setBusy(false);
@@ -221,7 +221,7 @@ export function RolesPage() {
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That role could not be saved.',
+            : 'Role not saved. Try again.',
       );
     } finally {
       setBusy(false);
@@ -266,7 +266,7 @@ export function RolesPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That role could not be granted.',
+          : 'Role not granted. Try again.',
       );
     } finally {
       setBusy(false);
@@ -290,7 +290,7 @@ export function RolesPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `${holder.login} could not be revoked.`,
+          : `Role not revoked from ${holder.login}. Try again.`,
       );
     }
   };
@@ -320,7 +320,7 @@ export function RolesPage() {
         <StatCard label="Roles" value={roles.length} />
         <StatCard label="Built in" value={roles.filter((r) => r.builtIn).length} />
         <StatCard
-          label="Held by nobody"
+          label="Unassigned"
           value={roles.filter((r) => r.assignmentCount === 0).length}
           tone="warning"
           quietWhenZero
@@ -514,8 +514,8 @@ export function RolesPage() {
                       confirmWord={selected.name}
                       warning={
                         selected.assignmentCount === 0
-                          ? 'Nobody holds it.'
-                          : `${selected.assignmentCount} ${selected.assignmentCount === 1 ? 'holder loses' : 'holders lose'} every permission it grants.`
+                          ? 'No one holds this role.'
+                          : `${selected.assignmentCount} ${selected.assignmentCount === 1 ? 'person loses' : 'people lose'} its permissions.`
                       }
                       onDeleted={() => {
                         toast({ tone: 'success', title: `${selected.name} deleted` });
@@ -544,7 +544,7 @@ export function RolesPage() {
                         setProblem(null);
                       }}
                     >
-                      Grant to someone
+                      Grant role
                     </Button>
                   )
                 }

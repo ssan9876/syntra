@@ -67,8 +67,8 @@ export function TestReport({ result, stale = false }: { result: TestResult; stal
 
           {result.schema && (
             <>
-              <Discovered title="Object classes it returned" values={result.schema.objectClasses} />
-              <Discovered title="Attributes it returned" values={result.schema.attributes} />
+              <Discovered title="Object classes found" values={result.schema.objectClasses} />
+              <Discovered title="Attributes found" values={result.schema.attributes} />
             </>
           )}
         </>

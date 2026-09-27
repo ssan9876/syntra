@@ -76,7 +76,7 @@ describe('WebhooksTab', () => {
   it('says what an endpoint is for when there are none', async () => {
     mockApi({});
     renderPage();
-    expect(await screen.findByText(/nothing is subscribed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no webhooks yet/i)).toBeInTheDocument();
   });
 
   it('names the events by what happened, not by their template', async () => {

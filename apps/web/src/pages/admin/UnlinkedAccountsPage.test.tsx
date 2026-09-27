@@ -174,7 +174,7 @@ describe('UnlinkedAccountsPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/every account has a person/i),
+      await screen.findByText(/no unlinked accounts/i),
     ).toBeInTheDocument();
   });
 

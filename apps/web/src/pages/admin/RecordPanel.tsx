@@ -263,7 +263,7 @@ export function RecordPanel({
       } else if (cause instanceof ApiError) {
         setProblem(cause.problem.detail ?? cause.problem.title);
       } else {
-        setProblem('That could not be saved.');
+        setProblem('Not saved. Try again.');
       }
     } finally {
       setBusy(false);

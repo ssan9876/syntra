@@ -148,7 +148,7 @@ export function SyncRunDetailPage() {
       toast({ title: 'Apply finished' });
       reload();
     } catch {
-      setApplyError('The run could not be applied.');
+      setApplyError('Run not applied. Try again.');
     } finally {
       setApplying(false);
     }
@@ -173,7 +173,7 @@ export function SyncRunDetailPage() {
       setApplyError(
         cause instanceof ApiError && cause.problem.status === 409
           ? 'That change is no longer proposed.'
-          : 'That change could not be skipped.',
+          : 'Change not skipped. Try again.',
       );
     } finally {
       setSkipping(null);
@@ -283,7 +283,7 @@ export function SyncRunDetailPage() {
           // error, which is what an empty run screen looks like.
           <Alert tone="info">
             {data.status === 'queued'
-              ? 'Queued — this run has not started yet'
+              ? 'Queued. Not started yet.'
               : 'Reading the directory'}
           </Alert>
         )}
@@ -294,8 +294,8 @@ export function SyncRunDetailPage() {
             tone="danger"
             title={
               confirmable
-                ? 'This run is over the threshold and needs your confirmation'
-                : 'This run was blocked and will not apply'
+                ? 'Over the deactivation threshold. Confirm to apply.'
+                : 'Blocked. This run cannot be applied.'
             }
           >
             <p>{data.blockedReason}</p>
@@ -307,14 +307,14 @@ export function SyncRunDetailPage() {
                 className="mt-3"
                 checked={confirmed}
                 onChange={setConfirmed}
-                label="I have read these numbers and want to apply this run anyway."
+                label="I have read these numbers. Apply anyway."
               />
             )}
           </Alert>
         )}
 
         {data.error && (
-          <Alert tone="danger" title="This run failed">
+          <Alert tone="danger" title="Run failed">
             {data.error}
           </Alert>
         )}
@@ -330,7 +330,7 @@ export function SyncRunDetailPage() {
             tone="warning"
             title={`${data.mappingFailures} of ${data.recordsRead} records could not be mapped`}
           >
-            <p>Left untouched; not treated as absent.</p>
+            <p>These records were left unchanged.</p>
             {data.mappingFailureReasons.length > 0 && (
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 {data.mappingFailureReasons.map((reason) => (
@@ -342,8 +342,8 @@ export function SyncRunDetailPage() {
         )}
 
         {data.unresolvedMembers > 0 && (
-          <Alert tone="warning" title="Some memberships could not be resolved">
-            {data.unresolvedMembers} group members outside the search base were not synced.
+          <Alert tone="warning" title="Group members not synced">
+            {data.unresolvedMembers} group members are outside the search base.
           </Alert>
         )}
 

@@ -86,7 +86,7 @@ describe('TasksPage', () => {
   it('says nothing has been delegated when the list is empty', async () => {
     mockApi({ tasks: [] });
     renderPage();
-    expect(await screen.findByText(/nothing has been delegated to you/i)).toBeInTheDocument();
+    expect(await screen.findByText('No tasks yet')).toBeInTheDocument();
   });
 
   it('offers a picker of names, not of ids', async () => {

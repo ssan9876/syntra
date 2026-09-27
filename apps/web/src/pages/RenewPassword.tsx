@@ -81,7 +81,7 @@ export function RenewPassword() {
         // An expired or spent attempt cannot be retried from this screen.
         if (cause.problem.status === 401) setChallenge(null);
       } else {
-        setError('That could not be saved. Try again.');
+        setError('Password not saved. Try again.');
       }
     } finally {
       setBusy(false);

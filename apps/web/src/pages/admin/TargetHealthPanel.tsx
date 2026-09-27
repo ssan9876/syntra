@@ -44,7 +44,7 @@ export function TargetHealthPanel({ targetId }: { targetId: string }) {
     <div className="space-y-5 p-4">
       <Select className="max-w-48" label="Period" value={days} onChange={setDays} options={RANGE_OPTIONS} />
       {resource.error ? <Alert tone="danger">{resource.error}</Alert> : null}
-      {resource.data && !data ? <Alert tone="warning">Connector health history is unavailable from this server version.</Alert> : null}
+      {resource.data && !data ? <Alert tone="warning">Health history is not available on this server version.</Alert> : null}
       {!resource.data && !resource.error ? <SkeletonRows rows={5} cols={5} /> : null}
       {data ? <>
         <MetricRow>

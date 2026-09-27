@@ -43,7 +43,7 @@ export function SweepsTab() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : 'Preview did not start. Try again.',
       );
     } finally {
       setBusy(false);
@@ -60,7 +60,7 @@ export function SweepsTab() {
         {/* On an empty list the empty state carries this button instead. */}
         {(!data || (data.sweeps ?? []).length > 0) && (
           <Button loading={busy} onClick={runNow}>
-            Run a preview now
+            Run preview
           </Button>
         )}
       </div>
@@ -74,7 +74,7 @@ export function SweepsTab() {
               title="No sweeps yet"
               action={
                 <Button variant="primary" loading={busy} onClick={runNow}>
-                  Run a preview now
+                  Run preview
                 </Button>
               }
             />

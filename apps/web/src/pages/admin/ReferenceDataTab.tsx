@@ -38,7 +38,7 @@ export function ReferenceDataTab() {
       toast({ title: `Added “${value}”` });
       resource.reload();
     } catch (cause) {
-      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The reference value could not be added.');
+      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Value not added. Try again.');
     } finally {
       setBusy(null);
     }
@@ -55,7 +55,7 @@ export function ReferenceDataTab() {
       toast({ title: `${item.active ? 'Disabled' : 'Enabled'} “${item.value}”` });
       resource.reload();
     } catch (cause) {
-      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The reference value could not be changed.');
+      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Value not changed. Try again.');
     } finally {
       setBusy(null);
     }

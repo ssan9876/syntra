@@ -33,7 +33,7 @@ describe('CancelRunButton', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel run' }));
     // Nothing sent on the first click: the confirmation is the decision.
     expect(fetch).not.toHaveBeenCalled();
-    expect(screen.getByText(/stops at its next checkpoint/)).toBeInTheDocument();
+    expect(screen.getByText(/stops at the next checkpoint/i)).toBeInTheDocument();
     const confirm = screen.getByRole('button', { name: 'Cancel this sync run' });
     expect(confirm).toHaveFocus();
 
@@ -59,7 +59,7 @@ describe('CancelRunButton', () => {
     );
 
     await userEvent.click(screen.getByRole('button', { name: 'Cancel run' }));
-    expect(screen.getByText(/cancelled now/i)).toBeInTheDocument();
+    expect(screen.getByText(/cancels now/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Keep it' }));
 
     expect(fetch).not.toHaveBeenCalled();

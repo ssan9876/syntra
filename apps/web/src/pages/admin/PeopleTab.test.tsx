@@ -66,7 +66,7 @@ describe('PeopleTab, finding somebody', () => {
     );
     renderAt('/admin/users?tab=people&q=zzz');
 
-    expect(await screen.findByText(/Nobody matches/)).toBeVisible();
+    expect(await screen.findByText(/No people match/)).toBeVisible();
     expect(
       screen.getByRole('button', { name: /reset filters/i }),
     ).toBeVisible();

@@ -295,7 +295,7 @@ describe('PersonDetailPage', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(
-      screen.getByText(/create a second person rather than update this one/i),
+      screen.getByText(/next import creates a new person instead of updating/i),
     ).toBeInTheDocument();
   });
 

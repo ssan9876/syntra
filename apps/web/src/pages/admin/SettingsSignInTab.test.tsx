@@ -102,7 +102,7 @@ describe('SettingsSignInTab', () => {
       await screen.findByRole('checkbox', { name: /second factor for the console/i }),
     ).not.toBeChecked();
     expect(
-      screen.getByRole('checkbox', { name: /enrol a factor themselves/i }),
+      screen.getByRole('checkbox', { name: /enrol their own second factor/i }),
     ).toBeChecked();
     expect(screen.getByLabelText(/minimum password length/i)).toHaveValue(12);
   });
@@ -134,11 +134,11 @@ describe('SettingsSignInTab', () => {
       await screen.findByRole('checkbox', { name: /second factor for the console/i }),
     );
     await userEvent.click(
-      screen.getByRole('checkbox', { name: /enrol a factor themselves/i }),
+      screen.getByRole('checkbox', { name: /enrol their own second factor/i }),
     );
 
     expect(
-      await screen.findByText(/nobody can enrol their way in/i),
+      await screen.findByText(/self-enrolment is off/i),
     ).toBeInTheDocument();
   });
 
@@ -171,7 +171,7 @@ describe('SettingsSignInTab', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/only an authenticator app can satisfy this/i),
+      await screen.findByText(/only authenticator apps work/i),
     ).toBeInTheDocument();
   });
 });
@@ -208,7 +208,7 @@ describe('the primary domain, and the passkeys it would break', () => {
 
     // The count is shown, in the warning, with what it costs.
     expect(
-      await screen.findByText(/invalidate registered security keys/i),
+      await screen.findByText(/security keys will stop working/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/3 keys are/)).toBeInTheDocument();
 
@@ -305,14 +305,14 @@ describe('SettingsSignInTab and session lifetimes', () => {
       /console session lasts/i,
     )) as HTMLInputElement;
     await waitFor(() => expect(field.value).toBe('120'));
-    expect(screen.queryByText(/apply to everyone signed in now/i)).toBeNull();
+    expect(screen.queryByText(/apply to current sessions/i)).toBeNull();
 
     fireEvent.change(field, { target: { value: '60' } });
-    expect(await screen.findByText(/apply to everyone signed in now/i)).toBeInTheDocument();
+    expect(await screen.findByText(/apply to current sessions/i)).toBeInTheDocument();
 
     fireEvent.change(field, { target: { value: '240' } });
     await waitFor(() =>
-      expect(screen.queryByText(/apply to everyone signed in now/i)).toBeNull(),
+      expect(screen.queryByText(/apply to current sessions/i)).toBeNull(),
     );
   });
 });
@@ -329,11 +329,11 @@ describe('SettingsSignInTab and the security-key requirement', () => {
       name: /security key for the console/i,
     });
     expect(box).not.toBeChecked();
-    expect(screen.queryByText(/sessions started without a key end/i)).toBeNull();
+    expect(screen.queryByText(/sessions without a key will end/i)).toBeNull();
 
     await userEvent.click(box);
     expect(
-      await screen.findByText(/sessions started without a key end/i),
+      await screen.findByText(/sessions without a key will end/i),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /save settings/i }));
@@ -438,13 +438,13 @@ describe('SettingsSignInTab and account lockout', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/do not lift themselves/i),
+      await screen.findByText(/locks never expire/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/reachable to unlock them/i)).toBeInTheDocument();
+    expect(screen.getByText(/must unlock each account/i)).toBeInTheDocument();
     await user.clear(screen.getByLabelText(/lock lasts/i));
     await user.type(screen.getByLabelText(/lock lasts/i), '30');
     await waitFor(() =>
-      expect(screen.queryByText(/do not lift themselves/i)).toBeNull(),
+      expect(screen.queryByText(/locks never expire/i)).toBeNull(),
     );
   });
 });

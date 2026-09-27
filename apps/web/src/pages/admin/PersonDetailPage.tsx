@@ -318,7 +318,7 @@ export function PersonDetailPage() {
                     // and a warning about breaking it would be a hint by
                     // another name.
                     data.externalId
-                      ? 'Changing this makes the next import create a second person rather than update this one.'
+                      ? `If changed, the next import creates a new person instead of updating ${data.givenName}.`
                       : undefined
                   }
                 />
@@ -691,7 +691,7 @@ export function PersonDetailPage() {
               to={`/admin/people/${data.id}/access`}
               className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
             >
-              Why does this person hold what they hold?
+              Explain access
             </Link>
           </div>
         </Panel>

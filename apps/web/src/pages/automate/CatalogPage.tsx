@@ -54,25 +54,23 @@ export function SodWarningNote({ warning }: { warning: SodWarning }) {
   const held = first.otherSideHoldings.filter((h) => h.trim() !== '');
   return (
     <Alert tone="warning">
-      <span className="font-medium">Segregation of duties.</span> Requesting
-      this would put you on both sides of “{first.ruleName}”.
+      <span className="font-medium">Segregation of duties.</span> Conflicts with
+      rule “{first.ruleName}”.
       {held.length > 0 && (
-        <> You already hold <span className="font-medium">{held.join(', ')}</span>.</>
+        <> You hold <span className="font-medium">{held.join(', ')}</span>.</>
       )}{' '}
-      You can still request it; an approver sees the same warning
       {first.severity === 'critical'
-        ? ', and a critical rule needs an approved exception before it can be fulfilled'
-        : ''}
-      .
+        ? 'Critical rule: needs an approved exception.'
+        : 'You can still request it.'}
     </Alert>
   );
 }
 
 function durationLine(entry: CatalogEntry): string {
   if (entry.durationMode === 'permanent')
-    return 'Held until somebody takes it away';
-  if (entry.durationMode === 'fixed') return 'Held for a fixed period';
-  return `You choose how long, up to ${entry.maxDurationDays ?? 0} days`;
+    return 'Permanent';
+  if (entry.durationMode === 'fixed') return 'Fixed period';
+  return `Up to ${entry.maxDurationDays ?? 0} days`;
 }
 
 export function CatalogPage() {
@@ -95,11 +93,7 @@ export function CatalogPage() {
   return (
     <AppShell>
       <div className="mx-auto w-full max-w-5xl px-6 py-8">
-        <h1 className="text-lg font-semibold text-ink">What can I ask for?</h1>
-        <p className="mt-1 text-muted">
-          Everything here is something you are allowed to request. Asking for it
-          does not grant it — most things go to somebody who decides.
-        </p>
+        <h1 className="text-lg font-semibold text-ink">Request access</h1>
 
         {error && (
           <div className="mt-6">
@@ -135,16 +129,14 @@ export function CatalogPage() {
             {data && products.length === 0 && query.trim() !== '' && (
               <div className="mt-6">
                 <Empty
-                  title="Nothing matches that search"
-                  action={<Button onClick={() => setQuery('')}>Clear the search</Button>}
+                  title="No matches"
+                  action={<Button onClick={() => setQuery('')}>Clear search</Button>}
                 />
               </div>
             )}
             {data && products.length === 0 && query.trim() === '' && (
               <div className="mt-6">
-                <Empty title="Nothing to ask for yet">
-                  Nothing has been published to you. This is not an error.
-                </Empty>
+                <Empty title="Nothing to request yet" />
               </div>
             )}
 

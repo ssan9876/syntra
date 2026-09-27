@@ -91,7 +91,7 @@ export class ChangeHeldError extends ApiError {
       type: 'https://syntra.dev/problems/change-held',
       title: 'Sent for approval',
       status: 202,
-      detail: `Held for a second administrator: ${changeRequest.summary}. Nothing has changed yet; it is applied when another administrator approves it under Settings → Change control.`,
+      detail: `Waiting for a second administrator: ${changeRequest.summary}. Approve it under Settings → Change control.`,
     });
     this.name = 'ChangeHeldError';
   }

@@ -177,7 +177,7 @@ export function MfaChallenge() {
         // support ticket; explained it is a sentence.
         setError(
           cause.problem.detail ??
-            'That code completed your setup. Wait for your app to show the next one.',
+            'That code was used for setup. Wait for the next one.',
         );
       } else if (isRateLimited(cause)) {
         setError(t('common.rate_limited'));
@@ -191,8 +191,8 @@ export function MfaChallenge() {
         // recovery code against a rule that names a security key.
         setError(
           challenge.factors.includes('recovery_code')
-            ? 'That did not match. Try again, or use a recovery code.'
-            : 'That did not match. Try again.',
+            ? 'Wrong code. Try again, or use a recovery code.'
+            : 'Wrong code. Try again.',
         );
       }
     } finally {

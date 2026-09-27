@@ -130,7 +130,7 @@ describe('an extension', () => {
     mockFormWithSubmit({ ...base });
     renderExtending();
     expect(
-      await screen.findByText(/replaces the access you already hold/i),
+      await screen.findByText(/replaces your current access/i),
     ).toBeInTheDocument();
   });
 

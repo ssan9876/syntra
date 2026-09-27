@@ -144,7 +144,7 @@ export function WebhooksTab() {
       setFailure(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+          : 'Not saved.',
       );
     } finally {
       setBusy(null);
@@ -189,7 +189,7 @@ export function WebhooksTab() {
           {loading && <SkeletonRows rows={3} cols={4} />}
           {!loading && endpoints.length === 0 && !adding && (
             <div className="p-6">
-              <Empty title="Nothing is subscribed" />
+              <Empty title="No webhooks yet" />
             </div>
           )}
 
@@ -416,7 +416,7 @@ function EndpointForm({
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That could not be saved.',
+            : 'Not saved.',
       );
     } finally {
       setBusy(false);
@@ -590,7 +590,7 @@ function Deliveries({
                         setRetryProblem(
                           cause instanceof ApiError
                             ? (cause.problem.detail ?? cause.problem.title)
-                            : 'That delivery could not be sent again.',
+                            : 'Resend failed.',
                         );
                       } finally {
                         setBusy(null);

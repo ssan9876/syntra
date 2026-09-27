@@ -109,7 +109,7 @@ export function UpdatesPage() {
       setError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'The update status could not be read.',
+          : 'Could not read update status.',
       );
     } finally {
       setLoading(false);
@@ -155,7 +155,7 @@ export function UpdatesPage() {
       setError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'The update could not be started.',
+          : 'Update not started.',
       );
     } finally {
       setBusy(false);
@@ -232,13 +232,13 @@ export function UpdatesPage() {
                 </p>
                 {progress.detail && <p className="text-muted">{progress.detail}</p>}
                 {progress.step === 'rolled_back' && (
-                  <Alert tone="warning" title="The update was undone">
-                    Previous version and database restored — schema and data
-                    both. Changes made during the update are lost.
+                  <Alert tone="warning" title="Update rolled back">
+                    Previous version and database restored. Changes made during
+                    the update are lost.
                   </Alert>
                 )}
                 {progress.step === 'failed' && (
-                  <Alert tone="danger" title="The update failed">
+                  <Alert tone="danger" title="Update failed">
                     {progress.detail}
                   </Alert>
                 )}

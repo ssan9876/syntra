@@ -32,7 +32,7 @@ const RULES: { pattern: RegExp; key: ThresholdKey; note?: string }[] = [
   {
     pattern: /^would move \d+ of \d+/,
     key: 'archiveAccountThresholdPercent',
-    note: 'Container moves are measured against the archive threshold: there is no separate setting for them.',
+    note: 'Container moves count against the archive threshold.',
   },
   { pattern: /^would revoke "/, key: 'perEntitlementThresholdPercent' },
   { pattern: /^would revoke \d+ of \d+/, key: 'revokeEntitlementThresholdPercent' },

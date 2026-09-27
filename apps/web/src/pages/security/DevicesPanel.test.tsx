@@ -79,7 +79,7 @@ describe('DevicesPanel', () => {
       await screen.findByRole('button', { name: 'Sign out this device' }),
     );
 
-    expect(await screen.findByText(/You have been signed out/)).toBeInTheDocument();
+    expect(await screen.findByText('Signed out')).toBeInTheDocument();
   });
 
   it('stays on the page and reloads when the ended session was another one', async () => {
@@ -99,7 +99,7 @@ describe('DevicesPanel', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull(),
     );
-    expect(screen.queryByText(/You have been signed out/)).toBeNull();
+    expect(screen.queryByText('Signed out')).toBeNull();
   });
 
   it('says so when the list cannot be loaded', async () => {

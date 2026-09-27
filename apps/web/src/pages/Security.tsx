@@ -71,7 +71,7 @@ export function Security() {
       setCodeError(
         isRateLimited(cause)
           ? t('common.rate_limited')
-          : 'That code did not match.',
+          : 'Wrong code.',
       );
     } finally {
       setBusy(false);
@@ -168,7 +168,7 @@ export function Security() {
       setError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be removed.',
+          : 'Not removed. Try again.',
       );
     } finally {
       setBusy(false);

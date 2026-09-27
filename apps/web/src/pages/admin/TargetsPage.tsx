@@ -165,7 +165,7 @@ function health(
   if (target.lastRunAt === null) {
     return {
       state: 'blocked',
-      label: 'No run has ever completed',
+      label: 'No completed run yet',
     };
   }
 
@@ -236,7 +236,7 @@ export function TargetsPage() {
           {data?.targets.length === 0 && (
             <div className="p-6">
               <Empty
-                title="No target systems yet"
+                title="No targets yet"
                 action={
                   <Link
                     to="/admin/targets/new"

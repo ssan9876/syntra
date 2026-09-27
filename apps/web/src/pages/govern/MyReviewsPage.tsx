@@ -23,17 +23,17 @@ interface ReviewItem {
 }
 
 const HIGH_RISK: Record<string, string> = {
-  unattributable: 'nothing in Syntra explains this access',
-  privileged: 'this is privileged access',
-  sod_violation: 'this holding is part of an open segregation-of-duties violation',
-  stale: 'the system this came from has not been read recently enough',
-  needs_review: 'the person’s job changed and this access stopped matching it',
+  unattributable: 'no known source for this access',
+  privileged: 'privileged access',
+  sod_violation: 'part of an open segregation-of-duties violation',
+  stale: 'source data is out of date',
+  needs_review: 'job changed and access no longer matches',
 };
 
 const carveOut = (item: ReviewItem): string | null => {
   const flag = item.riskFlags.find((f) => f in HIGH_RISK);
   if (flag !== undefined) return HIGH_RISK[flag]!;
-  if (item.coverageStatus !== 'complete') return 'the system this came from was not read in full';
+  if (item.coverageStatus !== 'complete') return 'source was not read in full';
   return null;
 };
 
@@ -70,8 +70,8 @@ export function MyReviewsPage() {
     const comment = needsComment
       ? window.prompt(
           decision === 'revoke'
-            ? 'Why are you removing this? A revoke decision needs a comment.'
-            : 'Nothing in Syntra explains this access. Say who confirmed it is fine, and why.',
+            ? 'Reason for removal (required):'
+            : 'No known source for this access. Who confirmed it, and why?',
         )
       : null;
     if (needsComment && (comment === null || comment.trim() === '')) return;
@@ -90,7 +90,7 @@ export function MyReviewsPage() {
         setActionError(
           cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'Could not record that decision.',
+            : 'Decision not saved. Try again.',
         ),
       )
       .finally(() => setDeciding(null));
@@ -154,7 +154,7 @@ export function MyReviewsPage() {
       setActionError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Could not certify those items.',
+          : 'Items not certified. Try again.',
       );
     } finally {
       setBulkBusy(false);
@@ -165,10 +165,6 @@ export function MyReviewsPage() {
     <div className="mx-auto w-full max-w-5xl px-6 py-8">
       <header className="mb-6">
         <h1 className="text-lg font-semibold text-ink">My reviews</h1>
-        <p className="mt-1 text-muted">
-          Certifying an item records that you decided to keep it, against the facts shown, at the
-          time you clicked. It does not say the access is appropriate — only that you looked.
-        </p>
       </header>
 
       {error && <Alert tone="danger">{error}</Alert>}
@@ -176,9 +172,7 @@ export function MyReviewsPage() {
       {!data && loading && <SkeletonRows rows={6} cols={4} />}
 
       {data && items.length === 0 && (
-        <Empty title="Nothing is waiting for you">
-          When a review names you, it arrives here and in your inbox.
-        </Empty>
+        <Empty title="No reviews waiting" />
       )}
 
       {items.length > 0 && (
@@ -245,11 +239,9 @@ export function MyReviewsPage() {
                     {/* Section 8 rule 5: the reviewer is told BEFORE they decide,
                         on the item, and the decision records the age. */}
                     {item.coverageStatus !== 'complete' && (
-                      <Alert tone="warning" title="You are deciding against data of a stated age">
+                      <Alert tone="warning" title="Out-of-date data">
                         {item.systemName} was last read {Math.round(item.sourceAgeHours ?? 0)} hours
-                        ago, against a {item.sourceSlaHours}-hour SLA. You may well know the answer;
-                        your decision will record that it was made against data of that age, and the
-                        evidence bundle will say so too.
+                        ago, against a {item.sourceSlaHours}-hour SLA. Your decision records this.
                       </Alert>
                     )}
 
@@ -257,7 +249,7 @@ export function MyReviewsPage() {
                         with no explanation. */}
                     {reason !== null && (
                       <p className="text-muted">
-                        This one has to be decided on its own, with a comment, because {reason}.
+                        Decide on its own, with a comment: {reason}.
                       </p>
                     )}
 

@@ -70,7 +70,7 @@ export function RequestDetailAdminPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : 'Decision not saved. Try again.',
       );
     } finally {
       setBusy(false);
@@ -114,7 +114,7 @@ export function RequestDetailAdminPage() {
           </Panel>
 
           <div className="mt-6">
-            <Panel title="Who it was with, and what they decided">
+            <Panel title="Approvals">
               <ul className="divide-y divide-border-subtle">
                 {data.steps.map((step) => (
                   <li key={step.id} className="px-4 py-3">
@@ -146,7 +146,7 @@ export function RequestDetailAdminPage() {
           {data.status === 'blocked_no_approver' && (
             <div className="mt-6">
               <Panel
-                title="Decide this by hand"
+                title="No approver. Decide manually"
               >
                 <div className="space-y-3 p-4">
                   <Field

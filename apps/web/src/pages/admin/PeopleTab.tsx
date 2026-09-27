@@ -204,7 +204,7 @@ export function PeopleTab() {
           {data && persons.length === 0 && total === 0 && filtered && (
             <div className="p-6">
               <Empty
-                title={`Nobody matches ${q || status}`}
+                title={`No people match ${q || status}`}
                 action={
                   <button
                     type="button"

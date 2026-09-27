@@ -105,7 +105,7 @@ type Tab = 'person' | 'type' | 'exceptions' | 'drift';
 
 const nameOf = (person: Person | null) =>
   person === null
-    ? 'Not attributed to a person'
+    ? 'No person'
     : `${person.givenName ?? ''} ${person.familyName ?? ''}`.trim() || person.id;
 
 /**
@@ -211,11 +211,11 @@ function applyTitle(result: ApplyResult): string {
 }
 
 const DRIFT_LABELS: Record<string, string> = {
-  unmanaged_entitlement: 'A holding Provision did not grant',
-  missing_grant: 'A holding Provision granted and the target no longer has',
-  orphan_account: 'An account at the target Syntra holds no record of',
-  account_missing_at_target: 'An account Syntra records and the target does not',
-  unexpected_status: 'An account whose status at the target is not what Syntra expects',
+  unmanaged_entitlement: 'Entitlement Syntra did not grant',
+  missing_grant: 'Granted entitlement missing at the target',
+  orphan_account: 'Account at the target with no Syntra record',
+  account_missing_at_target: 'Account missing at the target',
+  unexpected_status: 'Unexpected account status at the target',
 };
 
 /**
@@ -335,7 +335,7 @@ export function ProvisionRunDetailPage() {
       .catch(() => {
         if (seq !== requestSeq.current) return;
         setDrift(null);
-        setDriftProblem('The request failed. Drift is unknown, not zero.');
+        setDriftProblem('Drift not loaded. It is unknown, not zero.');
       });
   };
   useEffect(reload, [id, runId]);
@@ -417,7 +417,7 @@ export function ProvisionRunDetailPage() {
       </Panel>
     );
   }
-  if (!run) return <Alert tone="danger">{problem ?? 'That run is not there.'}</Alert>;
+  if (!run) return <Alert tone="danger">{problem ?? 'Run not found.'}</Alert>;
 
   const byPerson = new Map<string, Action[]>();
   for (const action of run.actions) {
@@ -528,10 +528,10 @@ export function ProvisionRunDetailPage() {
         {problem && <Alert tone="danger">{problem}</Alert>}
 
         {run.status === 'blocked' && (
-          <Alert tone="warning" title="This run is blocked">
+          <Alert tone="warning" title="Run blocked">
             {/* A blocked run leads with why, and with the numbers behind it. */}
             <ul className="list-disc pl-5">
-              {(run.blockedReason ?? 'no reason was recorded')
+              {(run.blockedReason ?? 'no reason recorded')
                 .split('; ')
                 .map((reason) => (
                   <li key={reason}>{reason}</li>
@@ -553,7 +553,7 @@ export function ProvisionRunDetailPage() {
                * stable; the list is not, and the reasons above are the run's
                * own.
                */
-              <p className="mt-3">Cannot be confirmed away.</p>
+              <p className="mt-3">Cannot be overridden. Fix the cause and run again.</p>
             )}
           </Alert>
         )}
@@ -588,7 +588,7 @@ export function ProvisionRunDetailPage() {
             {/* An exception is not a warning to be scrolled past: every person
                 on that list is a person whose access is frozen until somebody
                 fixes something. */}
-            Excluded from this plan; existing access untouched.
+            Left out of this run. Their access is unchanged.
           </Alert>
         )}
 
@@ -629,7 +629,7 @@ export function ProvisionRunDetailPage() {
               <div className="p-6">
                 {/* Convergence, and it has to say so. An empty plan and a plan
                     that failed to compute look identical otherwise. */}
-                <Empty title="This run proposes nothing" />
+                <Empty title="No changes proposed" />
               </div>
             </Panel>
           ) : (
@@ -670,7 +670,7 @@ export function ProvisionRunDetailPage() {
           <Panel>
             {run.actions.length === 0 ? (
               <div className="p-6">
-                <Empty title="This run proposes nothing" />
+                <Empty title="No changes proposed" />
               </div>
             ) : (
               <ul>
@@ -693,7 +693,7 @@ export function ProvisionRunDetailPage() {
           <Panel>
             {run.exceptions.length === 0 ? (
               <div className="p-6">
-                <Empty title="Everybody was processed" />
+                <Empty title="No exceptions" />
               </div>
             ) : (
               <ul>
@@ -722,7 +722,7 @@ export function ProvisionRunDetailPage() {
           >
             {drift === null ? (
               <div className="p-4">
-                <Alert tone="danger" title="Drift could not be read">
+                <Alert tone="danger" title="Drift not loaded">
                   {driftProblem}
                 </Alert>
               </div>
@@ -734,7 +734,7 @@ export function ProvisionRunDetailPage() {
               <ul>
                 {drift.length >= DRIFT_PAGE && (
                   <li className="border-b border-border-subtle p-4">
-                    <Alert tone="warning" title="This list is not all of it">
+                    <Alert tone="warning" title="List truncated">
                       Showing the first {DRIFT_PAGE}.
                     </Alert>
                   </li>
@@ -772,7 +772,7 @@ export function ProvisionRunDetailPage() {
         {run.actions.length > 0 && !appliable && (
           <Panel
             title={
-              unconfirmable ? 'This run cannot be applied' : 'Nothing further to apply'
+              unconfirmable ? 'Cannot apply this run' : 'Nothing left to apply'
             }
           >
             {!unconfirmable && (
@@ -797,7 +797,7 @@ export function ProvisionRunDetailPage() {
                 <Alert tone={maintenanceOverrideAllowed ? 'warning' : 'danger'} title="Outside the target maintenance window">
                   {maintenanceOverrideAllowed
                     ? 'Leaver removals only. Record a reason.'
-                    : 'Selection includes actions that must wait for the window.'}
+                    : 'Some selected actions must wait for the window.'}
                 </Alert>
               )}
               {maintenanceClosed && maintenanceOverrideAllowed && (
@@ -813,14 +813,14 @@ export function ProvisionRunDetailPage() {
                 <Check
                   checked={confirm}
                   onChange={setConfirm}
-                  label="I have read the numbers above and want to apply this run anyway"
+                  label="Apply this run despite the numbers above"
                 />
               )}
               {needsConfirmation && !run.requiresConfirmation && (
                 <Check
                   checked={confirm}
                   onChange={setConfirm}
-                  label="I have read what needs confirmation and want to apply it"
+                  label="Apply the actions that need confirmation"
                 />
               )}
               <Button

@@ -156,21 +156,21 @@ const hostnames = (text: string) =>
  */
 const LABELS: Record<string, string> = {
   adminMfaRequired: 'Require a second factor for the console',
-  selfEnrolmentEnabled: 'Let people enrol a factor themselves',
-  emailOtpEnabled: 'Allow a code sent by email',
+  selfEnrolmentEnabled: 'Let people enrol their own second factor',
+  emailOtpEnabled: 'Allow email codes',
   adminWebauthnRequired: 'Require a security key for the console',
   portalSessionIdleMinutes: 'Portal idle timeout',
   portalSessionAbsoluteMinutes: 'Portal session lasts',
   adminSessionIdleMinutes: 'Console idle timeout',
   adminSessionAbsoluteMinutes: 'Console session lasts',
   passwordMinLength: 'Minimum password length',
-  passwordHistoryDepth: 'Previous passwords that may not be reused',
+  passwordHistoryDepth: 'Recent passwords blocked from reuse',
   passwordMaxAgeDays: 'Password lasts',
   lockoutThreshold: 'Failures before locking',
   lockoutWindowMinutes: 'Counted over',
   lockoutDurationMinutes: 'Lock lasts',
   primaryDomain: 'Primary domain',
-  additionalDomains: 'Also answers on',
+  additionalDomains: 'Other hostnames',
 };
 
 /**
@@ -287,7 +287,7 @@ export function SettingsSignInTab() {
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That did not save. Try again.',
+            : 'Settings not saved. Try again.',
       );
     } finally {
       setSaving(false);
@@ -296,7 +296,7 @@ export function SettingsSignInTab() {
 
   if (loading && !data) return <SkeletonRows rows={4} />;
   if (error || !data) {
-    return <Alert tone="danger">{error ?? 'Something went wrong.'}</Alert>;
+    return <Alert tone="danger">{error ?? 'Settings could not be loaded.'}</Alert>;
   }
 
   const saved = fromView(data);
@@ -333,7 +333,7 @@ export function SettingsSignInTab() {
               // domain is set, and nobody could deduce it from the checkbox.
               data.webauthnAvailable
                 ? undefined
-                : 'No primary domain: only an authenticator app can satisfy this.'
+                : 'No primary domain set. Only authenticator apps work.'
             }
           />
 
@@ -341,14 +341,14 @@ export function SettingsSignInTab() {
             className="sm:col-span-2"
             checked={selfEnrolmentEnabled}
             onChange={(v) => set('selfEnrolmentEnabled', v)}
-            label="Let people enrol a factor themselves when one is required"
+            label="Let people enrol their own second factor"
           />
 
           <Check
             className="sm:col-span-2"
             checked={emailOtp}
             onChange={(v) => set('emailOtp', v)}
-            label="Allow a code sent by email as a second factor"
+            label="Allow email codes as a second factor"
           />
 
           <Check
@@ -365,7 +365,7 @@ export function SettingsSignInTab() {
               // not a description of the checkbox.
               data.webauthnAvailable
                 ? undefined
-                : 'No primary domain: security keys cannot be registered.'
+                : 'No primary domain set. Security keys cannot be registered.'
             }
           />
 
@@ -375,16 +375,16 @@ export function SettingsSignInTab() {
             // itself started with a key, so the one person certain to be
             // affected is also the one proven able to get back in.
             <div className="sm:col-span-2">
-              <Alert tone="warning" title="Console sessions started without a key end">
-                Save from a session you started with your own key.
+              <Alert tone="warning" title="Console sessions without a key will end">
+                Sign in with your own key before you save.
               </Alert>
             </div>
           )}
 
           {adminMfaRequired && !selfEnrolmentEnabled && (
             <div className="sm:col-span-2">
-              <Alert tone="warning" title="Nobody can enrol their way in">
-                Administrators without a factor are refused.
+              <Alert tone="warning" title="Self-enrolment is off">
+                Administrators without a second factor cannot sign in.
               </Alert>
             </div>
           )}
@@ -444,8 +444,8 @@ export function SettingsSignInTab() {
             // consequence nobody would guess: it reaches back into sessions
             // already issued. Raising a value does not extend them.
             <div className="sm:col-span-2">
-              <Alert tone="warning" title="Shorter limits apply to everyone signed in now">
-                Sessions past the new limit end at their next request.
+              <Alert tone="warning" title="Shorter limits apply to current sessions">
+                Sessions past the new limit end on their next request.
               </Alert>
             </div>
           )}
@@ -466,7 +466,7 @@ export function SettingsSignInTab() {
 
           <Field
             name="passwordHistoryDepth"
-            label="Previous passwords that may not be reused"
+            label="Recent passwords blocked from reuse"
             type="number"
             inputMode="numeric"
             min={0}
@@ -497,8 +497,8 @@ export function SettingsSignInTab() {
                 error={errors.passwordMaxAgeDays}
               />
               <div className="sm:col-span-2">
-                <Alert tone="warning" title="Everyone with a local password is affected">
-                  Upstream-managed passwords are not affected.
+                <Alert tone="warning" title="Applies to all local passwords">
+                  Passwords managed by a source directory do not expire here.
                 </Alert>
               </div>
             </>
@@ -551,8 +551,8 @@ export function SettingsSignInTab() {
 
               {Number(duration) === 0 && (
                 <div className="sm:col-span-2">
-                  <Alert tone="warning" title="These locks do not lift themselves">
-                    An administrator has to be reachable to unlock them.
+                  <Alert tone="warning" title="Locks never expire">
+                    An administrator must unlock each account.
                   </Alert>
                 </div>
               )}
@@ -578,14 +578,14 @@ export function SettingsSignInTab() {
             // moved.
             warning={
               data.webauthnAvailable && domainChanged
-                ? 'Moving it makes every registered security key unusable.'
+                ? 'Changing it breaks every registered security key.'
                 : undefined
             }
             error={errors.primaryDomain}
           />
           <Textarea
             name="additionalDomains"
-            label="Also answers on, one hostname per line"
+            label="Other hostnames, one per line"
             value={extraDomains}
             onChange={(v) => set('extraDomains', v)}
             rows={3}
@@ -606,7 +606,7 @@ export function SettingsSignInTab() {
             <dt className="text-sm font-medium text-muted">Always reachable as</dt>
             <dd className="mt-0.5 text-ink">
               <code className="rounded bg-surface-2 px-1 py-px text-sm">{data.slug}</code>
-              <span className="text-muted"> as the leftmost part of any hostname</span>
+              <span className="text-muted"> as the first part of any hostname</span>
             </dd>
           </dl>
         </FormSection>
@@ -615,10 +615,10 @@ export function SettingsSignInTab() {
           // The count, and a button that says what it costs. Not a second
           // "Save" — the whole point is that this press is different from the
           // one that was refused.
-          <Alert tone="warning" title="This will invalidate registered security keys">
+          <Alert tone="warning" title="Security keys will stop working">
             <p>
-              {atRisk} {atRisk === 1 ? 'key is' : 'keys are'} registered against{' '}
-              <code>{data.primaryDomain ?? 'no domain'}</code>. Holders must enrol again.
+              {atRisk} {atRisk === 1 ? 'key is' : 'keys are'} registered to{' '}
+              <code>{data.primaryDomain ?? 'no domain'}</code>. Their owners must register again.
             </p>
             <Button
               type="button"

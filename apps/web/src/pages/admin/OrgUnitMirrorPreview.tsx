@@ -64,7 +64,7 @@ function Placement({ unit }: { unit: MirrorPreviewUnit }) {
     case 'mirrored':
       return <Status tone="primary">Mirrored</Status>;
     case 'manual':
-      return <Status tone="neutral">Typed DN (overrides the mirror)</Status>;
+      return <Status tone="neutral">Typed DN</Status>;
     case 'not_mirrored':
       return <Status tone="neutral">No longer mirrored</Status>;
     default:
@@ -162,7 +162,7 @@ function HandTypedWarning({
     <Alert tone={result.skipped.length > 0 ? 'warning' : 'success'} title={switchedTitle(result)}>
       {result.switched.some((s) => s.pendingMoveFrom !== null) && (
         <p className="text-sm">
-          {`Nothing has moved in the directory yet. The next run proposes moving ${movesText(result)}, with every account inside, and holds for a person to confirm before anything moves.`}
+          {`Nothing moved yet. The next run proposes moving ${movesText(result)} with their accounts and waits for review.`}
         </p>
       )}
       {result.skipped.length > 0 && (
@@ -183,13 +183,10 @@ function HandTypedWarning({
   return (
     <div className="space-y-2">
       {outcome}
-      <Alert tone="warning" title={`Mirroring is on, but ${count} org unit${count === 1 ? ' uses' : 's use'} a DN typed by hand`}>
+      <Alert tone="warning" title={`${count} org unit${count === 1 ? ' uses' : 's use'} a typed DN`}>
         <div data-testid="hand-typed-warning" className="space-y-2">
           <p className="text-sm">
-            A typed DN always wins over the mirror, so {count === 1 ? 'this unit stays' : 'these units stay'} where{' '}
-            {count === 1 ? 'it was' : 'they were'} typed until switched. Switching writes nothing to the directory: the next run
-            proposes moving each OU, with the accounts in it, to its mirrored place, and a container move always holds the run
-            for a person to confirm.
+            A typed DN overrides the mirror. After switching, the next run proposes each move and waits for review.
           </p>
           <ul className="space-y-2">
             {units.map((unit) => (
@@ -216,7 +213,7 @@ function HandTypedWarning({
                       Mirrored: <code className="font-mono break-all">{unit.derivedDn}</code>
                     </>
                   ) : (
-                    <>Cannot be mirrored: {unit.problem?.message ?? 'no DN can be derived for it'}.</>
+                    <>Cannot be mirrored: {unit.problem?.message ?? 'no DN available'}.</>
                   )}
                 </p>
               </li>
@@ -232,7 +229,7 @@ function HandTypedWarning({
             >
               Switch all to mirrored
             </Button>
-            {unsaved && <span className="text-sm">Save the org-unit settings first: switching uses the saved root.</span>}
+            {unsaved && <span className="text-sm">Save the target first.</span>}
           </div>
           {failure !== null && <p className="text-sm">{failure}</p>}
         </div>
@@ -294,8 +291,8 @@ export function OrgUnitMirrorPreview({
           if (cancelled) return;
           setProblem(
             cause instanceof ApiError
-              ? (cause.problem.detail ?? cause.problem.title ?? 'The preview could not be read.')
-              : 'The preview could not be read.',
+              ? (cause.problem.detail ?? cause.problem.title ?? 'Could not load the preview.')
+              : 'Could not load the preview.',
           );
         })
         .finally(() => {

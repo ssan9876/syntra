@@ -57,7 +57,9 @@ function ResourcePanel({ resource }: { resource: Managed }) {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : action === 'grant'
+            ? 'Access was not given. Try again.'
+            : 'Access was not removed. Try again.',
       );
     } finally {
       setBusy(false);
@@ -97,7 +99,7 @@ function ResourcePanel({ resource }: { resource: Managed }) {
           <div className="flex items-end gap-2">
             <div className="flex-1">
               <Field
-                label="Add somebody (person id)"
+                label="Person ID"
                 value={personId}
                 onChange={setPersonId}
               />
@@ -125,10 +127,7 @@ export function ManagedResourcesPage() {
     <AppShell>
       <div className="mx-auto w-full max-w-3xl px-6 py-8">
         <h1 className="text-lg font-semibold text-ink">Resources you manage</h1>
-        <p className="mt-1 text-muted">
-          Adding and removing people here records a request in your name,
-          exactly as if it had gone through the catalog.
-        </p>
+        <p className="mt-1 text-muted">Each change is recorded as a request in your name.</p>
         {error && <Alert tone="danger">{error}</Alert>}
         <div className="mt-6 space-y-6">
           {!data && loading && (
@@ -137,10 +136,7 @@ export function ManagedResourcesPage() {
             </Panel>
           )}
           {data && (data.resources ?? []).length === 0 && (
-            <Empty title="You do not manage anything yet">
-              An administrator delegates a specific group or application to you,
-              and it appears here.
-            </Empty>
+            <Empty title="No resources yet" />
           )}
           {data &&
             (data.resources ?? []).map((resource) => (
