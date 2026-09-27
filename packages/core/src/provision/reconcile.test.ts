@@ -558,6 +558,41 @@ describe('reconcile — an account that vanished', () => {
     // And no `missing_grant` either: there is no object to be missing from.
     expect(result.findings).toEqual([]);
   });
+  it('does not mark a deleted account missing, and records nothing about it', () => {
+    const result = run({
+      desired: [noAccount()],
+      known: [known({ status: 'deleted', holdings: [] })],
+      objects: [],
+    });
+    const state = result.actual.get('person-1')!;
+    expect(state.status).toBe('deleted');
+    expect(state.existsAtTarget).toBe(false);
+    expect(state.enabledAtTarget).toBe(false);
+    expect(result.findings).toEqual([]);
+  });
+
+  it('reports a deleted account that is back at the target', () => {
+    const result = run({
+      desired: [noAccount()],
+      known: [known({ status: 'deleted', holdings: [] })],
+      objects: [object({ enabled: false, entitlementIds: [] })],
+    });
+    expect(result.findings).toEqual([
+      {
+        kind: 'unexpected_status',
+        accountId: 'account-1',
+        entitlementId: null,
+        subjectAnchor: null,
+        detail: {
+          syntraBelieves: 'deleted',
+          targetReports: 'disabled',
+          reason: 'Account deleted by Syntra is back at the target.',
+        },
+        fingerprint: 'unexpected_status:account-1:-:-',
+      },
+    ]);
+    expect(result.actual.get('person-1')!.status).toBe('deleted');
+  });
 });
 
 describe('reconcile — unexpected status', () => {

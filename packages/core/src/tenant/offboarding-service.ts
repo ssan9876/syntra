@@ -87,7 +87,7 @@ async function readExportableData(tx: TenantClient, tenantId: string) {
       tx.attributeMapping.findMany({ orderBy: { id: 'asc' } }),
       tx.personSource.findMany({ orderBy: { id: 'asc' }, select: { id: true, name: true, type: true, config: true, secretName: true, feedMode: true, schedule: true, autoApply: true, deactivationThresholdPercent: true, enabled: true, lastRunAt: true, createdAt: true, updatedAt: true } }),
       tx.personFieldMapping.findMany({ orderBy: { id: 'asc' } }),
-      tx.targetSystem.findMany({ orderBy: { id: 'asc' }, select: { id: true, name: true, type: true, config: true, secretName: true, pairedDirectorySourceId: true, schedule: true, autoApply: true, enabled: true, enforcementMode: true, preHireDays: true, entitlementRevocationDelayDays: true, disableGraceDays: true, archiveAfterDays: true, reenableWithoutConfirmationDays: true } }),
+      tx.targetSystem.findMany({ orderBy: { id: 'asc' }, select: { id: true, name: true, type: true, config: true, secretName: true, pairedDirectorySourceId: true, schedule: true, autoApply: true, enabled: true, enforcementMode: true, preHireDays: true, entitlementRevocationDelayDays: true, disableGraceDays: true, archiveAfterDays: true, deleteAfterDays: true, reenableWithoutConfirmationDays: true } }),
       tx.accountProfile.findMany({ orderBy: { id: 'asc' } }),
       tx.businessRule.findMany({ orderBy: { id: 'asc' } }),
       tx.ruleEntitlement.findMany({ orderBy: { id: 'asc' } }),

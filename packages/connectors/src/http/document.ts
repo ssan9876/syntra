@@ -62,13 +62,12 @@ const requestPath = z
  * The methods a document may name for an ACCOUNT operation. `DELETE` is
  * absent, and its absence is the point.
  *
- * `WriteOperation` deliberately contains no delete: every action Provision can
- * propose has to be one that four thousand instances of can be walked back,
+ * `WriteOperation`'s one delete, `delete_account`, is refused by this connector,
  * and `archive_account` moves and strips rather than destroys. A document that
  * could write `"archive": { "method": "DELETE", "path": "/users/{{anchor}}" }`
  * would reintroduce the delete through the back door, wearing the name of the
  * operation that exists to avoid it — and it would be a delete the planner
- * believes is safe to propose in bulk.
+ * proposes with no disabled check and no delete threshold.
  *
  * Refused by the schema, so it is a configuration error at save time rather
  * than four thousand destroyed accounts at apply time.

@@ -2123,6 +2123,10 @@ model TargetSystem {
   /// Null means never. Archiving moves the object and strips its remaining
   /// managed entitlements, so it is opted into.
   archiveAfterDays                Int?
+  /// Null means never. Deletes a leaver's disabled account this many days
+  /// after departure; Active Directory and Entra ID only. New targets of those
+  /// types start at 30. At or after `disableGraceDays` and `archiveAfterDays`.
+  deleteAfterDays                 Int?
   /// Re-enabling an account disabled for longer than this is confirmable.
   /// Deliberately not derived from disableGraceDays: with that at its default
   /// of zero, deriving it would make every re-enable confirmable, including
@@ -2132,6 +2136,7 @@ model TargetSystem {
   createAccountThresholdPercent        Int @default(20)
   disableAccountThresholdPercent       Int @default(10)
   archiveAccountThresholdPercent       Int @default(2)
+  deleteAccountThresholdPercent        Int @default(2)
   revokeEntitlementThresholdPercent    Int @default(10)
   deactivateSyntraUserThresholdPercent Int @default(10)
   /// The second axis. Revoking every holder of one entitlement is 0.2% of a
@@ -2366,8 +2371,8 @@ model TargetAccount {
   /// runs cannot generate the same login.
   anchor                String?
   correlationKey        String
-  /// 'pending' | 'active' | 'disabled' | 'archived' | 'missing_at_target'
-  /// | 'conflict'
+  /// 'pending' | 'active' | 'disabled' | 'archived' | 'deleted'
+  /// | 'missing_at_target' | 'conflict'
   status                String       @default("pending")
   statusReason          String?
   disabledAt            DateTime?
@@ -3002,6 +3007,7 @@ model ProvisionRun {
   enableAccountCount        Int @default(0)
   disableAccountCount       Int @default(0)
   archiveAccountCount       Int @default(0)
+  deleteAccountCount        Int @default(0)
   renameAccountCount        Int @default(0)
   grantEntitlementCount     Int @default(0)
   revokeEntitlementCount    Int @default(0)

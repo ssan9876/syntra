@@ -58,9 +58,10 @@ const MS_PER_DAY = 86_400_000;
 
 /**
  * What a processing restriction withholds for the restricted person: every
- * action that writes their data to a target or widens their access. Disable,
- * archive, revoke and deactivate are absent on purpose -- a restriction never
- * keeps access alive.
+ * action that writes their data to a target or widens their access, and the
+ * delete, which erases data a restriction exists to keep. Disable, archive,
+ * revoke and deactivate are absent on purpose -- a restriction never keeps
+ * access alive.
  */
 export const RESTRICTION_WITHHELD_ACTIONS: ReadonlySet<string> = new Set([
   'create_account',
@@ -69,6 +70,7 @@ export const RESTRICTION_WITHHELD_ACTIONS: ReadonlySet<string> = new Set([
   'rename_account',
   'grant_entitlement',
   'reactivate_syntra_user',
+  'delete_account',
 ]);
 
 /**
@@ -1247,6 +1249,7 @@ export async function previewProvisionRun(
         entitlementRevocationDelayDays: prepared.target.entitlementRevocationDelayDays,
         disableGraceDays: prepared.target.disableGraceDays,
         archiveAfterDays: prepared.target.archiveAfterDays,
+        deleteAfterDays: prepared.target.deleteAfterDays,
         reenableWithoutConfirmationDays: prepared.target.reenableWithoutConfirmationDays,
         renameEnabled: prepared.target.renameEnabled,
       },
@@ -1279,7 +1282,8 @@ export async function previewProvisionRun(
      * plan as `refused` with the case named, exactly like a capability
      * refusal, so the preview shows what did not happen and why. Actions that
      * narrow access -- disable, archive, revoke, deactivate -- still run: a
-     * restriction must never keep a leaver's access alive.
+     * restriction must never keep a leaver's access alive. The delete is
+     * withheld: it erases, and the account is already disabled.
      *
      * Kept apart from `refusalByIndex` so the capability counts on the run
      * still mean what they say.
@@ -1328,6 +1332,7 @@ export async function previewProvisionRun(
         createAccountThresholdPercent: prepared.target.createAccountThresholdPercent,
         disableAccountThresholdPercent: prepared.target.disableAccountThresholdPercent,
         archiveAccountThresholdPercent: prepared.target.archiveAccountThresholdPercent,
+        deleteAccountThresholdPercent: prepared.target.deleteAccountThresholdPercent,
         revokeEntitlementThresholdPercent:
           prepared.target.revokeEntitlementThresholdPercent,
         deactivateSyntraUserThresholdPercent:
@@ -1738,6 +1743,7 @@ export async function previewProvisionRun(
           enableAccountCount: counts('enable_account'),
           disableAccountCount: counts('disable_account'),
           archiveAccountCount: counts('archive_account'),
+          deleteAccountCount: counts('delete_account'),
           renameAccountCount: counts('rename_account'),
           grantEntitlementCount: counts('grant_entitlement'),
           revokeEntitlementCount: counts('revoke_entitlement'),

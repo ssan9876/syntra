@@ -36,6 +36,7 @@ const thresholds = {
   createAccountThresholdPercent: 20,
   disableAccountThresholdPercent: 10,
   archiveAccountThresholdPercent: 2,
+  deleteAccountThresholdPercent: 2,
   revokeEntitlementThresholdPercent: 10,
   deactivateSyntraUserThresholdPercent: 10,
   perEntitlementThresholdPercent: 50,
@@ -236,6 +237,32 @@ describe('evaluateProvisionGuard — per action type', () => {
     expect(guard({ actions: many('archive_account', 21) })).toMatchObject({
       blocked: true,
     });
+  });
+
+  it('blocks over the delete threshold at its own 2%, for confirmation', () => {
+    expect(guard({ actions: many('delete_account', 20) })).toEqual({ blocked: false });
+    const verdict = guard({ actions: many('delete_account', 21) });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: true });
+    expect(reasonsOf(verdict)).toEqual([
+      'would delete 21 of 1000 accounts (2.1%), above the 2% threshold',
+    ]);
+  });
+
+  it('measures deletes against their own threshold, not the archive threshold', () => {
+    const loose = { ...thresholds, archiveAccountThresholdPercent: 100 };
+    expect(guard({ thresholds: loose, actions: many('delete_account', 21) })).toMatchObject({
+      blocked: true,
+    });
+    const deleteLoose = { ...thresholds, deleteAccountThresholdPercent: 100 };
+    expect(guard({ thresholds: deleteLoose, actions: many('archive_account', 21) })).toMatchObject({
+      blocked: true,
+    });
+  });
+
+  it('refuses outright a delete against a target that reports no accounts', () => {
+    const verdict = guard({ accountsAtTarget: 0, hasEverApplied: false, actions: many('delete_account', 1) });
+    expect(verdict).toMatchObject({ blocked: true, requiresConfirmation: false });
+    expect(reasonsOf(verdict)[0]).toContain('cannot evaluate the delete threshold');
   });
 
   it('blocks over the Syntra user deactivation threshold', () => {
@@ -505,6 +532,7 @@ describe('evaluateProvisionGuard — every threshold is actually consulted', () 
     { key: 'createAccountThresholdPercent', over: { actions: many('create_account', 201) }, raised: 30 },
     { key: 'disableAccountThresholdPercent', over: { actions: many('disable_account', 101) }, raised: 30 },
     { key: 'archiveAccountThresholdPercent', over: { actions: many('archive_account', 21) }, raised: 30 },
+    { key: 'deleteAccountThresholdPercent', over: { actions: many('delete_account', 21) }, raised: 30 },
     {
       key: 'revokeEntitlementThresholdPercent',
       over: {
@@ -734,6 +762,7 @@ describe('evaluateProvisionGuard — every input it divides by is checked', () =
     'createAccountThresholdPercent',
     'disableAccountThresholdPercent',
     'archiveAccountThresholdPercent',
+    'deleteAccountThresholdPercent',
     'revokeEntitlementThresholdPercent',
     'deactivateSyntraUserThresholdPercent',
     'perEntitlementThresholdPercent',
@@ -813,6 +842,7 @@ describe('evaluateProvisionGuard — the action types it does and does not guard
       create_account: true,
       disable_account: true,
       archive_account: true,
+      delete_account: true,
       revoke_entitlement: true,
       deactivate_syntra_user: true,
       update_account: true,

@@ -245,6 +245,21 @@ describe('scimTargetConnector.write — rename, archive, entitlements', () => {
     expect(server.users.get('u-1')?.userName).toBe('new-name');
   });
 
+  it('refuses delete_account without a request, leaving the user in place', async () => {
+    server = await startFakeScimServer({
+      bearerToken: 't',
+      users: [{ id: 'u-1', userName: 'jdoe', externalId: null, active: false }],
+    });
+    const result = await scimTargetConnector.write(baseConfig(server), {
+      op: 'delete_account',
+      actionId: 'action-9',
+      anchor: 'u-1',
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toBe('Not deleted: SCIM targets do not delete accounts.');
+    expect(server.users.has('u-1')).toBe(true);
+  });
+
   it('archives by disabling and removing named group memberships, never deleting', async () => {
     server = await startFakeScimServer({
       bearerToken: 't',

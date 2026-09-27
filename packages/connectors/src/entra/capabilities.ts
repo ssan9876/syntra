@@ -132,10 +132,10 @@ export const ENTRA_CAPABILITY_MATRIX: EntraCapabilityMatrix = {
       note: 'Listed in the catalog as unmanageable so rules cannot silently name them. Grants are refused before any request is made; Entra recomputes the membership from its rule.',
     },
     deleteAccount: {
-      status: 'never',
+      status: 'available',
       validation: 'automated',
-      requiredPermissions: [],
-      note: 'No code path issues DELETE /users. Disable, never delete: every action Provision proposes has to be one that four thousand instances of can be walked back.',
+      requiredPermissions: ['User.ReadWrite.All'],
+      note: 'DELETE /users/{id}, only for a disabled leaver deleteAfterDays after departure. Entra keeps the deleted user for 30 days. A user already gone is success. Tenant evidence is not yet recorded for this one; treat it as protocol-verified only.',
     },
     readCredentialExpiry: {
       status: 'available',

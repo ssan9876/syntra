@@ -70,6 +70,7 @@ export interface PersonTargetProjection {
     disableGraceDays: number;
     entitlementRevocationDelayDays: number;
     archiveAfterDays: number | null;
+    deleteAfterDays: number | null;
   };
 }
 
@@ -130,6 +131,7 @@ export async function projectPersonOnTargets(
         disableGraceDays: true,
         entitlementRevocationDelayDays: true,
         archiveAfterDays: true,
+        deleteAfterDays: true,
         renameEnabled: true,
         mirrorOrgUnits: true,
         orgUnitRootDn: true,
@@ -184,6 +186,7 @@ async function projectOne(
     disableGraceDays: number;
     entitlementRevocationDelayDays: number;
     archiveAfterDays: number | null;
+    deleteAfterDays: number | null;
     renameEnabled: boolean;
     mirrorOrgUnits: boolean;
     orgUnitRootDn: string | null;
@@ -198,6 +201,7 @@ async function projectOne(
     disableGraceDays: target.disableGraceDays,
     entitlementRevocationDelayDays: target.entitlementRevocationDelayDays,
     archiveAfterDays: target.archiveAfterDays,
+    deleteAfterDays: target.deleteAfterDays,
   };
   const [profile, ruleRows, entitlementRows, account, grants, placement, container] =
     await Promise.all([
@@ -399,7 +403,10 @@ export function accessDeltaFor(projection: PersonTargetProjection): AccessDelta 
     ? []
     : removable.filter((h) => !desiredIds.has(h.entitlementId)).map((h) => name(h.entitlementId));
   const retain = [...heldIds].filter((id) => desiredIds.has(id)).map(name);
-  const accountPresent = projection.held !== null && projection.held.status !== 'archived';
+  const accountPresent =
+    projection.held !== null &&
+    projection.held.status !== 'archived' &&
+    projection.held.status !== 'deleted';
   const accountEnabled = projection.held?.status === 'active';
   let account: AccessDelta['account'] = 'none';
   if (projection.desired?.accountRequired) {

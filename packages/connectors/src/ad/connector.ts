@@ -41,6 +41,7 @@ import { TEST_SAMPLE_LIMIT } from '../ldap/connector.js';
 import {
   UAC_NORMAL_DISABLED,
   UAC_NORMAL_ENABLED,
+  isEnabled,
   withDisableBit,
   withoutDisableBit,
 } from './uac.js';
@@ -300,6 +301,8 @@ async function findByAnchor(
   client: Client,
   config: Resolved,
   anchor: string,
+  /** The search base. `delete_account` widens it to the domain root. */
+  base: string = config.baseDn,
 ): Promise<{ dn: string; entry: Record<string, unknown> } | undefined> {
   // A scoped filter first. Every non-create write resolves an anchor, so the
   // fallback below is a full subtree read of every user with every attribute,
@@ -309,7 +312,7 @@ async function findByAnchor(
       ? anchorFilter(config, anchor)
       : undefined;
   if (scoped !== undefined) {
-    const { searchEntries } = await client.search(config.baseDn, {
+    const { searchEntries } = await client.search(base, {
       scope: 'sub',
       filter: scoped,
       attributes: writeAttributes(config),
@@ -340,7 +343,7 @@ async function findByAnchor(
     // the cost is a slow apply, not a run that reports every account missing.
   }
 
-  const { searchEntries } = await client.search(config.baseDn, {
+  const { searchEntries } = await client.search(base, {
     scope: 'sub',
     filter: config.accountFilter,
     attributes: writeAttributes(config),
@@ -973,6 +976,91 @@ function rangedAttributeIn(entry: Record<string, unknown>): string | undefined {
   return Object.keys(entry).find((key) => /;range=\d+-(\d+|\*)$/i.test(key));
 }
 
+/** A DN folded for comparison: case and the spaces around `,` and `=`. */
+function foldDn(dn: string): string {
+  return dn.trim().replace(/\s*([,=])\s*/g, '$1').toLowerCase();
+}
+
+/** Whether `dn` sits anywhere below `container`. */
+export function dnWithin(dn: string, container: string): boolean {
+  const wanted = foldDn(container);
+  if (wanted === '') return false;
+  let parent = splitDn(dn).parent;
+  while (parent !== '') {
+    if (foldDn(parent) === wanted) return true;
+    parent = splitDn(parent).parent;
+  }
+  return false;
+}
+
+/** The `DC=` suffix of a DN, or the DN itself when it has none. */
+export function domainRootOf(dn: string): string {
+  let rest = dn.trim();
+  while (rest !== '') {
+    if (/^\s*dc\s*=/i.test(rest)) return rest;
+    rest = splitDn(rest).parent;
+  }
+  return dn;
+}
+
+/**
+ * `delete_account`: resolves the object by anchor across the domain, then
+ * deletes it only when it is disabled and inside the base DN or the archive
+ * container. An object the domain no longer returns is already deleted.
+ *
+ * Searched from the domain root so an account moved out of scope is refused
+ * by name rather than read as gone.
+ */
+async function deleteAccount(
+  client: Client,
+  config: Resolved,
+  anchor: string,
+): Promise<WriteResult> {
+  const found = await findByAnchor(client, config, anchor, domainRootOf(config.baseDn));
+  if (!found) return { ok: true, message: 'account already deleted' };
+  if (!dnWithin(found.dn, config.baseDn) && !dnWithin(found.dn, config.archiveContainer)) {
+    return {
+      ok: false,
+      message: `Not deleted: ${found.dn} is outside the base DN and the archive container.`,
+      failure: 'rejected',
+    };
+  }
+  const uac = attributeOf(found.entry, 'userAccountControl');
+  if (uac === undefined || !Number.isFinite(Number(uac))) {
+    return {
+      ok: false,
+      message: `Not deleted: ${found.dn} returned no userAccountControl to show it is disabled.`,
+      failure: 'rejected',
+    };
+  }
+  if (isEnabled(Number(uac))) {
+    return {
+      ok: false,
+      message: `Not deleted: ${found.dn} is enabled. Disable it first.`,
+      failure: 'rejected',
+    };
+  }
+  try {
+    // A plain delete, never the tree-delete control: an account holding
+    // child objects is refused below, not deleted with them.
+    await client.del(found.dn);
+  } catch (cause) {
+    const text = `${cause instanceof Error ? cause.name : ''} ${
+      cause instanceof Error ? cause.message : String(cause)
+    }`.toLowerCase();
+    if (text.includes('nosuchobject')) return { ok: true, message: 'account already deleted' };
+    if (text.includes('notallowedonnonleaf')) {
+      return {
+        ok: false,
+        message: `Not deleted: ${found.dn} has child objects. Remove them in the directory, then retry.`,
+        failure: 'rejected',
+      };
+    }
+    throw cause;
+  }
+  return { ok: true, message: 'deleted' };
+}
+
 export const adTargetConnector: TargetConnector<Config> = {
   async test(rawConfig): Promise<ConnectionResult> {
     const config = normalise(rawConfig);
@@ -1002,8 +1090,8 @@ export const adTargetConnector: TargetConnector<Config> = {
       // over-privileged bind is a visible choice rather than a default.
       //
       // Read, never exercised. Actually performing a create to prove the right
-      // would leave a probe object behind, and there is no delete on this
-      // connector to remove it -- by design. Active Directory publishes
+      // would leave a probe object behind, and the connector's one delete is
+      // for a leaver's disabled account, not a probe. Active Directory publishes
       // `allowedChildClassesEffective` and `allowedAttributesEffective` as
       // constructed attributes for exactly this question.
       const firstAccount = accounts.searchEntries[0]?.dn;
@@ -1223,18 +1311,18 @@ export const adTargetConnector: TargetConnector<Config> = {
 
     // Refused BEFORE the bind, before the anchor is resolved, before anything.
     //
-    // There is no delete operation to call, and this is what makes that true
-    // of the code and not only of the type. With the check further down, an
-    // operation this connector does not implement first reached
-    // `findByAnchor` -- so `{ op: 'delete_account' }` with no anchor answered
-    // `not_found`, which reads as "that object is gone" rather than "this
-    // connector will not do that", and a caller could not tell them apart.
+    // With the check further down, an operation this connector does not
+    // implement first reached `findByAnchor` -- so `{ op: 'purge_account' }`
+    // with no anchor answered `not_found`, which reads as "that object is
+    // gone" rather than "this connector will not do that", and a caller could
+    // not tell them apart. `delete_account` is the one delete, and it has its
+    // own path below.
     if (!(CONNECTOR_ACTION_TYPES as readonly string[]).includes(op.op)) {
       return {
         ok: false,
         message: `"${String(
           (op as { op: string }).op,
-        )}" is not supported by this connector; there is no delete of any kind.`,
+        )}" is not supported by this connector.`,
         failure: 'rejected',
       };
     }
@@ -1253,6 +1341,11 @@ export const adTargetConnector: TargetConnector<Config> = {
       }
       if (op.op === 'move_container') {
         return await moveContainer(client, config, op.fromDn, op.toDn);
+      }
+      // Before the generic `findByAnchor`: an object not found is done here,
+      // not `not_found`, and the search is wider.
+      if (op.op === 'delete_account') {
+        return await deleteAccount(client, config, op.anchor);
       }
 
       const found = await findByAnchor(client, config, op.anchor);
@@ -1312,8 +1405,8 @@ export const adTargetConnector: TargetConnector<Config> = {
         case 'archive_account': {
           // Moves the object, strips the entitlements PROVISION MANAGES for
           // it, and leaves the object, its mailbox and its file ownership
-          // intact. It does not delete, and there is no code path here that
-          // could.
+          // intact. It does not delete: that is `delete_account`, a separate
+          // rung with its own checks.
           await setDisableBit(client, found.dn, found.entry, true);
 
           // `op.entitlementDns`, not `found.entry.memberOf`. Iterating the

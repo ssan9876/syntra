@@ -9,6 +9,9 @@ import {
   businessRuleSchema,
   initialPasswordPolicySchema,
   provisionThresholdsSchema,
+  LadderConfigurationError,
+  assertLadder,
+  defaultDeleteAfterDays,
 } from './target-service.js';
 
 /**
@@ -217,7 +220,7 @@ describe('provisionThresholdsSchema', () => {
     ).toBe(false);
   });
 
-  it('names every guard setting: seven percentages and one cap', () => {
+  it('names every guard setting: eight percentages and one cap', () => {
     // A setting missing from this schema is one an administrator cannot set;
     // one that is here and not in the guard is one nothing reads.
     //
@@ -230,6 +233,7 @@ describe('provisionThresholdsSchema', () => {
         'archiveAccountThresholdPercent',
         'createAccountThresholdPercent',
         'deactivateSyntraUserThresholdPercent',
+        'deleteAccountThresholdPercent',
         'disableAccountThresholdPercent',
         'maxContainerCreatesPerRun',
         'perEntitlementThresholdPercent',
@@ -638,5 +642,58 @@ describe('the transport coupling the borrow check relies on', () => {
         tlsMode: 'starttls',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('the delete rung of the ladder', () => {
+  const base = { entitlementRevocationDelayDays: 0, disableGraceDays: 7, archiveAfterDays: 30 };
+  const refusal = (ladder: Parameters<typeof assertLadder>[0]) => {
+    try {
+      assertLadder(ladder);
+    } catch (cause) {
+      expect(cause).toBeInstanceOf(LadderConfigurationError);
+      return cause as LadderConfigurationError;
+    }
+    throw new Error('expected a refusal');
+  };
+
+  it('defaults to 30 days for Active Directory and Entra ID, never elsewhere', () => {
+    expect(defaultDeleteAfterDays('activeDirectory')).toBe(30);
+    expect(defaultDeleteAfterDays('entraId')).toBe(30);
+    expect(defaultDeleteAfterDays('scim2')).toBeNull();
+    expect(defaultDeleteAfterDays('httpJson')).toBeNull();
+  });
+
+  it('accepts never, and a delete at or after the disable and the archive', () => {
+    expect(() => assertLadder({ ...base, deleteAfterDays: null, type: 'scim2' })).not.toThrow();
+    expect(() => assertLadder({ ...base, deleteAfterDays: 30, type: 'activeDirectory' })).not.toThrow();
+    expect(() =>
+      assertLadder({ ...base, archiveAfterDays: null, deleteAfterDays: 7, type: 'entraId' }),
+    ).not.toThrow();
+  });
+
+  it('refuses a delete before the disable grace', () => {
+    const refused = refusal({ ...base, archiveAfterDays: null, deleteAfterDays: 6, type: 'activeDirectory' });
+    expect(refused.code).toBe('ladder-delete-before-disable');
+    expect(refused.field).toBe('ladder.deleteAfterDays');
+  });
+
+  it('refuses a delete before the archive', () => {
+    expect(refusal({ ...base, deleteAfterDays: 29, type: 'activeDirectory' }).code).toBe(
+      'ladder-delete-before-archive',
+    );
+  });
+
+  it('refuses a delete on a target type that cannot delete', () => {
+    for (const type of ['scim2', 'httpJson']) {
+      expect(refusal({ ...base, deleteAfterDays: 90, type }).code).toBe('ladder-delete-unsupported');
+    }
+  });
+});
+
+describe('provisionThresholdsSchema: the delete threshold', () => {
+  it('accepts a percentage and refuses one above 100', () => {
+    expect(provisionThresholdsSchema.safeParse({ deleteAccountThresholdPercent: 2 }).success).toBe(true);
+    expect(provisionThresholdsSchema.safeParse({ deleteAccountThresholdPercent: 101 }).success).toBe(false);
   });
 });

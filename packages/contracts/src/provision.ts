@@ -217,6 +217,12 @@ export const ladderSchema = z
     entitlementRevocationDelayDays: z.number().int().min(0).max(3650).optional(),
     disableGraceDays: z.number().int().min(0).max(3650).optional(),
     archiveAfterDays: z.number().int().min(0).max(3650).nullable().optional(),
+    /**
+     * Delete a leaver's disabled account this many days after departure.
+     * `null` is never. Active Directory and Entra ID only; at or after
+     * `disableGraceDays` and `archiveAfterDays`.
+     */
+    deleteAfterDays: z.number().int().min(0).max(3650).nullable().optional(),
     reenableWithoutConfirmationDays: z.number().int().min(0).max(3650).optional(),
     renameEnabled: z.boolean().optional(),
   })
@@ -227,6 +233,7 @@ export const thresholdsSchema = z
     createAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
     disableAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
     archiveAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
+    deleteAccountThresholdPercent: z.number().int().min(0).max(100).optional(),
     revokeEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),
     deactivateSyntraUserThresholdPercent: z.number().int().min(0).max(100).optional(),
     perEntitlementThresholdPercent: z.number().int().min(0).max(100).optional(),

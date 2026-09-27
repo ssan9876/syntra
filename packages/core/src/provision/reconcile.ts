@@ -181,7 +181,8 @@ export function unprocessableScope(kind: UnprocessableKind): UnprocessableScope 
  * archived account somebody has switched back on is drift by exactly the same
  * argument as a disabled one; enumerating the pairs left that case
  * unreported. `pending` has no object to look at, `missing_at_target` had none
- * last run, and a `conflict` never reaches here.
+ * last run, and a `conflict` never reaches here. `deleted` expects no object
+ * at all; one that comes back is reported separately below.
  */
 function expectedEnabled(status: AccountStatus): boolean | null {
   switch (status) {
@@ -193,6 +194,7 @@ function expectedEnabled(status: AccountStatus): boolean | null {
     case 'pending':
     case 'missing_at_target':
     case 'conflict':
+    case 'deleted':
       return null;
     default: {
       const unhandled: never = status;
@@ -453,8 +455,16 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
 
     // An account Syntra holds whose anchor the target no longer returns. A
     // `pending` row is a reserved correlation key that never existed at the
-    // target, so it is not a vanished account.
-    if (account && account.anchor !== null && !object && account.status !== 'archived') {
+    // target, so it is not a vanished account. A `deleted` one is gone
+    // because Provision deleted it: not drift, and never recreated for a
+    // leaver.
+    if (
+      account &&
+      account.anchor !== null &&
+      !object &&
+      account.status !== 'archived' &&
+      account.status !== 'deleted'
+    ) {
       record('account_missing_at_target', account.id, null, {
         anchor: account.anchor,
         correlationKey: account.correlationKey,
@@ -576,6 +586,16 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
         },
         'not_yet_started',
       );
+    }
+
+    if (object && account?.status === 'deleted') {
+      // Deleted by Provision and back at the target: restored from the
+      // recycle bin or Deleted Objects. Reported, never deleted again.
+      record('unexpected_status', account.id, null, {
+        syntraBelieves: 'deleted',
+        targetReports: object.enabled ? 'active' : 'disabled',
+        reason: 'Account deleted by Syntra is back at the target.',
+      });
     }
 
     if (object && account) {

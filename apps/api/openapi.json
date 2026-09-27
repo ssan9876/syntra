@@ -24870,6 +24870,18 @@
                           }
                         ]
                       },
+                      "deleteAfterDays": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3650
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "reenableWithoutConfirmationDays": {
                         "type": "integer",
                         "minimum": 0,
@@ -24895,6 +24907,11 @@
                         "maximum": 100
                       },
                       "archiveAccountThresholdPercent": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100
+                      },
+                      "deleteAccountThresholdPercent": {
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 100

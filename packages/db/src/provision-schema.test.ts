@@ -48,6 +48,9 @@ describe('provision schema', () => {
     // a choice an organization makes, not a default it inherits.
     expect(target.disableGraceDays).toBe(0);
     expect(target.archiveAfterDays).toBeNull();
+    // Null at the database: the 30 a new AD or Entra target starts with is
+    // the service's, and rows written before the column existed stay never.
+    expect(target.deleteAfterDays).toBeNull();
     expect(target.reenableWithoutConfirmationDays).toBe(7);
     expect(target.renameEnabled).toBe(false);
     expect(target.autoApply).toBe(false);
@@ -60,6 +63,7 @@ describe('provision schema', () => {
     expect(target.createAccountThresholdPercent).toBe(20);
     expect(target.disableAccountThresholdPercent).toBe(10);
     expect(target.archiveAccountThresholdPercent).toBe(2);
+    expect(target.deleteAccountThresholdPercent).toBe(2);
     expect(target.revokeEntitlementThresholdPercent).toBe(10);
     expect(target.deactivateSyntraUserThresholdPercent).toBe(10);
     expect(target.perEntitlementThresholdPercent).toBe(50);
@@ -136,6 +140,18 @@ describe('provision schema', () => {
         }),
       ),
     ).rejects.toThrow();
+  });
+
+  it('refuses a delete before the disable or the archive, and accepts one equal to them', async () => {
+    const update = (data: Record<string, number | null>) =>
+      withTenant(tenantId, (tx) => tx.targetSystem.update({ where: { id: targetId }, data }));
+    await expect(update({ disableGraceDays: 14, deleteAfterDays: 7 })).rejects.toThrow();
+    await expect(
+      update({ disableGraceDays: 7, archiveAfterDays: 60, deleteAfterDays: 30 }),
+    ).rejects.toThrow();
+    await expect(update({ deleteAccountThresholdPercent: 101 })).rejects.toThrow();
+    const accepted = await update({ disableGraceDays: 7, archiveAfterDays: 60, deleteAfterDays: 60 });
+    expect(accepted.deleteAfterDays).toBe(60);
   });
 
   it('accepts a ladder in the right order', async () => {

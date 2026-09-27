@@ -11,6 +11,14 @@ describe('target connector capabilities', () => {
     expect(targetConnectorCapabilities('okta')).toMatchObject({ available: false });
   });
 
+  it('declares delete for Active Directory and Entra ID only', () => {
+    expect(targetConnectorCapabilities('activeDirectory').deleteAccount).toBe(true);
+    expect(targetConnectorCapabilities('entraId').deleteAccount).toBe(true);
+    expect(targetConnectorCapabilities('scim2').deleteAccount).toBe(false);
+    expect(targetConnectorCapabilities('httpJson').deleteAccount).toBe(false);
+    expect(capabilitiesForTarget('httpJson', { document: entraIdDocument }).deleteAccount).toBe(false);
+  });
+
   it('derives the capabilities of an httpJson target from what its document declares', () => {
     // The shipped Entra document: create, update, disable, grant, revoke and
     // a members read -- everything.
@@ -21,6 +29,7 @@ describe('target connector capabilities', () => {
       updateAccount: true,
       disableAccount: true,
       manageEntitlements: true,
+      deleteAccount: false,
     });
     // A read-only document promises nothing it cannot do.
     expect(
@@ -34,6 +43,7 @@ describe('target connector capabilities', () => {
       updateAccount: false,
       disableAccount: false,
       manageEntitlements: false,
+      deleteAccount: false,
     });
     // No document at all is not a capable target.
     expect(capabilitiesForTarget('httpJson', {})).toMatchObject({ available: true, createAccount: false, readBack: false });

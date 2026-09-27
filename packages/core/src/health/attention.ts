@@ -90,6 +90,7 @@ function plannedPhrase(run: RunCounters): string {
   add(run.enableAccountCount, 'enable', 'account', 'accounts');
   add(run.disableAccountCount, 'disable', 'account', 'accounts');
   add(run.archiveAccountCount, 'archive', 'account', 'accounts');
+  add(run.deleteAccountCount, 'delete', 'account', 'accounts');
   add(run.renameAccountCount, 'rename', 'account', 'accounts');
   add(run.grantEntitlementCount, 'grant', 'entitlement', 'entitlements');
   add(run.revokeEntitlementCount, 'revoke', 'entitlement', 'entitlements');
@@ -104,6 +105,7 @@ interface RunCounters {
   enableAccountCount: number;
   disableAccountCount: number;
   archiveAccountCount: number;
+  deleteAccountCount: number;
   renameAccountCount: number;
   grantEntitlementCount: number;
   revokeEntitlementCount: number;
@@ -114,7 +116,8 @@ interface RunCounters {
 function plannedCount(run: RunCounters): number {
   return (
     run.createAccountCount + run.updateAccountCount + run.enableAccountCount +
-    run.disableAccountCount + run.archiveAccountCount + run.renameAccountCount +
+    run.disableAccountCount + run.archiveAccountCount + run.deleteAccountCount +
+    run.renameAccountCount +
     run.grantEntitlementCount + run.revokeEntitlementCount +
     run.deactivateSyntraUserCount + run.reactivateSyntraUserCount
   );

@@ -108,6 +108,11 @@ const ACCOUNT_STATUS: Record<
     label: 'archived',
     title: 'Moved to the archive container. Managed entitlements removed.',
   },
+  deleted: {
+    tone: 'inactive',
+    label: 'deleted',
+    title: 'Deleted at the target after the leaver ladder ran out.',
+  },
   pending: {
     tone: 'warning',
     label: 'pending — not created yet',

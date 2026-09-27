@@ -476,6 +476,14 @@ export const httpTargetConnector: TargetConnector<Config> & {
         );
       }
 
+      case 'delete_account':
+        // A document declares no delete, so there is nothing to run.
+        return {
+          ok: false,
+          message: 'Not deleted: document-driven HTTP targets do not delete accounts.',
+          failure: 'rejected',
+        };
+
       case 'rename_account':
         return runWrite(
           config,

@@ -6,7 +6,7 @@ import { ApiError, api } from '../../session/api.js';
 interface Preview {
   revision: string;
   accounts: { id: string; login: string; status: string; source: { name: string; writebackEnabled: boolean; writebackDisable: boolean } | null }[];
-  targets: { id: string; status: string; correlationKey: string; disableDueAt: string | null; archiveDueAt: string | null; target: { name: string; enabled: boolean; disableGraceDays: number; entitlementRevocationDelayDays: number; archiveAfterDays: number | null } }[];
+  targets: { id: string; status: string; correlationKey: string; disableDueAt: string | null; archiveDueAt: string | null; target: { name: string; enabled: boolean; disableGraceDays: number; entitlementRevocationDelayDays: number; archiveAfterDays: number | null; deleteAfterDays?: number | null } }[];
   latestAttempt: { action: string; occurredAt: string } | null;
 }
 interface Result { userId: string; login: string; status: string; message: string }
@@ -30,6 +30,7 @@ const ACCOUNT_STATE: Record<string, { state: State; label: string }> = {
   conflict: { state: 'blocked', label: 'Conflict' },
   disabled: { state: 'inactive', label: 'Disabled' },
   archived: { state: 'inactive', label: 'Archived' },
+  deleted: { state: 'inactive', label: 'Deleted' },
 };
 
 function AccountState({ status }: { status: string }) {
@@ -103,7 +104,7 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
           </tbody>
         </Table>
         <Table tight label="Managed target accounts">
-          <thead><tr><th scope="col">Target account</th><th scope="col">State</th><th scope="col">Disable after</th><th scope="col">Entitlements removed after</th><th scope="col">Archive</th></tr></thead>
+          <thead><tr><th scope="col">Target account</th><th scope="col">State</th><th scope="col">Disable after</th><th scope="col">Entitlements removed after</th><th scope="col">Archive</th><th scope="col">Delete</th></tr></thead>
           <tbody>
             {preview.targets.length ? preview.targets.map((account) => <tr key={account.id}>
               <th scope="row" className="font-medium text-ink">{account.target.name}</th>
@@ -111,7 +112,8 @@ export function EmployeeOffboarding({ personId, personName, onChanged }: { perso
               <td>{days(account.target.disableGraceDays)}</td>
               <td>{days(account.target.entitlementRevocationDelayDays)}</td>
               <td>{account.target.archiveAfterDays === null ? 'Not scheduled' : `After ${days(account.target.archiveAfterDays)}`}</td>
-            </tr>) : <tr><td colSpan={5} className="text-muted">No managed target accounts</td></tr>}
+              <td>{account.target.deleteAfterDays == null ? 'Not scheduled' : `After ${days(account.target.deleteAfterDays)}`}</td>
+            </tr>) : <tr><td colSpan={6} className="text-muted">No managed target accounts</td></tr>}
           </tbody>
         </Table>
         <Field label="Reason" value={reason} onChange={setReason} />

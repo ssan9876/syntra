@@ -849,9 +849,11 @@ What every target has in common:
   covers the rename: see
   [Schedules and automatic apply](operate.md#schedules-and-automatic-apply) and
   [Held actions and renames](operate.md#held-actions-and-renames).
-- **A leaver ladder** — revoke entitlements, disable, archive — timed by
-  `entitlementRevocationDelayDays`, `disableGraceDays` and `archiveAfterDays`.
-  No connector deletes an account.
+- **A leaver ladder** — revoke entitlements, disable, archive, delete — timed by
+  `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays` and
+  `deleteAfterDays` (*Delete accounts after N days inactive*). Only the Active
+  Directory and Entra ID connectors delete; see
+  [Deleting leavers' accounts](operate.md#deleting-leavers-accounts).
 - **Failures surface as incidents** under **Activity → Attention** and on the
   Overview's *Needs you*, where they can be acknowledged or resolved: see
   [What is broken: incidents](operate.md#what-is-broken-incidents).
@@ -890,7 +892,7 @@ connector needs: create a user under the base DN, move a user into the archive
 container, modify `userAccountControl` on an existing account, and modify
 `member` on an existing group. It reads Active Directory's constructed
 `allowedChildClassesEffective` and `allowedAttributesEffective` rather than
-creating a probe object, because there is no delete to remove one with. A right
+creating a probe object, which would then have to be removed. A right
 it could not confirm (an empty target has no account to read rights from) is
 reported as unverified, not assumed. An archive container outside the
 delegated subtree is refused at the first archive with
@@ -914,14 +916,15 @@ the connection must be encrypted) and, when the profile's *Require a new
 password at first sign-in* is on, `pwdLastSet = 0`. How the person receives it
 is [New accounts' sign-in details](#new-accounts-sign-in-details).
 
-**Deletion is the domain's job, not Syntra's.** The connector has no delete of
-any kind; it refuses one before it binds. Archive moves a leaver into the
-archive container. Deleting what has sat there long enough is a scheduled task
-on the domain controller, with the AD Recycle Bin on so a mistake can be
-restored for the deleted-object lifetime. `archiveAfterDays: 0` archives on the
-departure date, so the whole retention period is served in the archive OU.
-Deleting a single account from the console is a directory source's write-back
-switch, above, not a provisioning target's.
+**Deleting leavers.** `deleteAfterDays` (default 30 on a new target, empty =
+never) deletes a leaver's account that many days after departure, by
+objectGUID, and only when the account is disabled and sits under the base DN or
+the archive container; the bind needs the right to delete user objects there.
+Turn the AD Recycle Bin on so a mistake can be restored for the deleted-object
+lifetime. The retention sweep in `ops/windows/` remains an alternative for
+targets that leave `deleteAfterDays` empty. Deleting a single account from the
+console is a directory source's write-back switch, above, not a provisioning
+target's.
 
 ### Microsoft Entra ID
 
@@ -976,7 +979,7 @@ and the target page renders it:
 | searchEntitlements | available | `Group.Read.All` | `$search` on `displayName`, falling back to `startswith`. |
 | readCredentialExpiry | optional | `Application.Read.All` | The app registration's own `passwordCredentials`, for the credential inventory. |
 | nestedGroups, dynamicGroups | unsupported | — | Direct memberships only; dynamic groups are listed as not manageable. |
-| deleteAccount | never | — | No code path issues `DELETE /users`. |
+| deleteAccount | available (fake Graph only) | `User.ReadWrite.All` | `DELETE /users/{id}` for a disabled leaver `deleteAfterDays` after departure; Entra keeps the user 30 days. |
 
 **The correlation marker.** Every create writes a marker derived from the id
 of the action that proposed it into `correlationField`, and nothing ever

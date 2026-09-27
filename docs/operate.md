@@ -1120,8 +1120,9 @@ secrets deleted, bundles erased, and its own SHA-256 — is returned by the
 approval, kept on the case (**Download receipt**), and recorded as
 `privacy.erasure.completed`, with `person.erased` on the person.
 
-**Outside Syntra.** Target systems keep their own copy of the account (Syntra
-has no delete path to a target, by design): erase it there. Backups taken
+**Outside Syntra.** Target systems keep their own copy of the account unless
+the target's `deleteAfterDays` has already deleted it (Active Directory and
+Entra ID only): erase it there. Backups taken
 before the erasure still hold the person until they expire, as for
 [deleted tenants](#deleted-tenants-and-backups); restoring one brings the
 person back, so re-run the erasure (the receipt lists what to expect).
@@ -1255,8 +1256,8 @@ A run is held for confirmation when it would change more than a set share of
 the target in one go: *would create 1 of 2 accounts (50.0%), above the 20%
 threshold*. The run's page names the setting that held it and links to
 **Safety thresholds** on the target's edit form: Accounts created, Accounts
-disabled, Accounts archived (container moves use this one too), Entitlements
-revoked, Syntra logins deactivated, Holders of any one entitlement, and Drop in
+disabled, Accounts archived (container moves use this one too), Accounts
+deleted, Entitlements revoked, Syntra logins deactivated, Holders of any one entitlement, and Drop in
 the person population. Either confirm the run, if the change is expected, or raise
 the percentage when it is simply too low for a target that size: on a small
 directory one new starter is a large share. Later runs are measured against
@@ -2195,6 +2196,33 @@ Point the target's archive container at the same OU and set the ladder's
 archive rung: `archiveAfterDays: 0` archives on the departure date so the
 whole retention runs in the OU; `archiveAfterDays: 7` with `-RetentionDays 23`
 gives the same total.
+
+### Deleting leavers' accounts
+
+The last rung of the leaver ladder. *Delete accounts after N days inactive*
+(`deleteAfterDays`) on an Active Directory or Entra ID target proposes
+`delete_account` for a leaver that many days after the departure date the
+ladder uses: the contract end, or for a person deactivated from the console
+the day they were marked inactive. New targets of those types start at 30;
+targets created before the setting existed have it empty, which is never.
+Other connectors refuse the setting.
+
+- Proposed only for an account the target shows **disabled**, never for a
+  person who needs the account again, and never for a person whose processing
+  is restricted.
+- At or after `disableGraceDays` and `archiveAfterDays`; an archive and a
+  delete due on the same run run in that order.
+- Counted against its own threshold, *Accounts deleted*
+  (`deleteAccountThresholdPercent`, default 2%), and held for confirmation
+  above it.
+- Active Directory resolves the object by objectGUID and refuses one that is
+  enabled or outside the base DN and the archive container. Entra ID reads the
+  user first, refuses an enabled one, then `DELETE /users/{id}`; Entra keeps a
+  deleted user for 30 days. An object already gone counts as deleted.
+- The account is then recorded `deleted` and audited as
+  `provision.account.deleted`. It is not recreated for the leaver and not
+  reported missing; if it comes back at the target it is reported as
+  unexpected status and never deleted again.
 
 ### First runs against a small directory
 
@@ -3186,14 +3214,14 @@ The vocabulary: a **run** reads the target, computes a plan and lands
 **action** is one proposed change: `create_account`, `update_account`,
 `enable_account`, `disable_account`, `archive_account`, `rename_account`,
 `grant_entitlement`, `revoke_entitlement`, `deactivate_syntra_user`,
-`reactivate_syntra_user`, `create_container`. **There is no delete of any
-kind, and no type that could become one.** Action statuses are `proposed`,
+`reactivate_syntra_user`, `create_container`, and `delete_account`, the one
+delete: see [Deleting leavers' accounts](#deleting-leavers-accounts). Action statuses are `proposed`,
 `in_flight`, `applied`, `failed`, `conflict`, `pending_retry`, `superseded`.
 
 The guard is described under [Safety thresholds](#safety-thresholds); on the
 API the settings are `createAccountThresholdPercent`,
 `disableAccountThresholdPercent`, `archiveAccountThresholdPercent` (container
-moves too), `revokeEntitlementThresholdPercent`,
+moves too), `deleteAccountThresholdPercent`, `revokeEntitlementThresholdPercent`,
 `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent` and
 the absolute `maxContainerCreatesPerRun` — all confirmable — and
 `personPopulationDropPercent`, which is **not**. Nor are an empty target that

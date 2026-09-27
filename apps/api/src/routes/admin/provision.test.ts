@@ -233,6 +233,34 @@ describe('PATCH and DELETE /api/admin/targets/:id', () => {
     });
   });
 
+  it('saves Delete accounts after N days inactive and its threshold, and refuses one before the archive', async () => {
+    const cookie = await manager();
+    await create(cookie);
+    // A new Active Directory target starts at 30 days.
+    expect((await get(`/api/admin/targets/${targetId}`, cookie)).json()).toMatchObject({
+      deleteAfterDays: 30,
+      deleteAccountThresholdPercent: 2,
+    });
+    const saved = await patch(`/api/admin/targets/${targetId}`, cookie, {
+      thresholds: { deleteAccountThresholdPercent: 5 },
+      ladder: { disableGraceDays: 7, archiveAfterDays: 30, deleteAfterDays: 60 },
+    });
+    expect(saved.statusCode).toBe(204);
+    expect((await get(`/api/admin/targets/${targetId}`, cookie)).json()).toMatchObject({
+      deleteAfterDays: 60,
+      deleteAccountThresholdPercent: 5,
+    });
+
+    const refused = await patch(`/api/admin/targets/${targetId}`, cookie, {
+      ladder: { archiveAfterDays: 90 },
+    });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json()).toMatchObject({
+      type: expect.stringContaining('ladder-delete-before-archive'),
+      errors: [{ path: 'ladder.deleteAfterDays' }],
+    });
+  });
+
   it('answers 404 for a target that is not there, not 500', async () => {
     const cookie = await manager();
     const missing = '00000000-0000-4000-8000-000000000000';
@@ -308,7 +336,7 @@ describe('GET /api/admin/targets/:id/capabilities and entitlements/search', () =
       certification: { status: 'partial' },
     });
     expect(body.matrix.version).toBe(1);
-    expect(body.matrix.entries.deleteAccount.status).toBe('never');
+    expect(body.matrix.entries.deleteAccount).toMatchObject({ status: 'available', validation: 'automated' });
     expect(body.matrix.entries.dynamicGroups.status).toBe('unsupported');
     expect(body.capabilities.available).toBe(true);
   });

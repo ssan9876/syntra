@@ -41,17 +41,19 @@ export interface SchemaDescriptor {
 }
 
 /**
- * Every action Provision can propose. There is no delete of any kind, and no
- * type that could become one: `archive_account` moves the object and strips
- * the entitlements Provision manages, and leaves the object, its mailbox and
- * its file ownership intact.
+ * Every action Provision can propose.
  *
  * The failure mode of this subsystem is *mass* action -- a misconfigured
  * source, an inverted condition, an HR export that ran against an empty
  * staging database. The characteristic accident is not one wrong person, it
- * is four thousand. Every action here therefore has to be one that four
- * thousand instances of can be walked back. Disable satisfies that. Delete
- * does not.
+ * is four thousand. Every action but one can be walked back.
+ *
+ * The exception is `delete_account`, the last rung of the leaver ladder: set
+ * per target (`deleteAfterDays`), proposed only for an account that is already
+ * disabled, counted by the guard against its own threshold, and refused by
+ * every connector that cannot perform it. Active Directory keeps a deleted
+ * object in its Deleted Objects container and Entra ID keeps a deleted user
+ * for 30 days, which is the only walk-back there is.
  */
 export type ProvisionActionType =
   /**
@@ -74,8 +76,8 @@ export type ProvisionActionType =
    * target confirmed it -- a mirrored unit renamed or re-parented, or a manual
    * row switched to mirrored. Moving the OU rather than creating a second one
    * is what keeps the accounts, the group policy links and the delegations
-   * that hang off it; the old OU is never deleted (there is no delete of any
-   * kind), so the alternative leaves an empty husk behind in the directory.
+   * that hang off it; no container is ever deleted, so the alternative
+   * leaves an empty husk behind in the directory.
    */
   | 'move_container'
   | 'create_account'
@@ -83,13 +85,15 @@ export type ProvisionActionType =
   | 'enable_account'
   | 'disable_account'
   | 'archive_account'
+  /** Deletes a disabled account at the target. See the note above. */
+  | 'delete_account'
   | 'rename_account'
   | 'grant_entitlement'
   | 'revoke_entitlement'
   | 'deactivate_syntra_user'
   | 'reactivate_syntra_user';
 
-/** The ten that reach a connector, in the order enforcement applies them. */
+/** The eleven that reach a connector, in the order enforcement applies them. */
 export const CONNECTOR_ACTION_TYPES = [
   // First, and not alphabetically: a container has to exist before an account
   // can be created in it or moved into it. An account applied ahead of its
@@ -105,6 +109,7 @@ export const CONNECTOR_ACTION_TYPES = [
   'enable_account',
   'disable_account',
   'archive_account',
+  'delete_account',
   'rename_account',
   'grant_entitlement',
   'revoke_entitlement',
@@ -210,6 +215,11 @@ export type WriteOperation =
       entitlementDns: string[];
     }
   | {
+      op: 'delete_account';
+      actionId: string;
+      anchor: string;
+    }
+  | {
       op: 'rename_account';
       actionId: string;
       anchor: string;
@@ -234,7 +244,7 @@ export type WriteOperation =
  * Deliberately not part of `WriteOperation`. That union is documented as
  * "every action Provision can propose" and carries a safety argument these
  * operations do not share: every action in it has to be one that four thousand
- * instances of can be walked back, which is why it contains no delete. A
+ * instances of can be walked back, bar one confirmable, thresholded delete. A
  * password change is one person, initiated by that person, and is not
  * something a misconfigured rule can propose four thousand of. Folding it in
  * would also hand it Provision's retry policy, under which a retried change
@@ -300,7 +310,8 @@ export interface SetEnabledInput {
  * is computed. A human names a single object and confirms it, which is the
  * same shape as `changePassword` and belongs on the same path.
  *
- * The planner still has no delete and still cannot acquire one.
+ * The planner's own `delete_account` is a different path: a leaver's
+ * disabled account, `deleteAfterDays` after departure, under the guard.
  */
 export interface DeleteObjectInput {
   anchor: string;

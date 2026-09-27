@@ -17,8 +17,9 @@ import type {
  *
  * Create before entitlements, because a grant needs an anchor. Revocations
  * before disable, so that a leaver's access is gone before the account stops
- * being writable in the way archiving makes it. Archive last, because it is
- * the only step that moves the object.
+ * being writable in the way archiving makes it. Archive after disable,
+ * because it is the only step that moves the object. Delete last of all: an
+ * archive and a delete due on the same run land in that order.
  */
 export const ACTION_ORDER = [
   // Before everything, and not alphabetically: an account cannot be created
@@ -37,6 +38,7 @@ export const ACTION_ORDER = [
   'disable_account',
   'deactivate_syntra_user',
   'archive_account',
+  'delete_account',
 ] as const satisfies readonly ProvisionActionType[];
 
 const MS_PER_DAY = 86_400_000;
@@ -720,11 +722,37 @@ export function planActions(input: PlanInput): PlannedAction[] {
         ladder.archiveAfterDays !== null &&
         due(addDays(endDate!, ladder.archiveAfterDays), now) &&
         current.existsAtTarget &&
-        current.status !== 'archived'
+        current.status !== 'archived' &&
+        current.status !== 'deleted'
       ) {
         push('archive_account', {
           before: { archived: false },
           after: { archived: true },
+        });
+      }
+
+      // The last rung. `endDate` is `departureOverride` for an administrative
+      // deactivation, so the days count from when they were marked inactive.
+      //
+      // Only an account the target shows DISABLED: an account somebody has
+      // re-enabled by hand is a question, not a deletion, and the disable
+      // proposed above on this same run has not landed yet. An archived
+      // account the target no longer returns (an archive container outside
+      // the read scope) is proposed too; the connector checks it is disabled
+      // before it deletes. A missing or already deleted account never is.
+      if (
+        departed &&
+        ladder.deleteAfterDays !== null &&
+        due(addDays(endDate!, ladder.deleteAfterDays), now) &&
+        current.anchor !== null &&
+        current.status !== 'deleted' &&
+        ((current.existsAtTarget && !current.enabledAtTarget) ||
+          (!current.existsAtTarget && current.status === 'archived'))
+      ) {
+        push('delete_account', {
+          before: { deleted: false },
+          after: { deleted: true },
+          message: `deleted ${ladder.deleteAfterDays} days after departure on ${endDate!.toISOString().slice(0, 10)}`,
         });
       }
     }

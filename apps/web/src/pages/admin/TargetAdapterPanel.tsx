@@ -62,6 +62,7 @@ const CAPABILITY_LABEL: Record<string, string> = {
   enable_account: 'Enable accounts',
   disable_account: 'Disable accounts',
   archive_account: 'Archive accounts',
+  delete_account: 'Delete accounts',
   grant_entitlement: 'Grant entitlements',
   revoke_entitlement: 'Revoke entitlements',
 };

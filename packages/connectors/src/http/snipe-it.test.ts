@@ -105,6 +105,7 @@ describe('the Snipe-IT document', () => {
       updateAccount: true,
       disableAccount: true,
       manageEntitlements: false,
+      deleteAccount: false,
     });
   });
 
