@@ -387,7 +387,7 @@ test('deleting a source states what it will deactivate before it will do it', as
   // The previous test applied one user and one group from this source.
   await expect(panel).toContainText('1 user');
   await expect(panel).toContainText('1 group');
-  await expect(panel).toContainText(/deactivates every one of those/i);
+  await expect(panel).toContainText(/Deactivates these users and groups/);
 
   const remove = panel.getByRole('button', { name: 'Delete source' });
   await expect(remove).toBeDisabled();

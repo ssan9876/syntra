@@ -390,7 +390,7 @@ describe('an Entra ID target with a GUID tenantId and a userPrincipalDomain', ()
       (e: unknown) => e,
     );
     expect(refused).toBeInstanceOf(CandidateNotVisibleError);
-    expect((refused as Error).message).toMatch(/no account named anna\.novak is visible in the target/);
+    expect((refused as Error).message).toMatch(/Account anna\.novak already exists on the target but cannot be found/);
     expect((refused as Error).message).not.toMatch(/base DN/);
     await expect(
       adoptAccount(tenantId, provider, {

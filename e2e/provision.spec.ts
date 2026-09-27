@@ -301,7 +301,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // there has to be a control for that or the page tells somebody to do
   // something the console cannot do.
   await page.getByRole('button', { name: 'Refresh entitlement catalog' }).click();
-  await expect(page.getByText(/entitlement.*read from the target/i)).toBeVisible();
+  await expect(page.getByText(/^Read \d+ entitlements?;/)).toBeVisible();
 
   await page.getByLabel('Name', { exact: true }).fill(RULE_NAME);
   await page.getByLabel('Field').selectOption('contract.department');

@@ -401,7 +401,7 @@ test('a refusal names the reason and the requester reads it', async ({ page }) =
   await page.goto('/approvals');
   await page.getByRole('button', { name: 'Refuse' }).click();
   // The client refuses to send it, before the server does.
-  await expect(page.getByText(/say why/i)).toBeVisible();
+  await expect(page.getByText(/Add a comment to refuse/)).toBeVisible();
   await page.getByLabel('Comment').fill('not for this project');
   await page.getByRole('button', { name: 'Refuse' }).click();
   await signOut(page);

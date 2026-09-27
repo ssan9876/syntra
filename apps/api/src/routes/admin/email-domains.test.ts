@@ -72,9 +72,9 @@ describe('email domains', () => {
   it('refuses a business email outside every verified domain, and accepts one inside', async () => {
     ctx = await buildTestApp({ txtLookup: async () => [], verifiedDomains: [] });
     const cookie = await adminCookie([PERMISSIONS.TENANT_MANAGE, PERMISSIONS.IDENTITY_WRITE, PERMISSIONS.IDENTITY_READ]);
-    const create = (businessEmail: string) => ctx.app.inject({
+    const create = (businessEmail: string, givenName = 'Jane') => ctx.app.inject({
       method: 'POST', url: '/api/admin/persons', headers: { host: ctx.host, cookie },
-      payload: { givenName: 'Jane', familyName: 'Doe', businessEmail },
+      payload: { givenName, familyName: 'Doe', businessEmail },
     });
 
     const refused = await create('Jane_Doe@deeznutz.org');
@@ -90,8 +90,8 @@ describe('email domains', () => {
         data: { tenantId: ctx.tenantId, domain: 'acme.test', verificationToken: 't', verifiedAt: new Date() },
       }),
     );
-    expect((await create('jane.doe@acme.test')).statusCode).toBe(200);
-    expect((await create('jane.doe@eu.acme.test')).statusCode).toBe(200);
+    expect((await create('jane.doe@acme.test')).statusCode).toBe(201);
+    expect((await create('ola.doe@eu.acme.test', 'Ola')).statusCode).toBe(201);
     expect(verificationRecord('t')).toBe('syntra-domain-verification=t');
   });
 });
