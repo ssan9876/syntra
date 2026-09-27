@@ -172,9 +172,9 @@ test.describe.serial('an HR source, end to end', () => {
       page.getByText(/would depart 1 of 2 people this source owns \(50\.0%\)/),
     ).toBeVisible();
 
-    await page.getByRole('button', { name: /i have read the numbers/i }).click();
+    await page.getByRole('button', { name: 'Apply anyway' }).click();
     await expect(
-      page.getByRole('button', { name: /i have read the numbers/i }),
+      page.getByRole('button', { name: 'Apply anyway' }),
     ).toHaveCount(0, { timeout: 30_000 });
 
     await page.goto('/admin/users?tab=people');

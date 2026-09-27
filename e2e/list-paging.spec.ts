@@ -63,7 +63,7 @@ test('pages through people and searches for one', async ({ page }) => {
   // A search that matches nothing says so, rather than showing an empty table,
   // and it drops the page it was on rather than stranding the reader there.
   await page.getByLabel('Search people').fill('zzz-nobody-by-this-name');
-  await expect(page.getByText(/Nobody matches/)).toBeVisible();
+  await expect(page.getByText(/No people match/)).toBeVisible();
   await expect(page).not.toHaveURL(/page=2/);
 
   // And clearing it puts the list back.

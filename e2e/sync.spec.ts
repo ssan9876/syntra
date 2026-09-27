@@ -286,7 +286,7 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
   await expect(report).toContainText('entryUUID');
 
   await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByText(/attribute mappings were saved/i)).toBeVisible();
+  await expect(page.getByText(/Source and attribute mappings saved/i)).toBeVisible();
   // The editor moved to the saved source rather than staying on /new.
   await expect(page).toHaveURL(/\/admin\/sources\/[0-9a-f-]{36}$/);
   // Saved and read back, not merely echoed: this is a fresh GET of the source.
@@ -382,7 +382,7 @@ test('deleting a source states what it will deactivate before it will do it', as
   await expect(page.getByRole('heading', { name: SOURCE_NAME })).toBeVisible();
 
   const panel = page.locator('section', {
-    has: page.getByRole('heading', { name: 'Delete this source' }),
+    has: page.getByRole('heading', { name: 'Delete source' }),
   });
   // The previous test applied one user and one group from this source.
   await expect(panel).toContainText('1 user');

@@ -208,7 +208,7 @@ test('a manager reviews from the PORTAL, with no administrative session', async 
   // `getByText`, not `getByRole('heading')`. `Empty` renders its title as a
   // `<p>` — there is no heading here, and an assertion that asks for one waits
   // out its timeout against a screen that is showing exactly what it should.
-  await expect(page.getByText('Nothing is waiting for you')).toBeVisible();
+  await expect(page.getByText('No reviews waiting')).toBeVisible();
 });
 
 test('the console has nothing to offer a reviewer who is not an administrator', async ({ page }) => {
@@ -233,7 +233,7 @@ test('the revocation batch carries the decision, and is the last cheap moment', 
   // one item resolved to nobody. Jo cannot review Jo's own membership of
   // Nurses, so that item has no reviewer and the screen says so instead of
   // quietly counting it as done.
-  await expect(page.getByText(/item\(s\) have no reviewer or fallback/)).toBeVisible();
+  await expect(page.getByText(/item\(s\) have no reviewer/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Compute revocations' }).click();
   await page.getByRole('link', { name: 'Open batch' }).click();

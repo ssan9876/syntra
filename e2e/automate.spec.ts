@@ -381,7 +381,7 @@ test('a user requests something, the manager approves, and the user sees it gran
   await page.goto('/approvals');
   await page.getByLabel('Comment').fill('fine for the audit');
   await page.getByRole('button', { name: 'Approve' }).click();
-  await expect(page.getByText(/nothing is waiting for you/i)).toBeVisible();
+  await expect(page.getByText('No approvals waiting')).toBeVisible();
   await signOut(page);
 
   await signIn(page, 'jdoe', USER!);
@@ -519,7 +519,7 @@ test('a blocked sweep is reviewed and confirmed', async ({ page }) => {
 
   // The sweep proposes something and refuses to apply it unattended: one
   // lapse out of a handful of grants is far past the 10% default.
-  await expect(page.getByText(/this sweep stopped/i)).toBeVisible();
+  await expect(page.getByText('Sweep stopped')).toBeVisible();
   await expect(page.getByText(/threshold 10%/)).toBeVisible();
 
   await page.getByRole('button', { name: /apply the ticked rows/i }).click();
