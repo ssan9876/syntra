@@ -37,12 +37,12 @@ beforeEach(() => {
 });
 
 describe('IncidentsTab', () => {
-  it('says nothing is broken rather than showing an empty table', async () => {
+  it('says there are no incidents rather than showing an empty table', async () => {
     // The answer somebody wants most often. A dashboard that manufactures a
     // row to look busy is one people stop reading.
     mockIncidents([]);
     renderPage();
-    expect(await screen.findByText(/nothing is broken/i)).toBeInTheDocument();
+    expect(await screen.findByText('No incidents')).toBeInTheDocument();
   });
 
   it('states the problem and what follows from it', async () => {

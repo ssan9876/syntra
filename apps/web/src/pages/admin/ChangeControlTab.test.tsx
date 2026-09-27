@@ -74,7 +74,7 @@ describe('ChangeControlTab', () => {
     serve({ '/api/admin/change-control': () => json(state()) });
     render(<ChangeControlTab />);
     await userEvent.click(await screen.findByLabelText('Admin-scoped API tokens'));
-    expect(screen.getByText(/itself held for a second administrator/)).toBeVisible();
+    expect(screen.getByText(/also needs a second administrator/)).toBeVisible();
   });
 });
 

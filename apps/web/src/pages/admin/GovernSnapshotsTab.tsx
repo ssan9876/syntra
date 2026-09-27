@@ -42,7 +42,7 @@ export function GovernSnapshotsTab() {
         setActionError(
           cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'Could not build a snapshot.',
+            : 'Snapshot could not be started.',
         ),
       )
       .finally(() => setBuilding(false));
@@ -57,7 +57,7 @@ export function GovernSnapshotsTab() {
       {!(data && snapshots.length === 0) && (
         <div className="mb-4 flex justify-end">
           <Button loading={building} onClick={build}>
-            Build a snapshot now
+            Build snapshot
           </Button>
         </div>
       )}
@@ -70,10 +70,10 @@ export function GovernSnapshotsTab() {
         {data && snapshots.length === 0 && (
           <div className="p-6">
             <Empty
-              title="No snapshots yet"
+              title="No snapshots"
               action={
                 <Button variant="primary" loading={building} onClick={build}>
-                  Build a snapshot now
+                  Build snapshot
                 </Button>
               }
             />
@@ -86,7 +86,7 @@ export function GovernSnapshotsTab() {
                 <th scope="col">As of</th>
                 <th scope="col">Status</th>
                 <th scope="col">Holdings</th>
-                <th scope="col">Nobody can explain</th>
+                <th scope="col">Unexplained</th>
                 <th scope="col">Coverage gaps</th>
               </tr>
             </thead>

@@ -55,7 +55,7 @@ const SOURCES = [
   { value: 'contract', label: 'Their contract', field: 'Field on the contract' },
   { value: 'attribute', label: 'A stored attribute', field: 'Attribute key' },
   { value: 'groups', label: 'Their groups', field: null },
-  { value: 'literal', label: 'The same value for everybody', field: null },
+  { value: 'literal', label: 'Fixed value', field: null },
 ] as const;
 
 const sourceLabel = (kind: string) =>
@@ -104,7 +104,7 @@ export function ApplicationClaims({
       setRemoveProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That mapping could not be removed.',
+          : 'Mapping not removed.',
       );
     } finally {
       setBusy(null);
@@ -113,7 +113,7 @@ export function ApplicationClaims({
 
   return (
     <Panel
-      title="What the application is told"
+      title="Claims"
       actions={
         <Button variant="secondary" size="sm" onClick={() => setAdding((v) => !v)}>
           Add a mapping
@@ -153,7 +153,7 @@ export function ApplicationClaims({
                     // is the ordinary result of applying a set twice.
                     setApplied(
                       result.added === 0
-                        ? `${set.name}: everything in it was already here.`
+                        ? `${set.name}: all claims already present.`
                         : `${set.name}: added ${result.added}, ${result.alreadyPresent} already here.`,
                     );
                     reload();
@@ -161,7 +161,7 @@ export function ApplicationClaims({
                     setApplyProblem(
                       cause instanceof ApiError
                         ? (cause.problem.detail ?? cause.problem.title)
-                        : 'That could not be applied.',
+                        : `${set.name} was not applied.`,
                     );
                   } finally {
                     setBusy(null);
@@ -205,7 +205,7 @@ export function ApplicationClaims({
         )}
 
         {rows.length === 0 && !adding && (
-          <Empty title="Nothing beyond the name identifier" />
+          <Empty title="Only the name ID is sent" />
         )}
 
         {rows.length > 0 && (
@@ -317,7 +317,7 @@ function ClaimForm({
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That could not be saved.',
+            : 'Mapping not added.',
       );
     } finally {
       setBusy(false);
@@ -410,7 +410,7 @@ function ClaimForm({
           <Check
             checked={multiValued}
             onChange={setMultiValued}
-            label="Send every group, not just the first"
+            label="Send all groups"
           />
         )}
       </div>

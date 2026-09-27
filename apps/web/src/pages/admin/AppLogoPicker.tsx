@@ -94,7 +94,7 @@ export function AppLogoPicker({
         setDraft({ kind: 'image', dataUri: reader.result, fileName: file.name, bytes: file.size });
       }
     };
-    reader.onerror = () => setUploadError('That file could not be read.');
+    reader.onerror = () => setUploadError(`Could not read ${file.name}.`);
     reader.readAsDataURL(file);
   }
 
@@ -119,7 +119,7 @@ export function AppLogoPicker({
       setSaveError(
         cause instanceof ApiError
           ? cause.problem.errors?.[0]?.message ?? cause.problem.detail ?? cause.problem.title
-          : 'The logo could not be saved.',
+          : 'Could not save the logo.',
       );
     } finally {
       setBusy(false);

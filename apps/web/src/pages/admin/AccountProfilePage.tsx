@@ -335,7 +335,7 @@ function AccountProfileEditor() {
           message:
             cause instanceof ApiError
               ? (cause.problem.detail ?? cause.problem.title)
-              : 'The account profile could not be read.',
+              : 'Could not load the account profile.',
         });
       });
     return () => { active = false; };
@@ -411,7 +411,7 @@ function AccountProfileEditor() {
       setLoad({ state: 'ready', stored: true });
       toast({ tone: 'success', title: 'Account profile saved' });
     } catch (cause) {
-      fail(cause, 'The account profile could not be saved.');
+      fail(cause, 'Could not save the account profile.');
     } finally {
       setBusy(null);
     }
@@ -440,7 +440,7 @@ function AccountProfileEditor() {
     } catch (cause) {
       if (seq === previewSeq.current) {
         previewShown.current = false;
-        fail(cause, 'That could not be previewed.');
+        fail(cause, 'Could not run the preview.');
       }
     } finally {
       if (seq === previewSeq.current) setBusy(null);
@@ -451,7 +451,7 @@ function AccountProfileEditor() {
 
   const back = (
     <Link to={`/admin/targets/${id}`} className="link inline-block">
-      Back to the target
+      Back to target
     </Link>
   );
 
@@ -473,7 +473,7 @@ function AccountProfileEditor() {
       <>
         {header}
         <div className="space-y-6">
-          <Alert tone="danger" title="This profile could not be read">
+          <Alert tone="danger" title="Account profile not loaded">
             <p>{load.message}</p>
           </Alert>
           {back}
@@ -674,7 +674,7 @@ function AccountProfileEditor() {
               onChange={(v) => set('initialPasswordDelivery', v as Delivery)}
               {...mark('initialPasswordDelivery')}
               options={[
-                { value: 'vaultOnly', label: 'Vault only — nobody is sent it' },
+                { value: 'vaultOnly', label: 'Vault only (not sent)' },
                 { value: 'manager', label: "The person's manager" },
                 { value: 'personalEmail', label: "The person's personal email" },
               ]}
@@ -684,7 +684,7 @@ function AccountProfileEditor() {
                 name="requirePasswordChangeAtFirstSignIn"
                 label={
                   passwordChange === 'always'
-                    ? 'Require a new password at first sign-in (always, on this target)'
+                    ? 'Require a new password at first sign-in (always on this target)'
                     : 'Require a new password at first sign-in'
                 }
                 // Shown ticked and fixed where the connector always demands

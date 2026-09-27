@@ -74,7 +74,7 @@ export function BreakGlassTab() {
   const [notice, setNotice] = useState<{ tone: 'warning' | 'success'; text: string } | null>(null);
 
   if (loading && !data) return <SkeletonRows rows={3} cols={2} />;
-  if (error || !data) return <Alert tone="danger">{error ?? 'Break-glass could not be loaded.'}</Alert>;
+  if (error || !data) return <Alert tone="danger">{error ?? 'Emergency access settings not loaded.'}</Alert>;
 
   const run = async (key: string, action: () => Promise<void>) => {
     setBusy(key); setNotice(null);
@@ -117,7 +117,7 @@ export function BreakGlassTab() {
     });
     setNotice({
       tone: 'success',
-      text: verb === 'approve' ? 'Emergency access is active.' : verb === 'end' ? 'Emergency access ended.' : 'Review recorded.',
+      text: verb === 'approve' ? 'Emergency access approved.' : verb === 'end' ? 'Emergency access ended.' : 'Review recorded.',
     });
     reload();
   });
@@ -139,7 +139,7 @@ export function BreakGlassTab() {
 
     <Panel title="Emergency accounts">
       <div className="space-y-4 p-4">
-        {data.accounts.length === 0 ? <p className="text-sm text-muted">No account is designated.</p> : <ul className="divide-y divide-border-subtle">
+        {data.accounts.length === 0 ? <p className="text-sm text-muted">No emergency accounts yet</p> : <ul className="divide-y divide-border-subtle">
           {data.accounts.map((account) => (
             <li key={account.userId} className="flex flex-wrap items-center justify-between gap-3 py-3">
               <span>
@@ -180,7 +180,7 @@ export function BreakGlassTab() {
 
     <Panel title="Activations">
       <div className="divide-y divide-border-subtle">
-        {data.activations.length === 0 ? <p className="p-4 text-sm text-muted">No emergency access has been requested.</p> : null}
+        {data.activations.length === 0 ? <p className="p-4 text-sm text-muted">No activations yet</p> : null}
         {data.activations.map((activation) => {
           const self = activation.userId === data.viewerUserId;
           const notes = reviews[activation.id] ?? '';

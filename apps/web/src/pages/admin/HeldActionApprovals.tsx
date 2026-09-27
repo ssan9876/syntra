@@ -95,9 +95,9 @@ function consequence(action: HeldAction): string {
     case 'rename_account':
       return `The sign-in name for ${nameOf(action.person)} changes from ${text(before.correlationKey) ?? 'its current value'} to ${text(after.correlationKey) ?? 'the new value'}. Anything using the old name stops matching.`;
     case 'enable_account':
-      return `${nameOf(action.person)}'s account is enabled again, with everything it still holds.`;
+      return `${nameOf(action.person)}'s account is enabled again with its current access.`;
     case 'create_account':
-      return `An account for ${nameOf(action.person)} is created again at the target, undoing any deliberate deletion.`;
+      return `${nameOf(action.person)}'s account is created again at the target, reversing any deletion there.`;
     default:
       return `This ${action.actionType} is applied to ${nameOf(action.person)}'s account.`;
   }
@@ -157,7 +157,7 @@ export function HeldActionApprovals({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'The approval could not be recorded.',
+          : 'Approval not recorded.',
       );
     } finally {
       setBusy(false);
@@ -175,7 +175,7 @@ export function HeldActionApprovals({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'The approval could not be revoked.',
+          : 'Approval not revoked.',
       );
     } finally {
       setBusy(false);

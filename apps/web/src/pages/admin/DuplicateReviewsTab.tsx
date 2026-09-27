@@ -41,7 +41,7 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
   async function resolve(review: DuplicateReview, resolution: 'keep_separate' | 'link_existing' | 'skip_source_record') {
     const note = (notes[review.changeId] ?? '').trim();
     if (note.length < 10) {
-      setProblem('Record at least 10 characters explaining the decision.');
+      setProblem('Decision note: enter at least 10 characters.');
       return;
     }
     setBusy(review.changeId);
@@ -61,14 +61,14 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
       });
       reload();
     } catch (cause) {
-      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The review could not be resolved.');
+      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Review not saved.');
     } finally {
       setBusy(null);
     }
   }
 
   if (error) return <Alert tone="danger">{error}</Alert>;
-  if (!loading && groups.length === 0) return <Panel><div className="p-6"><Empty title="No duplicate reviews waiting" /></div></Panel>;
+  if (!loading && groups.length === 0) return <Panel><div className="p-6"><Empty title="No duplicate reviews" /></div></Panel>;
 
   return (
     <div className="space-y-4">
@@ -88,7 +88,7 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
                 </tbody>
               </Table>
               <div>
-                <h3 className="mb-2 font-medium text-ink">Affected import changes</h3>
+                <h3 className="mb-2 font-medium text-ink">Held import changes</h3>
                 <ul className="flex flex-wrap gap-2">
                   {review.affectedChanges.map((change) => <li key={change.id}><Status tone="neutral">{change.changeType}</Status></li>)}
                 </ul>

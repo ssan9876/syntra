@@ -84,7 +84,7 @@ export function ApplicationDangerZone({
       });
       onRetired();
     } catch (cause) {
-      setProblem(describe(cause, 'That could not be saved.'));
+      setProblem(describe(cause, `${application.name} was not updated.`));
     } finally {
       setBusy(null);
     }

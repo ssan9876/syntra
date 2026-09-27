@@ -44,16 +44,16 @@ interface CaseEvent {
 
 const CATEGORY_LABEL: Record<string, string> = {
   confirmed: 'Confirmed by read-back',
-  read_back_incomplete: 'Read-back incomplete — manual verification',
+  read_back_incomplete: 'Read-back incomplete; check by hand',
   transient: 'Target unavailable (retried)',
   throttled: 'Target throttled (retry scheduled)',
-  unauthorized: 'Credential or consent refused — not retried',
-  not_found: 'Target object missing — manual work',
+  unauthorized: 'Credential or consent refused; not retried',
+  not_found: 'Missing at the target; manual work',
   conflict: 'Conflict at the target',
   rejected: 'Rejected by the target',
   blocked: 'Blocked by a safety guard',
-  unavailable: 'Not attempted or not answered',
-  no_change_required: 'No change was required',
+  unavailable: 'No answer',
+  no_change_required: 'No change needed',
 };
 
 function when(value: string | null | undefined) {
@@ -61,7 +61,7 @@ function when(value: string | null | undefined) {
 }
 
 function stateSummary(state: TargetState | null) {
-  if (!state) return 'No state was recorded.';
+  if (!state) return 'Not recorded';
   return `Account ${state.accountPresent ? 'present' : 'absent'} · ${state.enabled ? 'enabled' : 'disabled'} · ${state.entitlements.length ? state.entitlements.join(', ') : 'no entitlements'}`;
 }
 
@@ -131,7 +131,7 @@ function ObservationForm({ operationId, step, onDone }: { operationId: string; s
       });
       onDone('Observation recorded.');
     } catch (error) {
-      onDone(problemText(error, 'The observation could not be recorded.'));
+      onDone(problemText(error, 'Observation not recorded.'));
     } finally {
       setBusy(false);
     }
@@ -177,7 +177,7 @@ function CaseHistoryPanel({ operation, onChanged }: { operation: Operation; onCh
       setMessage('');
       onChanged(done);
     } catch (error) {
-      onChanged(problemText(error, 'The case update could not be saved.'));
+      onChanged(problemText(error, 'Case not updated.'));
     } finally { setBusy(false); }
   };
   const events = operation.caseEvents ?? [];
@@ -189,7 +189,7 @@ function CaseHistoryPanel({ operation, onChanged }: { operation: Operation; onCh
       </Alert> : null}
       {events.length ? <Table tight><thead><tr><th scope="col">When</th><th scope="col">Event</th><th scope="col">Operator</th><th scope="col">Details</th></tr></thead><tbody aria-live="polite">
         {events.map((event) => <tr key={event.id}><td>{when(event.createdAt)}</td><td><Status tone={event.kind === 'resolution' ? 'active' : event.kind === 'reopened' ? 'warning' : 'neutral'}>{event.kind}</Status></td><td>{event.actorName ?? 'System'}</td><td>{event.message ?? (event.kind === 'assignment' ? `Owner or due date updated` : '—')}</td></tr>)}
-      </tbody></Table> : <p className="text-sm text-muted">No case activity yet.</p>}
+      </tbody></Table> : <p className="text-sm text-muted">No case activity</p>}
       <form className="grid gap-3 sm:grid-cols-[minmax(18rem,1fr)_auto] sm:items-end" onSubmit={(event) => { event.preventDefault(); void submit('case-notes', { message }, 'Case note saved.'); }}>
         <Field label="Add an escalation or investigation note" value={message} onChange={setMessage} />
         <Button type="submit" variant="secondary" loading={busy} disabled={!message.trim()}>Add note</Button>
@@ -225,7 +225,7 @@ function LegalHoldPanel({ operationId }: { operationId: string }) {
         body: JSON.stringify({ subjectType: 'lifecycle_operation', subjectId: operationId, reference, reason }),
       });
       setReference(''); setReason(''); setNotice('Legal hold placed.'); resource.reload();
-    } catch (error) { setNotice(problemText(error, 'The legal hold could not be placed.')); }
+    } catch (error) { setNotice(problemText(error, 'Legal hold not placed.')); }
     finally { setBusy(false); }
   };
   const release = async (holdId: string) => {
@@ -233,7 +233,7 @@ function LegalHoldPanel({ operationId }: { operationId: string }) {
     try {
       await api(`/api/admin/lifecycle-legal-holds/${holdId}/release`, { method: 'POST' });
       setNotice('Legal hold released.'); resource.reload();
-    } catch (error) { setNotice(problemText(error, 'The legal hold could not be released.')); }
+    } catch (error) { setNotice(problemText(error, 'Legal hold not released.')); }
     finally { setBusy(false); }
   };
   return <Panel title="Legal holds" actions={active.length ? <Status tone="warning">{active.length} active</Status> : undefined}>
@@ -297,7 +297,7 @@ export function LifecycleOperationPage() {
       { label: 'Created', value: when(operation.createdAt) },
       { label: 'Completed', value: when(operation.completedAt) },
     ]} />
-    {operation.overdueReason ? <Alert tone="danger" title="Overdue">{operation.overdueReason}{operation.escalatedAt ? ` Escalated to ${operation.escalatedToName ?? 'the configured owner'} at ${when(operation.escalatedAt)}.` : ''}</Alert> : null}
+    {operation.overdueReason ? <Alert tone="danger" title="Overdue">{operation.overdueReason}{operation.escalatedAt ? ` Escalated to ${operation.escalatedToName ?? 'the escalation owner'} at ${when(operation.escalatedAt)}.` : ''}</Alert> : null}
     {operation.sloBreachedAt && !operation.overdueReason ? <Alert tone="warning" title="Service level breached">Breached at {when(operation.sloBreachedAt)}.</Alert> : null}
     {operation.approvalRequired ? <Panel title="Approval"><div className="space-y-3 p-4">
       {operation.approvalReason ? <p>{operation.approvalReason}</p> : null}
@@ -306,8 +306,8 @@ export function LifecycleOperationPage() {
       {pendingApproval ? <>
         <Field label="Reason (required to reject)" value={reason} onChange={setReason} />
         <div className="flex flex-wrap gap-2">
-          <Button loading={busy} onClick={() => void act('approve', undefined, 'Approved. Target work has been queued.', 'The operation could not be approved.')}>Approve and run</Button>
-          <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void act('reject', { reason }, 'Rejected.', 'The operation could not be rejected.')}>Reject</Button>
+          <Button loading={busy} onClick={() => void act('approve', undefined, 'Approved. Target work queued.', 'Operation not approved.')}>Approve and run</Button>
+          <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void act('reject', { reason }, 'Rejected.', 'Operation not rejected.')}>Reject</Button>
         </div>
       </> : null}
     </div></Panel> : null}
@@ -330,7 +330,7 @@ export function LifecycleOperationPage() {
               timeline or the evidence on another page. */}
           {needsPerson(step.status) ? <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="text-sm font-medium text-muted">Next</span>
-            {open && !pendingApproval ? <Button size="sm" loading={busy} onClick={() => void act('retry', undefined, 'Requeued as a new attempt.', 'Could not requeue the operation.')}>Retry unfinished work</Button> : null}
+            {open && !pendingApproval ? <Button size="sm" loading={busy} onClick={() => void act('retry', undefined, 'Requeued.', 'Operation not requeued.')}>Retry unfinished work</Button> : null}
             {step.key === 'targets' && operation.personId ? <Link className="link" to={`/admin/people/${operation.personId}`}>Review provisioning evidence</Link> : null}
           </div> : null}
           <div className="flex flex-wrap gap-2">
@@ -345,11 +345,11 @@ export function LifecycleOperationPage() {
       })}</ol>
       {notice ? <Alert tone="info">{notice}</Alert> : null}
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" loading={busy} onClick={() => void act('acknowledge', undefined, 'Work acknowledged.', 'Could not acknowledge the operation.')}>{operation.acknowledgedAt ? 'Acknowledged' : 'Acknowledge work'}</Button>
-        {open && !pendingApproval ? <Button loading={busy} onClick={() => void act('retry', undefined, 'Requeued as a new attempt.', 'Could not requeue the operation.')}>Retry operation</Button> : null}
+        <Button variant="secondary" loading={busy} onClick={() => void act('acknowledge', undefined, 'Acknowledged.', 'Operation not acknowledged.')}>{operation.acknowledgedAt ? 'Acknowledged' : 'Acknowledge work'}</Button>
+        {open && !pendingApproval ? <Button loading={busy} onClick={() => void act('retry', undefined, 'Requeued.', 'Operation not requeued.')}>Retry operation</Button> : null}
         {open ? <>
           <Field label="Cancellation reason" value={reason} onChange={setReason} />
-          <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void act('cancel', { reason }, 'Cancelled. Target changes were not undone.', 'Could not cancel the operation.')}>Cancel operation</Button>
+          <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void act('cancel', { reason }, 'Cancelled. Changes already made at targets stay.', 'Operation not cancelled.')}>Cancel operation</Button>
         </> : null}
       </div>
     </div></Panel>
@@ -358,7 +358,7 @@ export function LifecycleOperationPage() {
       <div className="p-4">
         {deliveries.data?.notifications.length ? <Table tight><thead><tr><th scope="col">Message</th><th scope="col">To</th><th scope="col">Queued</th><th scope="col">Delivery</th></tr></thead><tbody>
           {deliveries.data.notifications.map((row) => <tr key={row.id}><td>{row.template}</td><td>{row.to}</td><td>{when(row.createdAt)}</td><td>{row.sentAt ? <Status tone="active">sent {when(row.sentAt)}</Status> : row.lastError ? <Status tone="danger">failed ×{row.attempts}: {row.lastError}</Status> : <Status tone="warning">queued</Status>}</td></tr>)}
-        </tbody></Table> : <p className="text-sm text-muted">No notifications queued.</p>}
+        </tbody></Table> : <p className="text-sm text-muted">No notifications</p>}
       </div>
     </Panel>
     <LegalHoldPanel operationId={operation.id} />

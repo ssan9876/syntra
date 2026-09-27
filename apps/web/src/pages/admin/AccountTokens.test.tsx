@@ -135,7 +135,7 @@ describe('AccountTokens', () => {
     await userEvent.click(await screen.findByRole('button', { name: /revoke/i }));
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/could not be revoked/i),
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not revoke token/i),
     );
   });
 });

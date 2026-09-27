@@ -52,7 +52,7 @@ describe('GovernFindingsTab', () => {
     const rows = screen.getAllByRole('row').slice(1);
     // The first row is the thing nobody can explain. A page sorted
     // alphabetically would put `access_without_contract` first.
-    expect(rows[0]!.textContent).toContain('Nothing in Syntra explains this access');
+    expect(rows[0]!.textContent).toContain('No source explains this access');
     expect(screen.queryByText(/% certified/)).not.toBeInTheDocument();
   });
 
@@ -63,7 +63,7 @@ describe('GovernFindingsTab', () => {
       </MemoryRouter>,
     );
     await waitFor(() =>
-      expect(screen.getByText(/holds access with no active contract/i)).toBeInTheDocument(),
+      expect(screen.getByText(/access with no active contract/i)).toBeInTheDocument(),
     );
     expect(screen.queryByText('access_without_contract')).not.toBeInTheDocument();
   });

@@ -77,7 +77,7 @@ export function AttentionBanner() {
     <div
       role="status"
       aria-live="polite"
-      aria-label="Work that needs your attention"
+      aria-label="Needs attention"
       className="mb-4 rounded-panel border border-warning/35 bg-warning-soft px-4 py-3"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -88,25 +88,25 @@ export function AttentionBanner() {
           variant="ghost"
           onClick={() => { writeDismissed(signature); setDismissed(signature); }}
         >
-          Dismiss for this session
+          Dismiss
         </Button>
       </div>
       <ul className="mt-1 space-y-1 text-ink">
         {runs?.items.slice(0, RUNS_SHOWN).map((item) => (
           <li key={item.runId}>
             {runSentence(item)}.{' '}
-            <Link className="link" to={item.href}>Review the run</Link>
+            <Link className="link" to={item.href}>Review run</Link>
           </li>
         ))}
         {moreRuns > 0 && (
           <li>
-            {moreRuns} more provisioning {moreRuns === 1 ? 'run is' : 'runs are'} waiting for review.
+            {moreRuns} more {moreRuns === 1 ? 'run' : 'runs'} waiting for review.
           </li>
         )}
         {summary.heldActions?.items.slice(0, RUNS_SHOWN).map((item) => (
           <li key={`held-${item.runId}`}>
             {heldActionsSentence(item)}.{' '}
-            <Link className="link" to={item.href}>Review and approve</Link>
+            <Link className="link" to={item.href}>Review</Link>
           </li>
         ))}
         {lifecycle.map((line) => (
@@ -123,7 +123,7 @@ export function AttentionBanner() {
         )}
       </ul>
       <p className="mt-2 text-sm">
-        <Link className="link" to={ATTENTION_TAB}>See everything in Activity → Attention</Link>
+        <Link className="link" to={ATTENTION_TAB}>View all in Activity → Attention</Link>
       </p>
     </div>
   );

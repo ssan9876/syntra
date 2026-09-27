@@ -38,7 +38,7 @@ describe('ConditionGroupEditor', () => {
     expect((onChange.mock.calls[0]![0] as GroupDraft).children).toHaveLength(2);
 
     onChange.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove this condition' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove condition' }));
     expect((onChange.mock.calls[0]![0] as GroupDraft).children).toHaveLength(0);
   });
 

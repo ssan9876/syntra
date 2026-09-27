@@ -69,7 +69,7 @@ export function AccountTokens({ userId }: { userId: string }) {
         }),
       });
       if (!res.ok) {
-        setFailure('That token could not be issued.');
+        setFailure(`Could not issue token ${name.trim()}.`);
         return;
       }
       const body = (await res.json()) as { token: string };
@@ -81,13 +81,13 @@ export function AccountTokens({ userId }: { userId: string }) {
     }
   }
 
-  async function revoke(id: string) {
+  async function revoke(id: string, tokenName: string) {
     setFailure(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/admin/users/${userId}/tokens/${id}`, { method: 'DELETE' });
       if (!res.ok) {
-        setFailure('That token could not be revoked.');
+        setFailure(`Could not revoke token ${tokenName}.`);
         return;
       }
       toast({ title: 'Token revoked' });
@@ -107,7 +107,7 @@ export function AccountTokens({ userId }: { userId: string }) {
           <span className="mt-1 block">
             <Identifier value={issued} />
           </span>
-          Shown once — copy it now.
+          Copy it now. It is shown once.
         </Alert>
       )}
 
@@ -142,7 +142,7 @@ export function AccountTokens({ userId }: { userId: string }) {
                   variant="danger-quiet"
                   size="sm"
                   disabled={busy}
-                  onClick={() => void revoke(token.id)}
+                  onClick={() => void revoke(token.id, token.name)}
                 >
                   Revoke
                 </Button>

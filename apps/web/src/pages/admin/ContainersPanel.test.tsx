@@ -57,13 +57,13 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
     renderPanel();
 
     const row = await screen.findByTestId('unplaced-t-1');
-    const link = screen.getByRole('link', { name: /turn on mirroring for this target \(recommended\)/i });
+    const link = screen.getByRole('link', { name: /turn on mirroring \(recommended\)/i });
     expect(link).toHaveAttribute('href', '/admin/targets/t-1#org-units');
     // The recommendation comes before the manual path, in reading order.
     const text = row.textContent ?? '';
-    expect(text.indexOf('Turn on mirroring for this target (recommended)')).toBeGreaterThan(-1);
+    expect(text.indexOf('Turn on mirroring (recommended)')).toBeGreaterThan(-1);
     expect(text.indexOf('Set a DN by hand')).toBeGreaterThan(
-      text.indexOf('Turn on mirroring for this target (recommended)'),
+      text.indexOf('Turn on mirroring (recommended)'),
     );
     expect(screen.queryByRole('button', { name: /create container/i })).not.toBeInTheDocument();
   });
@@ -75,7 +75,7 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
       '/api/admin/org-units/ou-1/containers': () => json({ containers: [] }),
     });
     renderPanel();
-    expect(await screen.findByText('Not in any directory yet')).toBeInTheDocument();
+    expect(await screen.findByText('No containers')).toBeInTheDocument();
     expect(screen.queryByTestId('unplaced-t-2')).not.toBeInTheDocument();
   });
 
@@ -107,7 +107,7 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
     renderPanel();
 
     await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /save typed dn/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save dn/i }));
 
     await waitFor(() => expect(posted).toBeDefined());
     expect(JSON.parse(posted!)).toEqual({ targetSystemId: 't-1', dn: `OU=Sales,${BASE_DN}` });
@@ -127,7 +127,7 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
 
     expect(await screen.findByText(`OU=Sales,${BASE_DN}`)).toBeInTheDocument();
     // 'desired' is an ordinary state before the next run, not a fault.
-    expect(screen.getByText('Awaiting the next run')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for next run')).toBeInTheDocument();
     expect(screen.getByTestId('container-t-1')).toHaveTextContent('Typed by hand');
   });
 
@@ -151,7 +151,7 @@ describe('ContainersPanel on a target that places accounts in OUs but does not m
     await userEvent.click(await screen.findByRole('button', { name: /^set a dn by hand$/i }));
     await userEvent.clear(screen.getByLabelText(/container/i));
     await userEvent.type(screen.getByLabelText(/container/i), 'CN=Users,DC=acme,DC=test');
-    await userEvent.click(screen.getByRole('button', { name: /save typed dn/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save dn/i }));
 
     const container = screen.getByLabelText(/container/i);
     await waitFor(() => expect(container).toHaveAccessibleDescription(/not below the target/i));
@@ -182,7 +182,7 @@ describe('ContainersPanel on a mirroring target', () => {
     const row = await screen.findByTestId('container-t-1');
     expect(row).toHaveTextContent('Mirrored automatically');
     expect(row).toHaveTextContent(`OU=Sales,${BASE_DN}`);
-    expect(row).toHaveTextContent('The next run creates it');
+    expect(row).toHaveTextContent('Created on next run');
     // Automatic first: no recommendation to turn on what is already on, and the
     // typed DN is only the secondary override.
     expect(screen.queryByRole('link', { name: /turn on mirroring/i })).not.toBeInTheDocument();
@@ -234,7 +234,7 @@ describe('ContainersPanel on a mirroring target', () => {
     });
     renderPanel();
     const row = await screen.findByTestId('container-t-1');
-    expect(row).toHaveTextContent('The next run moves it');
+    expect(row).toHaveTextContent('Moved on next run');
     expect(row).toHaveTextContent(`Currently atOU=Old,${BASE_DN}`);
     expect(screen.getByRole('button', { name: /stop tracking/i })).toBeInTheDocument();
   });

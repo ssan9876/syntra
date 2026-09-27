@@ -218,14 +218,14 @@ export function LifecyclePolicyPage() {
       adopt(saved);
       // The consequence rides with the confirmation: it is the thing somebody
       // who has just shortened a deadline would otherwise assume.
-      toast({ tone: 'success', title: 'Policy saved', body: 'Deadlines already set on open work are unchanged.' });
+      toast({ tone: 'success', title: 'Policy saved', body: 'Open work keeps its current deadlines.' });
     } catch (error) {
       const marked = formFieldErrors(error);
       setErrors(marked);
       setProblem(
         Object.keys(marked).length > 0
           ? null
-          : error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : 'The policy could not be saved.',
+          : error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : 'Policy not saved.',
       );
     } finally { setBusy(false); }
   };
@@ -272,7 +272,7 @@ export function LifecyclePolicyPage() {
             value={form.escalationOwnerUserId ?? ''}
             onChange={(value) => set({ escalationOwnerUserId: value || null })}
             options={[
-              { value: '', label: 'Nobody (no escalation)' },
+              { value: '', label: 'No escalation' },
               ...userList.map((user) => ({ value: user.id, label: `${user.displayName} (${user.login})` })),
             ]}
             error={errors.escalationOwnerUserId}
@@ -282,7 +282,7 @@ export function LifecyclePolicyPage() {
 
         <FormSection title="Notifications" number={3}>
           <Check className="sm:col-span-2" label="Tell the owner when an operation fails" checked={form.notifyOnFailure} onChange={(value) => set({ notifyOnFailure: value })} />
-          <Check className="sm:col-span-2" label="Tell the owner when work passes its due time unacknowledged" checked={form.notifyOnOverdue} onChange={(value) => set({ notifyOnOverdue: value })} />
+          <Check className="sm:col-span-2" label="Tell the owner when unacknowledged work is overdue" checked={form.notifyOnOverdue} onChange={(value) => set({ notifyOnOverdue: value })} />
           <Check className="sm:col-span-2" label="Tell the owner when target access is blocked by a guard" checked={form.notifyOnAccessBlocked} onChange={(value) => set({ notifyOnAccessBlocked: value })} />
         </FormSection>
 

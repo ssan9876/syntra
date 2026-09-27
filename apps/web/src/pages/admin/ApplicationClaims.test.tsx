@@ -74,7 +74,7 @@ describe('ApplicationClaims', () => {
   it('says what an empty list means rather than showing an empty table', async () => {
     mockApi();
     renderPanel();
-    expect(await screen.findByText(/nothing beyond the name identifier/i)).toBeInTheDocument();
+    expect(await screen.findByText(/only the name id is sent/i)).toBeInTheDocument();
   });
 
   it('names the source in words, not as a stored key', async () => {
@@ -186,6 +186,6 @@ describe('ApplicationClaims', () => {
     renderPanel(['saml']);
 
     await user.click(await screen.findByRole('button', { name: 'Standard profile' }));
-    expect(await screen.findByText(/already here/i)).toBeInTheDocument();
+    expect(await screen.findByText(/already present/i)).toBeInTheDocument();
   });
 });

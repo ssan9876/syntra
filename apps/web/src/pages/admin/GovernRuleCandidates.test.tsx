@@ -60,7 +60,7 @@ describe('GovernRuleCandidates', () => {
     render(<GovernRuleCandidates snapshotId="snap-1" />);
     await userEvent.click(screen.getByRole('button', { name: /look for rules/i }));
 
-    expect(await screen.findByText(/40 others, for other reasons/)).toBeInTheDocument();
+    expect(await screen.findByText(/40 others/)).toBeInTheDocument();
   });
 
   it('says plainly when there is no pattern rather than showing an empty table', async () => {
@@ -68,7 +68,7 @@ describe('GovernRuleCandidates', () => {
     render(<GovernRuleCandidates snapshotId="snap-1" />);
     await userEvent.click(screen.getByRole('button', { name: /look for rules/i }));
 
-    expect(await screen.findByText(/No pattern strong enough/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No suggested rules/i)).toBeInTheDocument();
     expect(screen.queryByRole('table')).toBeNull();
   });
 });

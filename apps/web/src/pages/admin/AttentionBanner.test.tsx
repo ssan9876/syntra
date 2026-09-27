@@ -52,12 +52,12 @@ describe('AttentionBanner', () => {
   it('names the held run, what it would do, and links to it and to Attention', async () => {
     mockApi(summary());
     render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
-    const banner = await screen.findByRole('status', { name: 'Work that needs your attention' });
+    const banner = await screen.findByRole('status', { name: 'Needs attention' });
     expect(banner).toHaveAttribute('aria-live', 'polite');
-    expect(within(banner).getByText('2 items need your attention')).toBeInTheDocument();
-    expect(banner).toHaveTextContent('A provisioning run on contoso.com entra is held for review — would create 1 of 2 accounts (50.0%), above the 20% threshold');
-    expect(banner).toHaveTextContent('1 lifecycle operation is waiting for the target account to be verified');
-    expect(within(banner).getByRole('link', { name: 'Review the run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
+    expect(within(banner).getByText('2 items need attention')).toBeInTheDocument();
+    expect(banner).toHaveTextContent('contoso.com entra: run held for review — would create 1 of 2 accounts (50.0%), above the 20% threshold');
+    expect(banner).toHaveTextContent('1 lifecycle operation waiting for account verification');
+    expect(within(banner).getByRole('link', { name: 'Review run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
     expect(within(banner).getByRole('link', { name: /Activity → Attention/ })).toHaveAttribute('href', '/admin/activity?tab=attention');
   });
 
@@ -65,27 +65,27 @@ describe('AttentionBanner', () => {
     const fetchMock = mockApi(summary({ total: 0, provisionRuns: { count: 0, items: [] }, lifecycle: { failed: 0, awaitingVerification: 0, items: [] } }));
     render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(screen.queryByRole('status', { name: 'Work that needs your attention' })).toBeNull();
+    expect(screen.queryByRole('status', { name: 'Needs attention' })).toBeNull();
   });
 
   it('dismisses for the session, and comes back when something new arrives', async () => {
     mockApi(summary());
     const first = render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
-    await userEvent.click(await screen.findByRole('button', { name: 'Dismiss for this session' }));
-    expect(screen.queryByRole('status', { name: 'Work that needs your attention' })).toBeNull();
+    await userEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('status', { name: 'Needs attention' })).toBeNull();
     first.unmount();
 
     // Same items on the next page: still dismissed.
     const again = render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.queryByRole('status', { name: 'Work that needs your attention' })).toBeNull();
+    expect(screen.queryByRole('status', { name: 'Needs attention' })).toBeNull();
     again.unmount();
 
     // A second held run is news.
     vi.restoreAllMocks();
     mockApi(summary({ total: 3, provisionRuns: { count: 2, items: [runItem(), runItem({ runId: 'run-2', targetName: 'AD' })] } }));
     render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
-    expect(await screen.findByRole('status', { name: 'Work that needs your attention' })).toHaveTextContent('3 items need your attention');
+    expect(await screen.findByRole('status', { name: 'Needs attention' })).toHaveTextContent('3 items need attention');
   });
 });
 
@@ -94,9 +94,9 @@ describe('Activity → Attention', () => {
     mockApi(summary());
     render(<MemoryRouter><IncidentsTab /></MemoryRouter>);
     expect(await screen.findByText('Waiting for a decision')).toBeInTheDocument();
-    expect(screen.getByText(/A provisioning run on contoso.com entra is held for review/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Review the run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
-    expect(await screen.findByText(/nothing is broken/i)).toBeInTheDocument();
+    expect(screen.getByText(/contoso.com entra: run held for review/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review run' })).toHaveAttribute('href', '/admin/targets/target-1/runs/run-1');
+    expect(await screen.findByText(/no incidents/i)).toBeInTheDocument();
   });
 });
 
@@ -119,10 +119,10 @@ describe('held actions in the attention summary', () => {
   it('counts them in the banner and links to the run', async () => {
     mockApi(summary({ total: 4, heldActions: held }));
     render(<MemoryRouter><AttentionBanner /></MemoryRouter>);
-    const banner = await screen.findByRole('status', { name: 'Work that needs your attention' });
-    expect(within(banner).getByText('4 items need your attention')).toBeInTheDocument();
-    expect(banner).toHaveTextContent('2 renames on Entra ID are waiting for your approval');
-    expect(within(banner).getByRole('link', { name: 'Review and approve' })).toHaveAttribute(
+    const banner = await screen.findByRole('status', { name: 'Needs attention' });
+    expect(within(banner).getByText('4 items need attention')).toBeInTheDocument();
+    expect(banner).toHaveTextContent('Entra ID: 2 renames waiting for approval');
+    expect(within(banner).getByRole('link', { name: 'Review' })).toHaveAttribute(
       'href',
       '/admin/targets/target-2/runs/run-9',
     );
@@ -132,8 +132,8 @@ describe('held actions in the attention summary', () => {
     mockApi(summary({ provisionRuns: { count: 0, items: [] }, lifecycle: null, total: 2, heldActions: held }));
     render(<MemoryRouter><IncidentsTab /></MemoryRouter>);
     expect(await screen.findByText('Waiting for a decision')).toBeInTheDocument();
-    expect(screen.getByText('2 renames on Entra ID are waiting for your approval')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Review and approve' })).toHaveAttribute(
+    expect(screen.getByText('Entra ID: 2 renames waiting for approval')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review' })).toHaveAttribute(
       'href',
       '/admin/targets/target-2/runs/run-9',
     );

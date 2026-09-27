@@ -62,15 +62,15 @@ export function escapeRdnValue(value: string): string {
 
 function StateOf({ row }: { row: ContainerRow }) {
   if (row.state === 'derived') {
-    return <StateBadge state="pending">The next run creates it</StateBadge>;
+    return <StateBadge state="pending">Created on next run</StateBadge>;
   }
   if (row.previousDn) {
-    return <StateBadge state="pending">The next run moves it</StateBadge>;
+    return <StateBadge state="pending">Moved on next run</StateBadge>;
   }
   // `desired` means the target has not confirmed it yet, which is the
   // ordinary state before the next run rather than a fault.
   if (row.state === 'desired') {
-    return <StateBadge state="pending">Awaiting the next run</StateBadge>;
+    return <StateBadge state="pending">Waiting for next run</StateBadge>;
   }
   return (
     <StateBadge state="healthy">
@@ -157,7 +157,7 @@ export function ContainersPanel({
     if (!res.ok) {
       // Removing the ROW never touches the container, so there is nothing
       // half-done to describe here.
-      setActionError('Could not stop tracking this container.');
+      setActionError('Could not stop tracking.');
       return;
     }
     reload();
@@ -208,7 +208,7 @@ export function ContainersPanel({
 
       {!loading && placements.length === 0 && unplaced.length === 0 && (
         <div className="px-4 pb-4">
-          <Empty title="Not in any directory yet" />
+          <Empty title="No containers" />
         </div>
       )}
 
@@ -309,7 +309,7 @@ export function ContainersPanel({
                   screen; the typed DN after it. */}
               <p className="w-full text-sm">
                 <Link className="link" to={`/admin/targets/${t.id}#${ORG_UNITS_ANCHOR}`}>
-                  Turn on mirroring for this target (recommended)
+                  Turn on mirroring (recommended)
                 </Link>
               </p>
               <span className="flex w-full gap-2">{handButton(t.id, false)}</span>
@@ -327,7 +327,7 @@ export function ContainersPanel({
                 ? `Set a DN by hand on ${handTarget.name} (overrides the mirror)`
                 : `Set a DN by hand on ${handTarget.name}`
             }
-            submitLabel="Save typed DN"
+            submitLabel="Save DN"
             initial={{ dn: suggested(handFor) }}
             onCancel={() => setHandFor(null)}
             path={`/api/admin/org-units/${unit.id}/containers`}

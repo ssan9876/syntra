@@ -335,7 +335,7 @@ describe('AccountDetailPage', () => {
       expect(
         screen.queryByRole('button', { name: /deactivate/i }),
       ).not.toBeInTheDocument();
-      expect(screen.getByText(/write-back off/i)).toBeInTheDocument();
+      expect(screen.getByText(/write-back off in/i)).toBeInTheDocument();
     });
   });
 

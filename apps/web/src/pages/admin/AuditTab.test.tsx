@@ -98,14 +98,14 @@ describe('AuditTab', () => {
     await screen.findByText('2');
     await userEvent.type(screen.getByLabelText('Action starts with'), 'auth.');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Export these results' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Export results' }));
     await waitFor(() => {
       const post = calls.find((c) => c.url === '/api/admin/exports' && c.method === 'POST');
       expect(post?.body).toEqual({ kind: 'audit_log', params: { action: 'auth.' } });
     });
     const status = screen.getAllByRole('status').find((el) => el.textContent?.includes('Export requested'));
     expect(status).toBeDefined();
-    expect(screen.getByRole('link', { name: /follow it in exports/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /view in exports/i })).toHaveAttribute(
       'href',
       '/admin/activity?tab=exports',
     );
@@ -117,7 +117,7 @@ describe('AuditTab', () => {
     await screen.findByText('2');
     await userEvent.selectOptions(screen.getByLabelText('Outcome'), 'failure');
     await userEvent.click(screen.getByRole('button', { name: 'Search' }));
-    await userEvent.type(screen.getByLabelText('Save this search as'), 'Failures');
+    await userEvent.type(screen.getByLabelText('Search name'), 'Failures');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       const put = calls.find((c) => c.method === 'PUT');
@@ -128,6 +128,6 @@ describe('AuditTab', () => {
   it('still leads with the warning when the chain does not verify', async () => {
     mockApi({ first: { events: [event(1)], nextBefore: null, chainValid: false, brokenAtSequence: 1 } });
     renderTab();
-    expect(await screen.findByText('This audit log has been altered')).toBeInTheDocument();
+    expect(await screen.findByText('Audit log altered')).toBeInTheDocument();
   });
 });

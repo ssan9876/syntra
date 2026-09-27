@@ -77,7 +77,7 @@ export function GovernCampaignDetailPage() {
         setActionError(
           cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That did not work.',
+            : 'Action failed.',
         ),
       );
 
@@ -153,8 +153,8 @@ export function GovernCampaignDetailPage() {
               </MetricRow>
 
               {data.counts.blocked > 0 && (
-                <Alert tone="warning" title="Some items resolved to nobody">
-                  {data.counts.blocked} item(s) have no reviewer or fallback.
+                <Alert tone="warning">
+                  {data.counts.blocked} item(s) have no reviewer.
                 </Alert>
               )}
             </div>
@@ -183,13 +183,13 @@ export function GovernCampaignDetailPage() {
                           `${outcome.itemCount} item(s) generated` +
                             (outcome.blockedCount === 0
                               ? '.'
-                              : `; ${outcome.blockedCount} resolved to nobody.`),
+                              : `; ${outcome.blockedCount} have no reviewer.`),
                         );
                       },
                     )
                   }
                 >
-                  Start it
+                  Start review
                 </Button>
               )}
 
@@ -232,14 +232,14 @@ export function GovernCampaignDetailPage() {
               <Button
                 variant="secondary"
                 onClick={() => {
-                  const when = window.prompt('Extend the due date to (YYYY-MM-DD):');
+                  const when = window.prompt('New due date (YYYY-MM-DD)');
                   if (when === null || when.trim() === '') return;
                   act(`/api/admin/govern/campaigns/${data.campaign.id}/extend`, { dueAt: when }, () =>
                     toast({ title: 'Due date extended' }),
                   );
                 }}
               >
-                Extend the due date
+                Extend due date
               </Button>
               <Button
                 variant="secondary"
@@ -251,11 +251,11 @@ export function GovernCampaignDetailPage() {
                   )
                 }
               >
-                Compute the revocation batch
+                Compute revocations
               </Button>
               {batchId !== null && (
                 <Link className="link" to={`/admin/govern/batches/${batchId}`}>
-                  Open the batch
+                  Open batch
                 </Link>
               )}
             </div>
@@ -267,7 +267,7 @@ export function GovernCampaignDetailPage() {
           <Panel title="Reviewer signals">
             <div className="p-4">
               {data.signals.length === 0 ? (
-                <p className="text-muted">Computed when the campaign closes</p>
+                <p className="text-muted">No signals until the review closes</p>
               ) : (
                 <div><Table>
                   <thead>

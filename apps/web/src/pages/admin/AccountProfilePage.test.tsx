@@ -261,7 +261,7 @@ describe('AccountProfilePage', () => {
       screen.getByDisplayValue('%person.givenName.first%.%person.familyName%'),
     ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Save profile' })).toBeEnabled();
-    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.queryByText(/not loaded/)).toBeNull();
   });
 
   it('will not offer to save defaults over a profile it could not read', async () => {
@@ -276,7 +276,7 @@ describe('AccountProfilePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('This profile could not be read'),
+      await screen.findByText('Account profile not loaded'),
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save profile' })).toBeNull();
     // And nothing on screen that could be mistaken for what is stored.
@@ -298,7 +298,7 @@ describe('AccountProfilePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('This profile could not be read'),
+      await screen.findByText('Account profile not loaded'),
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Save profile' })).toBeNull();
   });
@@ -492,7 +492,7 @@ describe('AccountProfilePage — password change at first sign-in', () => {
   it('shows it fixed on where the target always demands it', async () => {
     withCapability('always');
     renderPage();
-    const box = await screen.findByRole('checkbox', { name: /always, on this target/ });
+    const box = await screen.findByRole('checkbox', { name: /always on this target/ });
     expect(box).toBeChecked();
     expect(box).toBeDisabled();
   });

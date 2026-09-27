@@ -252,8 +252,8 @@ export function EmployeeWorkPage() {
         });
         const verb = action === 'acknowledge' ? 'acknowledged' : 'queued for retry';
         if (result?.approvalRequired) {
-          setBulkOutcome('Not retried yet — awaiting a second approver.');
-          toast({ tone: 'info', title: 'Bulk retry sent for approval' });
+          setBulkOutcome('Retry is waiting for a second approver.');
+          toast({ tone: 'info', title: 'Retry sent for approval' });
         } else {
           const succeeded = result?.succeeded ?? selected.size;
           const failed = result?.failed ?? 0;
@@ -280,7 +280,7 @@ export function EmployeeWorkPage() {
         setActionError(
           cause instanceof ApiError
             ? cause.problem.detail ?? cause.problem.title
-            : 'The selected operations could not be updated.',
+            : 'Selected operations could not be updated.',
         );
       } finally {
         setBusy(null);
@@ -557,7 +557,7 @@ export function EmployeeWorkPage() {
         {items.length === 0 ? (
           activeFilters.length > 0 ? (
             <Empty
-              title="Nothing matches these filters"
+              title="No matching work"
               action={
                 <Button variant="secondary" onClick={() => applyView('')}>
                   Show all unresolved work
@@ -566,7 +566,7 @@ export function EmployeeWorkPage() {
             />
           ) : (
             <Empty
-              title="Every hire and departure is complete"
+              title="No open employee work"
               action={
                 <Link className={buttonClasses('secondary')} to="/admin/people/new">
                   Add a person

@@ -69,13 +69,13 @@ export function BrandingTab() {
     setSaveError(null);
     if (!LOGO_TYPES.includes(file.type)) {
       setSaveError(
-        'Use a PNG, JPEG, WebP or GIF. SVG is not accepted.',
+        `${file.name}: SVG is not accepted. Use PNG, JPEG, WebP or GIF.`,
       );
       return;
     }
     if (file.size > MAX_LOGO_BYTES) {
       setSaveError(
-        `That file is ${Math.round(file.size / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB.`,
+        `${file.name} is ${Math.round(file.size / 1024)} KB. The limit is ${MAX_LOGO_BYTES / 1024} KB.`,
       );
       return;
     }
@@ -109,7 +109,7 @@ export function BrandingTab() {
       setSaveError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That branding could not be saved.',
+          : 'Branding not saved.',
       );
     } finally {
       setSaving(false);
@@ -123,7 +123,7 @@ export function BrandingTab() {
     <>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Your identity" bodyClassName="space-y-5 p-4">
+        <Panel title="Logo and colours" bodyClassName="space-y-5 p-4">
           <Field
             label="Name"
             value={name}
@@ -193,7 +193,7 @@ export function BrandingTab() {
             maxLength={2048}
             error={
               supportUrl.trim() !== '' && !supportLinkProps(supportUrl)
-                ? 'Use an https:// address or a mailto: address.'
+                ? 'Use an https:// or mailto: address.'
                 : undefined
             }
           />
@@ -214,7 +214,7 @@ export function BrandingTab() {
           </Button>
         </Panel>
 
-        <Panel title="What people will see" bodyClassName="p-4">
+        <Panel title="Preview" bodyClassName="p-4">
           <BrandPreview
             name={name}
             logo={logo}

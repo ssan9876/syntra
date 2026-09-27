@@ -154,7 +154,7 @@ export function AuditTab() {
     } catch (cause) {
       setNotice({
         tone: 'danger',
-        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The export could not be requested.',
+        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Export not requested.',
       });
     } finally {
       setExporting(false);
@@ -174,7 +174,7 @@ export function AuditTab() {
     } catch (cause) {
       setNotice({
         tone: 'danger',
-        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The search could not be saved.',
+        text: cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : `Search “${name}” not saved.`,
       });
     }
   }
@@ -208,7 +208,7 @@ export function AuditTab() {
             Clear
           </Button>
           <Button type="button" loading={exporting} onClick={() => void exportResults()}>
-            Export these results
+            Export results
           </Button>
         </div>
       </form>
@@ -225,7 +225,7 @@ export function AuditTab() {
             options={[{ value: '', label: 'Choose…' }, ...savedViews.map((v) => ({ value: v.id, label: v.name }))]}
           />
         )}
-        <Field label="Save this search as" value={viewName} onChange={setViewName} maxLength={80} />
+        <Field label="Search name" value={viewName} onChange={setViewName} maxLength={80} />
         <Button type="button" onClick={() => void saveCurrent()} disabled={viewName.trim() === ''}>
           Save
         </Button>
@@ -239,7 +239,7 @@ export function AuditTab() {
             {notice.text}{' '}
             {notice.exportId && (
               <Link className="link" to="/admin/activity?tab=exports">
-                Follow it in Exports
+                View in Exports
               </Link>
             )}
           </Alert>
@@ -252,9 +252,9 @@ export function AuditTab() {
         // Rendering a tampered log as if it were trustworthy would be worse
         // than having no log, so the warning leads the page.
         <div className="mb-6">
-          <Alert tone="danger" title="This audit log has been altered">
-            Verification failed at entry {data.brokenAtSequence}. Treat the
-            entries below as unverified.
+          <Alert tone="danger" title="Audit log altered">
+            Chain broken at entry {data.brokenAtSequence}. Entries below are
+            unverified.
           </Alert>
         </div>
       )}
@@ -291,7 +291,7 @@ export function AuditTab() {
 
           {data && events.length === 0 && Object.keys(filters).length === 0 && (
             <div className="p-6">
-              <Empty title="Nothing recorded yet" />
+              <Empty title="No events yet" />
             </div>
           )}
 

@@ -92,7 +92,9 @@ export function GroupDetailPage() {
     setMemberProblem(null);
     try {
       await api(`/api/admin/groups/${id}/members/${userId}`, { method });
-      toast({ title: method === 'POST' ? 'Added to the group' : 'Removed from the group' });
+      toast({
+        title: `${method === 'POST' ? 'Added to' : 'Removed from'} ${data?.name ?? 'group'}`,
+      });
       setAddUserId('');
       reloadMembers();
     } catch (cause) {
@@ -101,7 +103,7 @@ export function GroupDetailPage() {
       setMemberProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That membership could not be changed.',
+          : 'Membership not changed.',
       );
     }
   };

@@ -125,7 +125,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
               onChange({ ...group, children });
             }}
           >
-            Remove this condition
+            Remove condition
           </Button>
         </div>
       ))}

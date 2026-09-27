@@ -448,7 +448,7 @@ describe('AccountsTab person picker', () => {
 
     // Their own unit outranks this one and is not overwritten from here, so a
     // unit picked on this form would silently not apply to placement.
-    expect(await screen.findByText(/already placed in Care/i)).toBeInTheDocument();
+    expect(await screen.findByText(/stays placed in Care/i)).toBeInTheDocument();
   });
 
   it('confirms a second account, naming the one they have', async () => {

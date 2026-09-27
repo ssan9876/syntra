@@ -377,7 +377,7 @@ function BusinessRulesEditor() {
         })
         .catch(() => {
           if (seq !== requestSeq.current) return;
-          setProblem('The rules for this target could not be loaded.');
+          setProblem('Rules did not load.');
         }),
       api<{ entitlements: Entitlement[] }>(
         `/api/admin/targets/${id}/entitlements`,
@@ -388,9 +388,7 @@ function BusinessRulesEditor() {
         })
         .catch(() => {
           if (seq !== requestSeq.current) return;
-          setProblem(
-            'The entitlement catalog for this target could not be read.',
-          );
+          setProblem('Entitlement catalog did not load.');
         }),
     ]).then(() => {
       if (seq !== requestSeq.current) return;
@@ -470,7 +468,7 @@ function BusinessRulesEditor() {
       setImpactStale(false);
       reload();
     } catch (cause) {
-      fail(cause, 'The rule could not be saved.');
+      fail(cause, 'Rule not saved.');
     } finally {
       setBusy(null);
     }
@@ -493,7 +491,7 @@ function BusinessRulesEditor() {
     } catch (cause) {
       if (seq === previewSeq.current) {
         impactShown.current = false;
-        fail(cause, 'The impact of that rule could not be previewed.');
+        fail(cause, 'Impact preview failed.');
       }
     } finally {
       if (seq === previewSeq.current) setBusy(null);
@@ -521,13 +519,12 @@ function BusinessRulesEditor() {
         { method: 'POST' },
       );
       setNotice(
-        `${result.present} entitlement${result.present === 1 ? '' : 's'} read ` +
-          `from the target; ${result.missing} previously known ` +
-          `${result.missing === 1 ? 'is' : 'are'} no longer there.`,
+        `Read ${result.present} entitlement${result.present === 1 ? '' : 's'}; ` +
+          `${result.missing} no longer on the target.`,
       );
       reload();
     } catch (cause) {
-      fail(cause, 'The entitlement catalog could not be refreshed.');
+      fail(cause, 'Catalog refresh failed.');
     } finally {
       setBusy(null);
     }
@@ -563,7 +560,7 @@ function BusinessRulesEditor() {
         impactProblem:
           cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'The impact of deleting this rule could not be previewed.',
+            : 'Impact preview failed.',
       });
     } finally {
       if (seq === deletePreviewSeq.current) setBusy(null);
@@ -643,16 +640,16 @@ function BusinessRulesEditor() {
                 <li className="font-semibold">
                   {`${pending.impact.wouldRevoke} holding${
                     pending.impact.wouldRevoke === 1 ? '' : 's'
-                  } would be taken away (${pending.impact.matchedPersons} of ${
+                  } would be removed (${pending.impact.matchedPersons} of ${
                     pending.impact.totalPersons
-                  } persons matched)`}
+                  } people matched)`}
                 </li>
               )}
               {pending.impactProblem && (
-                <li>Impact could not be worked out — {pending.impactProblem}</li>
+                <li>Impact unknown: {pending.impactProblem}</li>
               )}
               {pending.rule.grantsAccount && (
-                <li>Grants an account — people only it matches are deprovisioned</li>
+                <li>Grants an account: people matched only by this rule lose it</li>
               )}
             </ul>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -665,7 +662,7 @@ function BusinessRulesEditor() {
                 Delete this rule
               </Button>
               <Button onClick={() => setPending(null)} disabled={!!busy}>
-                Keep it
+                Cancel
               </Button>
             </div>
           </Alert>
@@ -748,7 +745,7 @@ function BusinessRulesEditor() {
                   setEditingFrom(BLANK);
                 }}
               >
-                Start a new rule instead
+                New rule
               </Button>
             )}
           </header>
@@ -784,7 +781,7 @@ function BusinessRulesEditor() {
               className="sm:col-span-2"
               checked={draft.grantsAccount}
               onChange={(v) => set('grantsAccount', v)}
-              label="A match requires an account in this target"
+              label="Create an account for matched people"
             />
             <Check
               className="sm:col-span-2"
@@ -799,9 +796,9 @@ function BusinessRulesEditor() {
                 // Never "the catalog is empty" before the catalog has been
                 // read: that sentence sends somebody to press a button that
                 // talks to a domain controller for no reason.
-                <p className="text-muted">Reading the entitlement catalog…</p>
+                <p className="text-muted">Loading entitlements…</p>
               ) : entitlements.length === 0 ? (
-                <p className="text-muted">The entitlement catalog is empty.</p>
+                <p className="text-muted">No entitlements yet. Click Refresh entitlement catalog.</p>
               ) : (
                 <div className="space-y-2">
                   <Field
@@ -809,7 +806,7 @@ function BusinessRulesEditor() {
                     name="entitlementQuery"
                     value={entitlementQuery}
                     onChange={setEntitlementQuery}
-                    placeholder="Type part of a group name"
+                    placeholder="Group name"
                     warning={searching ? 'Searching…' : undefined}
                   />
                   {(() => {
@@ -822,7 +819,7 @@ function BusinessRulesEditor() {
                     );
                     const rows = [...selectedHidden, ...shown];
                     if (rows.length === 0) {
-                      return <p className="text-muted">No entitlement matches that search.</p>;
+                      return <p className="text-muted">No matches.</p>;
                     }
                     return rows.map((entitlement) => {
                       const unmanageable = entitlement.manageable === false;
@@ -846,12 +843,12 @@ function BusinessRulesEditor() {
                               {entitlement.displayName}
                               {entitlement.membershipKind === 'dynamic' || unmanageable ? (
                                 <span className="ml-2 text-muted">
-                                  ({entitlement.membershipKind === 'dynamic' ? 'dynamic membership — ' : ''}not manageable by Syntra{entitlement.unmanageableReason ? `: ${entitlement.unmanageableReason}` : ''})
+                                  ({entitlement.membershipKind === 'dynamic' ? 'dynamic; ' : ''}not managed by Syntra{entitlement.unmanageableReason ? `: ${entitlement.unmanageableReason}` : ''})
                                 </span>
                               ) : null}
                               {entitlement.status !== 'present' && (
                                 <span className="ml-2 text-danger">
-                                  ({entitlement.status} — matched persons become unprocessable)
+                                  ({entitlement.status}: matched people will fail)
                                 </span>
                               )}
                             </>
@@ -873,7 +870,7 @@ function BusinessRulesEditor() {
               ) : impactStale ? (
                 <StaleBadge />
               ) : impact ? (
-                <StateBadge state="healthy">Matches this draft</StateBadge>
+                <StateBadge state="healthy">Current</StateBadge>
               ) : previewRequired ? (
                 <StateBadge state="setup">Not previewed</StateBadge>
               ) : null
@@ -890,7 +887,7 @@ function BusinessRulesEditor() {
                       made without meaning it. */}
                   <MetricRow>
                     <Metric
-                      label="Persons matched"
+                      label="People matched"
                       value={`${impact.matchedPersons} of ${impact.totalPersons}`}
                     />
                     <Metric label="Would grant" value={impact.wouldGrant} />
@@ -906,7 +903,7 @@ function BusinessRulesEditor() {
                       <Alert tone="warning">
                         {`${impact.wouldRevoke} holding${
                           impact.wouldRevoke === 1 ? '' : 's'
-                        } would be taken away`}
+                        } would be removed`}
                       </Alert>
                     </div>
                   )}
@@ -930,12 +927,12 @@ function BusinessRulesEditor() {
                   {dirty && draftStatus({ dirty })}
                   {/* Why Save is disabled, said beside it rather than left for
                       somebody to discover by pressing it. */}
-                  <StateBadge state="attention">Preview required before saving</StateBadge>
+                  <StateBadge state="attention">Preview before saving</StateBadge>
                 </span>
               ) : (
                 draftStatus({
                   dirty,
-                  stale: impactStale ? 'Preview is out of date' : null,
+                  stale: impactStale ? 'Preview out of date' : null,
                 })
               )
             }
@@ -958,7 +955,7 @@ function BusinessRulesEditor() {
           to={`/admin/targets/${id}`}
           className="inline-block text-muted underline-offset-2 hover:text-ink hover:underline"
         >
-          Back to the target
+          Back to target
         </Link>
       </div>
     </>

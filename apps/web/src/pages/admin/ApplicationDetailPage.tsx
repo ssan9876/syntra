@@ -104,7 +104,7 @@ export function ApplicationDetailPage() {
     setProblem(
       cause instanceof ApiError
         ? (cause.problem.detail ?? cause.problem.title)
-        : 'That could not be saved.',
+        : 'Assignment not changed.',
     );
 
   async function assign(type: SubjectType) {
@@ -184,7 +184,7 @@ export function ApplicationDetailPage() {
         >
           <div className="space-y-4 p-4">
             {assignments.length === 0 && (
-              <Empty title="Not assigned to anyone yet" />
+              <Empty title="No assignments yet" />
             )}
 
             {assignments.length > 0 && (

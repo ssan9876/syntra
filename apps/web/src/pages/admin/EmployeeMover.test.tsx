@@ -42,8 +42,8 @@ describe('EmployeeMover', () => {
     await user.type(screen.getByLabelText('New department'), 'Clinical Operations');
     await user.click(screen.getByRole('button', { name: 'Preview change' }));
     expect(await screen.findByText(/Finance → Clinical Operations/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Apply reviewed change' }));
-    expect(await screen.findByText('Employment change completed.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply change' }));
+    expect(await screen.findByText('Employment change applied.')).toBeInTheDocument();
     expect(calls.map((call) => call.url)).toEqual([
       '/api/admin/persons/22222222-2222-4222-8222-222222222222/mover/preview',
       '/api/admin/persons/22222222-2222-4222-8222-222222222222/mover/apply',
