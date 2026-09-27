@@ -183,6 +183,9 @@ function awaitingDecision(run: {
  */
 export { STALE_RUN_MS };
 
+/** `2026-08-01 03:00 UTC`: a time a person reads in a skip reason. */
+const minuteUtc = (d: Date): string => `${d.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
 export interface RunProvisionJobOptions {
   /**
    * The connector to run against. Every other entry point in this plan takes
@@ -340,8 +343,8 @@ export async function runProvisionJob(
 
       if (!abandoned) {
         const reason = awaitingReview
-          ? `a run from ${inFlight.startedAt.toISOString()} is awaiting review (${inFlight.status}), so this scheduled run did not start`
-          : `a run from ${aliveAt.toISOString()} is still in progress (${inFlight.status}), so this scheduled run did not start`;
+          ? `Skipped: run from ${minuteUtc(inFlight.startedAt)} is awaiting review. Apply or cancel it.`
+          : `Skipped: run from ${minuteUtc(aliveAt)} is still in progress.`;
         oplog('warn', `provisioning run skipped: ${reason}`, {
           tenantId: payload.tenantId,
           targetSystemId: payload.targetSystemId,
@@ -491,7 +494,7 @@ export async function runProvisionJob(
           payload: {
             deferred: result.deferred,
             reason:
-              'these actions require an explicit confirmation, and a scheduled run confirms nothing',
+              'Needs confirmation. Scheduled runs do not confirm actions.',
           },
         }),
       );

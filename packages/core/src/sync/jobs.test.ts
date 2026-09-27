@@ -240,6 +240,6 @@ describe('queueing a run the job queue will not take', () => {
 
     const [run] = await withTenant(tenantId, (tx) => tx.syncRun.findMany());
     expect(run?.status).toBe('failed');
-    expect(run?.error).toBe('the job queue did not accept this run');
+    expect(run?.error).toBe('Job queue did not accept this run.');
   });
 });

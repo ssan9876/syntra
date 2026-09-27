@@ -249,7 +249,7 @@ describe('bulk certify', () => {
     expect(body.certified).toBe(1);
     expect(body.refused[0]).toMatchObject({ itemId: highRisk });
     // In words, not a disabled button with no explanation.
-    expect(body.refused[0]!.reason).toContain('one at a time');
+    expect(body.refused[0]!.reason).toContain('on its own');
   });
 });
 

@@ -91,7 +91,7 @@ export async function beginSnapshot(
     if (inFlight !== null) {
       if (inFlight.startedAt > stallCutoff) {
         throw new Error(
-          `a snapshot is already building for this tenant (started ${inFlight.startedAt.toISOString()})`,
+          `A snapshot is already building (started ${inFlight.startedAt.toISOString()}).`,
         );
       }
       await tx.accessSnapshot.update({
@@ -99,7 +99,7 @@ export async function beginSnapshot(
         data: {
           status: 'failed',
           finishedAt: asOf,
-          error: `superseded by a later build: this build had been running for more than ${SNAPSHOT_STALL_MINUTES} minutes`,
+          error: `superseded by a later build: stalled for over ${SNAPSHOT_STALL_MINUTES} minutes`,
         },
       });
     }

@@ -265,7 +265,7 @@ describe('canary and rollback', () => {
       .rejects.toBeInstanceOf(AdapterSelectionError);
     const uncertified = catalogOf(release(), release({ adapterVersion: '2.0.0', channel: 'canary', certification: { ...release().certification, status: 'not-run' } }));
     await expect(setTargetAdapterSelection(tenantId, actor, targetId, { channel: 'canary', version: null, reason: 'Try the untested one' }, { catalog: uncertified }))
-      .rejects.toThrow(/no passing certification/);
+      .rejects.toThrow(/is not certified/);
     await expect(setTargetAdapterSelection(tenantId, actor, targetId, { channel: 'stable', version: '9.9.9', reason: 'Pin to nothing at all' }, { catalog: uncertified }))
       .rejects.toThrow(/no activeDirectory adapter release 9\.9\.9/);
   });

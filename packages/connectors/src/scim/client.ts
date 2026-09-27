@@ -22,7 +22,7 @@ export class ScimMalformedBodyError extends Error {
 
   constructor(status: number, rawBody: string) {
     super(
-      `the server's response body was not JSON (HTTP ${status}): ${rawBody.slice(0, 200)}`,
+      `Response was not JSON (HTTP ${status}): ${rawBody.slice(0, 200)}`,
     );
     this.name = 'ScimMalformedBodyError';
     this.status = status;

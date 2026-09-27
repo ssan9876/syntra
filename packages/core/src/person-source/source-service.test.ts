@@ -63,7 +63,7 @@ describe('createPersonSource', () => {
 
   it('refuses an unknown source type', async () => {
     await expect(makeSource({ type: 'workday' })).rejects.toThrow(
-      /no person source connector implements type "workday"/,
+      /Unknown person source type "workday"/,
     );
   });
 

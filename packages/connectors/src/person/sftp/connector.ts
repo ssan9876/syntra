@@ -107,8 +107,8 @@ export const sftpDelimitedConnector: SourceConnector<Config> = {
         ok: hostKey.status === 'matched',
         message:
           hostKey.status === 'unknown'
-            ? 'connected, but this server’s host key is not pinned yet'
-            : `read ${table.rows.length} rows and ${table.columns.length} columns`,
+            ? 'Connected, but the host key is not pinned yet.'
+            : `Read ${table.rows.length} rows and ${table.columns.length} columns.`,
         columns: table.columns,
         recordsSampled: table.rows.length,
         hostKey,

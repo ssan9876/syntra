@@ -79,7 +79,7 @@ const fieldSchema = z.enum(CONDITION_FIELDS);
 const comparisonValue = z
   .string()
   .refine((value) => value.trim().length > 0, {
-    message: 'must not be blank — use isEmpty or isNotEmpty to test for a missing value',
+    message: 'must not be blank. Use isEmpty or isNotEmpty for a missing value.',
   });
 
 /**

@@ -33,7 +33,7 @@ export function normaliseAnchor(
 
   const trimmed = raw.trim().toLowerCase();
   if (trimmed === '') {
-    throw new Error(`${attribute} is empty; an anchor must identify an object`);
+    throw new Error(`${attribute} is empty.`);
   }
   return trimmed;
 }

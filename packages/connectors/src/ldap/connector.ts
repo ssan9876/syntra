@@ -260,7 +260,7 @@ export const ldapConnector: Connector<Config> = {
       return {
         ok: true,
         message: capped
-          ? `Connected to ${config.url}; read at least ${TEST_SAMPLE_LIMIT} of each kind (a sample, not a count)`
+          ? `Connected to ${config.url}; read at least ${TEST_SAMPLE_LIMIT} of each kind (a sample only)`
           : `Connected to ${config.url}`,
         sampleCounts: counts,
       };
@@ -365,7 +365,7 @@ export const ldapConnector: Connector<Config> = {
     return {
       ok: false,
       message:
-        'Writing back to LDAP is not implemented in this slice; the method exists for Provision',
+        'Writing to an LDAP target is not supported.',
     };
   },
 };

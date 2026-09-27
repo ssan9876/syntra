@@ -75,7 +75,7 @@ export async function discoverEntraCredentialExpiry(
     if (response.status === 403) {
       return {
         status: 'not_permitted',
-        message: 'the app registration cannot read itself; grant Application.Read.All to discover this expiry (optional)',
+        message: 'Expiry not read: the app registration lacks Application.Read.All (optional).',
       };
     }
     if (response.status >= 400) {

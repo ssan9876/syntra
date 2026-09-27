@@ -173,6 +173,6 @@ describe.skipIf(!enabled)('sampling a file larger than the sample', () => {
 
     await expect(async () => {
       for await (const _ of sftpDelimitedConnector.read(pinned)) void _;
-    }).rejects.toThrow(/larger than 1024 bytes/);
+    }).rejects.toThrow(/limit of 1024 bytes/);
   });
 });

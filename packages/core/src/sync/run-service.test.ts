@@ -118,7 +118,7 @@ describe('previewRun', () => {
     expect(second.status).toBe('previewed');
     expect(second.mappingFailures).toBe(2);
     expect(second.mappingFailureReasons).toEqual([
-      'the correlation attribute is missing from this record',
+      'Correlation attribute missing from this record.',
     ]);
 
     const changes = await withTenant(tenantId, (tx) =>

@@ -64,10 +64,10 @@ describe('decodeAppIconDataUri', () => {
     expect(decodeAppIconDataUri(uri('IMAGE/PNG', png())).contentType).toBe('image/png');
   });
 
-  it('refuses SVG by name, with the reason', () => {
+  it('refuses SVG by name, with what to use instead', () => {
     const message = refusal(uri('image/svg+xml', Buffer.from('<svg/>')));
     expect(message).toMatch(/SVG/);
-    expect(message).toMatch(/script/);
+    expect(message).toMatch(/PNG/);
   });
 
   it('refuses markup labelled as a raster', () => {
@@ -94,11 +94,11 @@ describe('decodeAppIconDataUri', () => {
   });
 
   it('refuses a remote URL', () => {
-    expect(refusal('https://cdn.example.com/logo.png')).toMatch(/hosts itself/);
+    expect(refusal('https://cdn.example.com/logo.png')).toMatch(/not linked by URL/);
   });
 
   it('refuses damaged base64 rather than decoding what it can', () => {
-    expect(refusal('data:image/png;base64,iVBOR*w0KGgo=')).toMatch(/encoding is damaged/);
+    expect(refusal('data:image/png;base64,iVBOR*w0KGgo=')).toMatch(/could not be read/);
   });
 
   it('measures the limit on the DECODED size', () => {

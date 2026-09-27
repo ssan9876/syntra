@@ -111,7 +111,7 @@ export function evaluateSodRule(
     for (const resource of fn.resources) {
       const reason = unevaluableKeys.get(keyOf(resource));
       if (reason !== undefined) {
-        reasons.push(`a resource of the business function "${fn.name}" cannot be read: ${reason}`);
+        reasons.push(`A resource in business function "${fn.name}" cannot be read: ${reason}`);
       }
     }
   }
@@ -133,8 +133,7 @@ export function evaluateSodRule(
     .filter((key) => bResourceKeys.includes(key));
   for (const key of sharedKeys) {
     reasons.push(
-      `the resource ${key} is named by BOTH "${rule.functionA.name}" and ` +
-        `"${rule.functionB.name}", so this rule cannot say the two duties are separated`,
+      `Resource ${key} is in both "${rule.functionA.name}" and "${rule.functionB.name}"`,
     );
   }
 
@@ -149,8 +148,7 @@ export function evaluateSodRule(
   for (const holding of [...holdingsA, ...holdingsB]) {
     if (holding.state === 'unknown') {
       reasons.push(
-        `"${holding.resourceName}" is held-or-not-held as far as anybody knows: ` +
-          'the region that would say has not been read, so this rule cannot be evaluated for this person',
+        `Unknown whether this person holds "${holding.resourceName}": its source has not been read`,
       );
     }
   }

@@ -65,7 +65,7 @@ const EVERY_MARKER = new RegExp(`(?:^|\\s)${PROVENANCE_MARKER_PREFIX}\\S+`, 'g')
 export function provenanceValue(actionId: string): string {
   if (actionId === '' || /\s/.test(actionId)) {
     throw new Error(
-      `an action id cannot be written into a provenance marker if it is empty or contains whitespace; received ${JSON.stringify(actionId)}`,
+      `Action id ${JSON.stringify(actionId)} is empty or contains whitespace.`,
     );
   }
   return `${PROVENANCE_MARKER_PREFIX}${actionId}`;

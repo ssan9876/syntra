@@ -341,7 +341,7 @@ function assertLadder(ladder: {
     throw new LadderConfigurationError(
       'ladder-revocation-after-disable',
       'ladder.entitlementRevocationDelayDays',
-      'entitlement revocations cannot be delayed past the disable: that describes an account whose holder is still employed as far as the directory is concerned and cannot do anything',
+      'entitlement revocations cannot be delayed past the disable',
     );
   }
   if (
@@ -351,7 +351,7 @@ function assertLadder(ladder: {
     throw new LadderConfigurationError(
       'ladder-archive-not-after-disable',
       'ladder.archiveAfterDays',
-      'the archive must fall strictly after the disable: archiving moves the object and strips its remaining entitlements',
+      'the archive must fall strictly after the disable',
     );
   }
 }
@@ -585,7 +585,7 @@ export async function updateTarget(
       throw new LadderConfigurationError(
         'mirror-unsupported',
         'mirrorOrgUnits',
-        'this target does not place accounts in containers, so there is no tree of OUs to mirror org units into',
+        'this target has no containers to mirror org units into',
       );
     }
     const rootToCheck = orgUnitRootDn === undefined ? before.orgUnitRootDn : orgUnitRootDn;
@@ -956,7 +956,7 @@ export async function testTargetConfiguration(
       return {
         ok: false,
         message:
-          'a saved credential can only be borrowed for a target of the same type and, for Active Directory and Entra ID, the same transport',
+          'a saved credential can only be reused by a target of the same type and transport',
       };
     }
     if (saved === null) return { ok: false, message: 'no saved credential' };
@@ -1066,7 +1066,7 @@ const attributeTemplatesSchema = z
       .max(1024)
       .refine((template) => template.trim() !== '', {
         message:
-          'an attribute template may not be blank: it would write a zero-length value, which the directory refuses on every run',
+          'an attribute template may not be blank',
       }),
   )
   .superRefine((templates, ctx) => {
@@ -1082,9 +1082,7 @@ const attributeTemplatesSchema = z
           code: z.ZodIssueCode.custom,
           path: [name],
           message:
-            `an account profile may not write ${name}: it is written by the ` +
-            `provisioning actions themselves, which the guard counts and the ` +
-            `ladder sequences, and update_account is neither`,
+            `an account profile may not write ${name}; provisioning actions set it`,
         });
       }
     }
@@ -1122,7 +1120,7 @@ export const accountProfileSchema = z.object({
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['sensitiveApprovalReason'],
-      message: 'a reason of at least 20 characters is required before sending personal email to a target',
+      message: 'give a reason of at least 20 characters to send personal email to this target',
     });
   }
 });

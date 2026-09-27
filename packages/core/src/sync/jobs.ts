@@ -51,7 +51,7 @@ export function syncJobPayload(
  */
 export class SourceDisabledError extends Error {
   constructor(readonly sourceId: string) {
-    super('this source is disabled, so a run would never be picked up');
+    super('Source is disabled. Enable it to run.');
     this.name = 'SourceDisabledError';
   }
 }

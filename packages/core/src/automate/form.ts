@@ -130,7 +130,7 @@ const fieldSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['dataSource'],
-        message: 'A lookup needs to say what it is looking up',
+        message: 'Choose what this lookup searches.',
       });
     }
     if (field.type !== 'lookup' && field.dataSource !== undefined) {
@@ -140,7 +140,7 @@ const fieldSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['dataSource'],
-        message: 'Only a lookup has a data source',
+        message: 'Only lookup fields have a data source.',
       });
     }
     const needsOptions = field.type === 'select' || field.type === 'multiselect';
@@ -148,7 +148,7 @@ const fieldSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['options'],
-        message: 'A select needs at least one option',
+        message: 'Add at least one option.',
       });
     }
   });
@@ -184,7 +184,7 @@ export const formSchemaSchema: z.ZodType<FormSchema> = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['key'],
-          message: `Two fields both named ${field.key}`,
+          message: `Duplicate field name: ${field.key}.`,
         });
       }
       seen.add(field.key);

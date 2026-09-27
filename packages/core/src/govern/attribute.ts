@@ -202,7 +202,7 @@ export function attributionsFor(
         // A sentence rather than a blank. A blank field reads as a missing
         // value somebody should go and find; this reads as an answer.
         ...(assignment.administratorName === null
-          ? { note: 'assigned directly; no audit event records who or when' }
+          ? { note: 'Assigned directly; no audit event records who or when.' }
           : {}),
       },
       resolvedAt,
@@ -253,7 +253,7 @@ export function attributionsFor(
         sourceName: source.sourceName,
         anchor: source.anchor,
         distinguishedName: source.distinguishedName,
-        note: 'this membership is rewritten by its source on every run; a removal here would come back',
+        note: 'Synced from its source. Remove it at the source.',
       },
       resolvedAt,
     });
@@ -345,7 +345,7 @@ export function hasLiveRuleAttribution(drafts: readonly AttributionDraft[]): boo
 /** One sentence a manager can act on, for the reviewer's item and the report. */
 export function summariseAttributions(drafts: readonly AttributionDraft[]): string {
   if (drafts.length === 0 || drafts.every((d) => d.kind === 'unattributable')) {
-    return 'nothing in Syntra explains this access';
+    return 'No recorded reason for this access';
   }
 
   const parts: string[] = [];

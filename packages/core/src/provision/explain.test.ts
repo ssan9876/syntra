@@ -1095,7 +1095,7 @@ describe('previewAccountProfile', () => {
       NOW,
     );
     expect(preview.problems).toEqual([
-      'the template for "mail" references person.businessEmail, which resolves to nothing for this person',
+      'the template for "mail" uses person.businessEmail, which is empty for this person',
     ]);
     expect(preview.attributes.mail).toBeUndefined();
   });

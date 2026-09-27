@@ -141,7 +141,7 @@ export async function runLifecycleRetention(
     } else {
       const checkpoint = await tx.auditCheckpoint.findFirst({ orderBy: { sequence: 'desc' } });
       if (!checkpoint) {
-        auditNote = 'no verified audit checkpoint exists, so no audit event is eligible: removing one would break the chain';
+        auditNote = 'no verified audit checkpoint yet, so no audit events are eligible';
       } else {
         auditEventsEligible = await tx.auditEvent.count({
           where: {
@@ -149,7 +149,7 @@ export async function runLifecycleRetention(
             sequence: { lte: checkpoint.sequence },
           },
         });
-        auditNote = `${auditEventsEligible} audit events at or before checkpoint sequence ${checkpoint.sequence} are past the retention period; audit events are immutable to the application and are archived by the documented database-owner procedure`;
+        auditNote = `${auditEventsEligible} audit events at or before checkpoint sequence ${checkpoint.sequence} are past the retention period. Archive them with the database-owner procedure.`;
       }
     }
 

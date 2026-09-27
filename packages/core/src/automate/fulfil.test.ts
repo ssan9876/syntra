@@ -312,7 +312,7 @@ describe('duration and what is already held', () => {
     );
     const skipped = items.find((i) => i.resourceType === 'application');
     expect(skipped?.status).toBe('skipped');
-    expect(skipped?.message).toContain('already');
+    expect(skipped?.message).toContain('Already');
     expect(items.find((i) => i.resourceType === 'group')?.status).toBe('fulfilled');
   });
 
@@ -544,7 +544,7 @@ describe('notifications', () => {
     const request = await withTenant(tenantId, (tx) =>
       tx.accessRequest.findUniqueOrThrow({ where: { id: requestId } }),
     );
-    expect(request.statusReason).toContain('already held');
+    expect(request.statusReason).toContain('Already held');
     expect(request.statusReason).toContain('Stats');
   });
 });

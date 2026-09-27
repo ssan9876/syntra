@@ -56,7 +56,7 @@ const CANCEL_IMMEDIATELY = ['queued', 'previewed', 'blocked', 'partially_applied
 /** Statuses with a worker whose checkpoints will see a request. */
 const CANCEL_COOPERATIVELY = ['running', 'applying'] as const;
 /** Written on every change a cancellation left unapplied. */
-const CANCELLED_CHANGE_MESSAGE = 'not applied: the run was cancelled';
+const CANCELLED_CHANGE_MESSAGE = 'Not applied: run cancelled.';
 /** Statuses an apply refuses outright. */
 const NOT_APPLIABLE = ['queued', 'running', 'cancelled', 'failed'] as const;
 
@@ -157,7 +157,7 @@ export async function previewRun(
       if (!source) throw new Error(`no such source: ${sourceId}`);
 
       const config = await sourceWithPassword(tx, provider, sourceId);
-      if (!config) throw new Error('source configuration or credential missing');
+      if (!config) throw new Error(`Source "${source.name}" has no configuration or credential.`);
 
       return {
         config,
@@ -753,7 +753,7 @@ export async function applyRun(
   // `confirm` at all, so `autoApply` can never satisfy this.
   if (run.status === 'blocked' && !(run.requiresConfirmation && opts.confirm)) {
     throw new Error(
-      `run is blocked and cannot be applied: ${run.blockedReason ?? 'unknown reason'}`,
+      `Run is blocked: ${run.blockedReason ?? 'no reason recorded'}`,
     );
   }
   if ((NOT_APPLIABLE as readonly string[]).includes(run.status)) {
@@ -864,7 +864,7 @@ export async function applyRun(
             where: { id: change.id },
             data: {
               status: 'skipped',
-              message: `not applied: processing of this person is restricted by privacy case ${restrictedBy}`,
+              message: `Not applied: person restricted by privacy case ${restrictedBy}.`,
             },
           });
           await recordEvent(tx, {
@@ -947,7 +947,7 @@ export async function skipChange(
     data: { status: 'skipped' },
   });
   if (count === 0) {
-    throw new Error('only a proposed change can be skipped');
+    throw new Error('Only proposed changes can be skipped.');
   }
 }
 

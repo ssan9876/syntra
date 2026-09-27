@@ -263,7 +263,7 @@ export class AdapterReleaseNotFoundError extends Error {
     readonly adapterVersion: string,
   ) {
     super(
-      `the connector catalog has no ${type} adapter release ${adapterVersion}; this build cannot run it`,
+      `${type} adapter release ${adapterVersion} is not in the connector catalog.`,
     );
     this.name = 'AdapterReleaseNotFoundError';
   }
@@ -391,7 +391,7 @@ export function releaseReadinessWarnings(
   const warnings: string[] = [];
   if (releasePastDeprecation(release, now)) {
     warnings.push(
-      `${type} adapter ${release.adapterVersion} passed its deprecation date (${release.deprecationDate}); new writes are blocked unless an audited override is active`,
+      `${type} adapter ${release.adapterVersion} passed its deprecation date (${release.deprecationDate}). New writes are blocked unless an audited override is active.`,
     );
   } else if (release.supportState === 'deprecated' || release.deprecationDate !== null) {
     warnings.push(
@@ -400,7 +400,7 @@ export function releaseReadinessWarnings(
   }
   if (!releaseIsCertified(release)) {
     warnings.push(
-      `${type} adapter ${release.adapterVersion} is uncertified (${release.certification.status}); every write through it is refused`,
+      `${type} adapter ${release.adapterVersion} is uncertified (${release.certification.status}). All writes through it are refused.`,
     );
   } else if (release.certification.status === 'partial') {
     warnings.push(

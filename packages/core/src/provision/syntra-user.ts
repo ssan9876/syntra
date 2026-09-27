@@ -37,9 +37,7 @@ interface ConflictDetail {
 }
 
 const CONFLICT_REASON =
-  'the Syntra user carrying this account anchor is already linked to a different ' +
-  'person, so this login is not deactivated when the account holder leaves and is ' +
-  'deactivated when somebody else does';
+  'the Syntra login with this account anchor is linked to a different person';
 
 function conflictDetail(conflict: LinkConflict): ConflictDetail {
   return {
@@ -312,8 +310,7 @@ export class NotASyntraUserActionError extends Error {
     readonly actionType: string,
   ) {
     super(
-      `action ${actionId} is a ${actionType}, which is not one of the two actions ` +
-        `that write to Syntra's own directory`,
+      `action ${actionId} is a ${actionType}, not a Syntra login change`,
     );
     this.name = 'NotASyntraUserActionError';
   }
@@ -325,7 +322,7 @@ export class SyntraUserActionNotApplicableError extends Error {
     readonly status: string,
   ) {
     super(
-      `action ${actionId} is ${status}, which is not a status it can be applied from`,
+      `action ${actionId} is ${status} and cannot be applied`,
     );
     this.name = 'SyntraUserActionNotApplicableError';
   }

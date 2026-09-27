@@ -128,7 +128,7 @@ export interface CheckpointSigner {
  * that encrypts nothing or calling an encryption a signature.
  */
 export function localFileCheckpointSigner(keyId: string, key: Buffer): CheckpointSigner {
-  if (key.length < 32) throw new Error('a checkpoint signing key must be at least 32 bytes');
+  if (key.length < 32) throw new Error('Checkpoint signing key must be at least 32 bytes.');
   const mac = (payload: string) => createHmac('sha256', key).update(payload).digest('hex');
   return {
     keyId,
@@ -213,14 +213,10 @@ export async function checkpointTrust(
 }
 
 const UNTRUSTED_CHECKPOINT_STATEMENT =
-  'a checkpoint covering this range does not carry a valid signature, so the ' +
-  'hash it offers as a starting point cannot be relied on and this run was ' +
-  'restarted from genesis';
+  'Checkpoint signature is not valid. Verification restarted from the first event.';
 
 const REESTABLISHED_CHECKPOINT_STATEMENT =
-  'the chain was walked in full from genesis and held, so a new checkpoint was ' +
-  'established at the current head; the refused checkpoint is left in place and ' +
-  'is superseded rather than rewritten';
+  'Full chain verified from the first event. New checkpoint written at the current head.';
 
 export async function verifyIncremental(
   tenantId: string,
@@ -322,7 +318,7 @@ export async function verifyIncremental(
             brokenAtSequence: result.brokenAtSequence,
             fromSequence: result.fromSequence,
             statement:
-              'the audit chain does not hold at this sequence: an event was altered or removed after it was written',
+              'Audit chain breaks at this sequence: an event was altered or removed.',
           },
         },
       ],
@@ -515,9 +511,7 @@ export function mailAnchorSink(transport: Transport, to: string, tenantName: str
         `Audit chain anchor for ${tenantName}\n\n` +
         `sequence: ${payload.sequence}\nhash: ${payload.hash}\n` +
         `anchored at: ${payload.anchoredAt.toISOString()}\n\n` +
-        `Keep this message. It is the only record outside the Syntra database of ` +
-        `what the chain head was at this moment, and it is what makes a rewrite of ` +
-        `the whole chain detectable.`;
+        `Keep this email. It lets you detect a rewrite of the audit log later.`;
       await transport.send({
         to,
         subject: `Syntra audit anchor — ${tenantName} — sequence ${payload.sequence}`,
@@ -603,29 +597,18 @@ export interface IntegrityStatus {
 }
 
 const NOT_ANCHORED_STATEMENT =
-  'External anchoring is not configured for this tenant. The hash chain detects ' +
-  'tampering by an actor who cannot recompute it; it is not proof against the ' +
-  'operator, because the hash is computed in application code from data in the ' +
-  'same database with no secret. Somebody holding both database write access and ' +
-  'the ability to run code can rewrite the chain from any point and recompute ' +
-  'every subsequent digest, and the result verifies perfectly. Deletion of the ' +
-  'entire log is detectable only by something outside it that remembers the head.';
+  'External anchoring is off. Someone with database write access and the ability to run code ' +
+  'could rewrite the audit log undetected. Turn on anchoring to detect this.';
 
 const ANCHORED_STATEMENT =
-  'External anchoring is configured. Each anchor records the chain head at a ' +
-  'moment in time somewhere outside the database, which is the only one of the ' +
-  'three mitigations that is actually proof against the operator.';
+  'External anchoring is on. Each anchor records the chain head outside the database.';
 
 const CHECKPOINT_STATEMENTS: Readonly<Record<SignatureState | 'none', string>> = {
-  none: 'No checkpoint has been written yet, so every verification starts from genesis.',
+  none: 'No checkpoint yet. Verification starts from the first event.',
   signed_and_verified:
-    'The last checkpoint carries a signature that verifies under the configured key, so the ' +
-    'starting point of the most recent incremental verification was not simply taken on trust.',
+    'Last checkpoint is signed and the signature is valid.',
   unsigned_no_signer_configured:
-    'The last checkpoint is UNSIGNED and no signing key is configured. Incremental verification ' +
-    'therefore seeds from a hash held in the same database it is verifying: an actor with database ' +
-    'write access can rewrite the chain, recompute the digests, insert a checkpoint, and every ' +
-    'later run will report valid. Set GOVERN_CHECKPOINT_KEY to raise that bar.',
+    'Last checkpoint is unsigned and no signing key is set. Set GOVERN_CHECKPOINT_KEY.',
   // The advice NAMES THE VARIABLE, because an earlier version said "configure a
   // checkpoint signing key" while no configuration key for one existed and the
   // scheduler passed `signer: null` on every run. Advice a deployer cannot act
@@ -633,17 +616,12 @@ const CHECKPOINT_STATEMENTS: Readonly<Record<SignatureState | 'none', string>> =
   // than as a feature nobody wired. Task 12 Step 4a adds the variable and Step 5
   // passes it (H-e).
   unsigned_while_signer_configured:
-    'The last checkpoint is UNSIGNED while a signing key IS configured. It was not seeded from and ' +
-    'the chain was re-walked from genesis. This is what a forged checkpoint looks like; it is also ' +
-    'what the first run after signing is switched on looks like. In that second case the next run ' +
-    're-establishes a signed checkpoint from a clean genesis walk and this clears; if it does not ' +
-    'clear, the chain did not hold.',
+    'Last checkpoint is unsigned but a signing key is set, so the chain was re-verified from the first event. ' +
+    'Normal once after turning on signing; if it persists, the checkpoint may be forged.',
   unknown_key:
-    'The last checkpoint names a signing key this deployment does not hold. It was not seeded from ' +
-    'and the chain was re-walked from genesis.',
+    'Last checkpoint uses a signing key this deployment does not have. Chain re-verified from the first event.',
   invalid:
-    'The last checkpoint carries a signature that DOES NOT VERIFY. It was not seeded from and the ' +
-    'chain was re-walked from genesis.',
+    'Last checkpoint signature is not valid. Chain re-verified from the first event.',
 };
 
 export async function integrityStatus(

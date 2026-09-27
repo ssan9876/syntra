@@ -32,7 +32,7 @@ describe('localMasterKeyProvider', () => {
   it('names the provider a foreign row needs instead of failing inside node:crypto', async () => {
     const provider = localMasterKeyProvider(Buffer.alloc(32, 1));
     const foreign = { ciphertext: Buffer.from('vault:v2:abc'), iv: externalMarker('vault-transit', true), tag: Buffer.from('syntra') };
-    await expect(provider.unwrap(foreign)).rejects.toThrow(/wrapped by vault-transit:syntra:v2, not by the local MASTER_KEY/);
+    await expect(provider.unwrap(foreign)).rejects.toThrow(/wrapped by vault-transit:syntra:v2, not the local MASTER_KEY/);
   });
 
   it('check() passes with a good key', async () => {
@@ -102,7 +102,7 @@ describe('fallbackMasterKeyProvider', () => {
       localMasterKeyProvider(Buffer.alloc(32, 3)),
     ]);
     const row = { ciphertext: Buffer.from('x'), iv: externalMarker('aws-kms', true), tag: Buffer.from('arn:k') };
-    await expect(composite.unwrap(row)).rejects.toThrow(/aws-kms:arn:k, which no configured key-management provider recognises/);
+    await expect(composite.unwrap(row)).rejects.toThrow(/aws-kms:arn:k; no configured key-management provider matches it/);
   });
 
   it('checks only the primary: a stale fallback is a rekey problem, not an outage', async () => {

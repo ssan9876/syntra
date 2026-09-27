@@ -662,7 +662,7 @@ describe('ProvisionRunDetailPage: held actions on a finished run', () => {
     id: RENAME_ID,
     actionType: 'rename_account',
     requiresConfirmation: true,
-    message: 'not attempted: this action requires an explicit confirmation and this run was not confirmed',
+    message: 'Not attempted: requires confirmation.',
     before: { correlationKey: 'aadmin' },
     after: { correlationKey: 'sadmin' },
     person: { id: 'p2', givenName: 'Sam', familyName: 'Admin' },
@@ -703,7 +703,7 @@ describe('ProvisionRunDetailPage: held actions on a finished run', () => {
                   actionId: RENAME_ID,
                   status: 'proposed',
                   approvable: false,
-                  reason: 'already approved and waiting for the next run',
+                  reason: 'already approved; runs on the next run',
                   approval: {
                     id: 'a1',
                     state: 'pending',

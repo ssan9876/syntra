@@ -494,7 +494,7 @@ export async function startCampaign(
       throw new CampaignRefusedError(
         'not_draft',
         null,
-        `this campaign is already ${campaign.status}`,
+        `Campaign is already ${campaign.status}.`,
       );
     }
 
@@ -512,7 +512,7 @@ export async function startCampaign(
       throw new CampaignRefusedError(
         'not_open_yet',
         null,
-        `this campaign opens on ${campaign.opensAt.toDateString()}; starting it now would email every reviewer a queue that is not due to exist yet`,
+        `Campaign opens on ${campaign.opensAt.toDateString()}. Start it then.`,
       );
     }
 
@@ -529,7 +529,7 @@ export async function startCampaign(
       throw new CampaignRefusedError(
         'empty_scope',
         null,
-        'this scope covers no holdings at all; starting it would email reviewers about an empty queue',
+        'Campaign scope covers no access. Widen the scope.',
       );
     }
 
@@ -715,12 +715,12 @@ export async function extendCampaign(
       throw new CampaignRefusedError(
         'not_open',
         null,
-        `this campaign is ${campaign.status}; a due date can only be moved while reviewers can still decide`,
+        `Campaign is ${campaign.status}. Only an open campaign's due date can change.`,
       );
     }
     if (newDueAt <= campaign.dueAt) {
       throw new Error(
-        'a due date may not move backwards; that would rewrite how long reviewers actually had',
+        'New due date must be later than the current one.',
       );
     }
 
@@ -831,7 +831,7 @@ export async function rebaseCampaign(
       throw new CampaignRefusedError(
         'not_open',
         null,
-        `this campaign is ${campaign.status}; only a running campaign can be re-based`,
+        `Campaign is ${campaign.status}. Only an open campaign can be re-based.`,
       );
     }
     const snapshot = await readableSnapshot(tx, newSnapshotId);
@@ -929,8 +929,8 @@ export async function rebaseCampaign(
             status: current === undefined ? 'moot' : 'pending',
             statusReason:
               current === undefined
-                ? `the holding no longer exists as of snapshot ${prepared.snapshot.id}`
-                : 'the holding changed between the original snapshot and the re-base',
+                ? `Access no longer exists in snapshot ${prepared.snapshot.id}.`
+                : 'Access changed since the original snapshot.',
             holdingSnapshotId: prepared.snapshot.id,
             attributions: (current?.attributions ?? []) as never,
             ...(current === undefined ? {} : { observedAt: current.observedAt }),

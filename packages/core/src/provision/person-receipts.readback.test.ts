@@ -176,7 +176,7 @@ describe('a receipt whose person already has an account at the target', () => {
 
     const after = await stateOf(first.receiptId, first.operationId);
     expect(after.receipt.status).toBe('applied');
-    expect(after.receipt.message).toMatch(/confirmed by read-back/);
+    expect(after.receipt.message).toMatch(/confirmed by read-back/i);
     expect(after.step.status).toBe('succeeded');
     expect(after.operation.status).toBe('completed');
     // The empty preview is closed like an applied empty run, not left
@@ -213,7 +213,7 @@ describe('a receipt whose person already has an account at the target', () => {
 
     const after = await stateOf(receiptId, operationId);
     expect(after.receipt.status).toBe('verification_pending');
-    expect(after.receipt.message).toMatch(/needed no changes.*did not match.*Manual verification is required/);
+    expect(after.receipt.message).toMatch(/No changes needed.*did not match.*Manual verification is required/);
     expect(after.step.status).toBe('running');
     expect(after.step.responseCategory).toBe('read_back_incomplete');
     expect(after.operation.status).not.toBe('completed');

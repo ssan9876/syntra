@@ -32,7 +32,7 @@ const delivery = (over: Record<string, unknown> = {}) => ({
   nextAttemptAt: '2026-08-26T12:00:00.000Z',
   deliveredAt: null,
   lastStatus: 500,
-  lastError: 'the receiver answered 500',
+  lastError: 'Receiver returned HTTP 500.',
   createdAt: '2026-08-26T11:00:00.000Z',
   state: 'failed',
   ...over,
@@ -216,7 +216,7 @@ describe('WebhooksTab', () => {
       // The API does not put a body in `lastError`, and the screen must not
       // invent a place for one either: it would be a way to read whatever the
       // server can reach.
-      deliveries: [delivery({ lastError: 'the receiver answered 500' })],
+      deliveries: [delivery({ lastError: 'Receiver returned HTTP 500.' })],
     });
     renderPage();
 

@@ -148,7 +148,7 @@ export async function requestSodException(
   ) {
     throw new ExceptionRefusedError(
       "missing_justification",
-      "an exception needs both a justification and a compensating control, in words a reader who was not in the room can follow",
+      "Add a justification and a compensating control.",
     );
   }
 
@@ -166,13 +166,13 @@ export async function requestSodException(
     if (lengthDays > settings.maxExceptionDays) {
       throw new ExceptionRefusedError(
         "too_long",
-        `an exception may run for at most ${settings.maxExceptionDays} days; this one asks for ${lengthDays}. Renewal is a new decision, which is the point.`,
+        `Exception asks for ${lengthDays} days. The limit is ${settings.maxExceptionDays}.`,
       );
     }
     if (input.endsAt <= input.startsAt) {
       throw new ExceptionRefusedError(
         "no_end_date",
-        "an exception must end after it starts; there is no such thing as a permanent risk acceptance",
+        "End date must be after the start date.",
       );
     }
 
@@ -251,7 +251,7 @@ export async function decideSodException(
     if (exception.status !== "pending") {
       throw new ExceptionRefusedError(
         "blocked_no_approver",
-        `this exception is ${exception.status} and is not open for a decision`,
+        `Exception is ${exception.status} and cannot be decided.`,
       );
     }
 
@@ -276,8 +276,8 @@ export async function decideSodException(
           ? "beneficiary_is_approver"
           : "blocked_no_approver",
         actor.personId === exception.personId
-          ? "the beneficiary of an exception may not accept it on their own behalf"
-          : "this account is not among the people who may accept this risk",
+          ? "You cannot accept an exception for yourself."
+          : "You are not an approver for this exception.",
       );
     }
 
@@ -353,9 +353,8 @@ export async function decideSodException(
           dueAt: new Date(Date.now() + 30 * 86_400_000),
           findingId: finding.id,
           description:
-            `The risk acceptance for "${exception.rule.name}" was refused by ${actorName}: ${comment}. ` +
-            "Nothing was removed. The incompatible access has to be separated by a person, " +
-            "through a campaign decision or a change to what grants it.",
+            `${actorName} refused the exception for "${exception.rule.name}": ${comment}. ` +
+            "Nothing was removed. Remove one side of the conflicting access.",
           deepLink: `/admin/govern/sod/violations/${exception.violationId}`,
         });
       }
@@ -411,7 +410,7 @@ export async function revokeSodException(
     if (exception.status !== "active") {
       throw new ExceptionRefusedError(
         "not_active",
-        `this exception is ${exception.status}; only an active one can be ended early`,
+        `Exception is ${exception.status}. Only an active exception can be ended early.`,
       );
     }
 
@@ -422,13 +421,13 @@ export async function revokeSodException(
     if (actor.personId === null) {
       throw new ExceptionRefusedError(
         "not_an_acceptor",
-        "this account is linked to no person, so it cannot end a risk acceptance",
+        "Your account is not linked to a person, so it cannot end an exception.",
       );
     }
     if (actor.personId === exception.personId) {
       throw new ExceptionRefusedError(
         "not_an_acceptor",
-        "the beneficiary of an exception may not end it on their own behalf",
+        "You cannot end an exception that covers you.",
       );
     }
 
@@ -443,7 +442,7 @@ export async function revokeSodException(
     if (!permitted) {
       throw new ExceptionRefusedError(
         "not_an_acceptor",
-        "only an approver of this exception, or the owner of the rule it covers, may end it early",
+        "Only an approver or the rule owner can end this exception early.",
       );
     }
 
@@ -585,7 +584,7 @@ export async function sweepExceptions(
               tenantId,
               exception,
               now,
-              "a contract its justification rested on has ended",
+              "A contract it depended on has ended.",
             );
             pageLapsed += 1;
             pageByContract += 1;
@@ -599,7 +598,7 @@ export async function sweepExceptions(
             tenantId,
             exception,
             now,
-            "it reached its end date and was not renewed",
+            "Reached its end date.",
           );
           pageLapsed += 1;
           continue;

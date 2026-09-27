@@ -556,7 +556,7 @@ async function createAccount(
     // that causes Syntra to hand them an existing person's account.
     return {
       ok: false,
-      message: `an account named ${op.correlationKey} already exists in the target and does not carry this action's provenance marker`,
+      message: `Account ${op.correlationKey} already exists and was not created by Syntra.`,
       failure: 'conflict',
     };
   }
@@ -639,7 +639,7 @@ async function createAccount(
     // provenance marker, adopts it, and proposes the remaining steps.
     return {
       ok: false,
-      message: `the account was created but its password could not be set: ${
+      message: `Account ${op.correlationKey} created, but setting its password failed: ${
         cause instanceof Error ? cause.message : String(cause)
       }`,
       failure: classifyLdapError(cause),
@@ -658,7 +658,7 @@ async function createAccount(
     } catch (cause) {
       return {
         ok: false,
-        message: `the account was created and its password set, but it could not be enabled: ${
+        message: `Account ${op.correlationKey} created with a password, but enabling it failed: ${
           cause instanceof Error ? cause.message : String(cause)
         }`,
         failure: classifyLdapError(cause),
@@ -935,7 +935,7 @@ async function effectiveRight(
       return {
         right,
         status: 'unverified',
-        detail: `${dn} returned no ${schemaAttribute}, so this server does not publish effective rights and has said nothing about this one`,
+        detail: `Not verified: ${dn} returned no ${schemaAttribute}. This server does not publish effective rights.`,
       };
     }
     const held = effective.some((value) => value.toLowerCase() === wanted.toLowerCase());
@@ -944,7 +944,7 @@ async function effectiveRight(
       status: held ? 'granted' : 'denied',
       detail: held
         ? `${wanted} is in ${attribute} on ${dn}`
-        : `${wanted} is NOT in ${attribute} on ${dn}; this bind cannot perform this operation and the first apply that needs it will fail`,
+        : `Missing: ${wanted} is not in ${attribute} on ${dn}. Applies that need it will fail.`,
     };
   } catch (cause) {
     return {
@@ -1023,7 +1023,7 @@ export const adTargetConnector: TargetConnector<Config> = {
           config.archiveContainer,
           'allowedChildClassesEffective',
           'user',
-          'no archive container configured',
+          'Not verified: no archive container is configured.',
         ),
         await effectiveRight(
           client,
@@ -1031,7 +1031,7 @@ export const adTargetConnector: TargetConnector<Config> = {
           firstAccount === undefined ? undefined : String(firstAccount),
           'allowedAttributesEffective',
           'userAccountControl',
-          'this target holds no account yet, so there is nothing to read effective rights from; the first create will be the first test of this right',
+          'Not verified: the target has no accounts yet. The first create will test this right.',
         ),
         await effectiveRight(
           client,
@@ -1039,7 +1039,7 @@ export const adTargetConnector: TargetConnector<Config> = {
           firstGroup === undefined ? undefined : String(firstGroup),
           'allowedAttributesEffective',
           'member',
-          'this target offers no group yet, so there is nothing to read effective rights from',
+          'Not verified: the target has no groups yet.',
         ),
       ];
 
@@ -1133,9 +1133,8 @@ export const adTargetConnector: TargetConnector<Config> = {
             ? {}
             : {
                 readFailure:
-                  `the directory returned "${ranged}" instead of the whole attribute, ` +
-                  `because it exceeds the server's value-range limit; this account's ` +
-                  `record is short and must not be diffed against`,
+                  `Incomplete read: the directory returned "${ranged}" instead of the ` +
+                  `whole attribute (over the server's value-range limit).`,
               }),
         };
       }
@@ -1235,7 +1234,7 @@ export const adTargetConnector: TargetConnector<Config> = {
         ok: false,
         message: `"${String(
           (op as { op: string }).op,
-        )}" is not an operation this connector implements; there is no delete of any kind`,
+        )}" is not supported by this connector; there is no delete of any kind.`,
         failure: 'rejected',
       };
     }
@@ -1352,7 +1351,7 @@ export const adTargetConnector: TargetConnector<Config> = {
                 if (verdict === 'primary') {
                   return {
                     ok: false,
-                    message: `the account was disabled, but ${groupDn} is its primary group: that membership is not held in \`member\` and cannot be removed by writing to it, so the account has not been moved to the archive container`,
+                    message: `Account disabled but not archived: ${groupDn} is its primary group and cannot be removed. Change the account's primary group, then retry.`,
                     failure: 'rejected',
                   };
                 }
@@ -1360,7 +1359,7 @@ export const adTargetConnector: TargetConnector<Config> = {
                 if (alreadyGone) {
                   return {
                     ok: false,
-                    message: `the account was disabled, but the directory refused to remove its membership of ${groupDn} as "no such attribute" and whether that group is its primary group could not be established because the group returned no objectSid, so the account has not been moved to the archive container`,
+                    message: `Account disabled but not archived: removing it from ${groupDn} failed with "no such attribute", and the group returned no objectSid to check whether it is the primary group.`,
                     failure: 'transient',
                   };
                 }
@@ -1373,7 +1372,7 @@ export const adTargetConnector: TargetConnector<Config> = {
               // which is a state the next run recognises and repeats.
               return {
                 ok: false,
-                message: `the account was disabled, but its membership of ${groupDn} could not be removed, so it has not been moved to the archive container: ${
+                message: `Account disabled but not archived: removing it from ${groupDn} failed: ${
                   cause instanceof Error ? cause.message : String(cause)
                 }`,
                 failure: classifyLdapError(cause),
@@ -1401,7 +1400,7 @@ export const adTargetConnector: TargetConnector<Config> = {
             return {
               ok: false,
               message:
-                'this entitlement is the primary group: primary group membership is not held in `member` and cannot be changed by writing to it',
+                `${op.entitlementId} is a primary group. Primary group membership cannot be changed here.`,
               failure: 'rejected',
             };
           }
@@ -1470,7 +1469,7 @@ export const adTargetConnector: TargetConnector<Config> = {
               return {
                 ok: false,
                 message:
-                  "this entitlement is this account's primary group: primary group membership is not held in `member` and cannot be removed by writing to it, so the revoke did not happen. Move the account to a different primary group first, or exclude this group from the catalog with primaryGroupExternalIds",
+                  `Not revoked: ${op.entitlementId} is this account's primary group. Change the account's primary group first, or add the group to primaryGroupExternalIds.`,
                 failure: 'rejected',
               };
             }
@@ -1491,7 +1490,7 @@ export const adTargetConnector: TargetConnector<Config> = {
                 return {
                   ok: false,
                   message:
-                    'the directory refused the revoke as "no such attribute", and whether this entitlement is this account\'s primary group could not be established because the group returned no objectSid; the revoke cannot be reported as done',
+                    `Revoke of ${op.entitlementId} failed with "no such attribute", and the group returned no objectSid to check whether it is the primary group.`,
                   failure: 'transient',
                 };
               }

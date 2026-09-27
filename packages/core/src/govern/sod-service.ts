@@ -45,7 +45,7 @@ export async function upsertBusinessFunction(
   // thing a later task might replace.
   if (input.resources.length === 0) {
     throw new Error(
-      "a business function must name at least one resource; a function with none can never be held, and a rule over it would silently never fire",
+      "Add at least one resource to this business function.",
     );
   }
 
@@ -106,12 +106,12 @@ export async function upsertSodRule(
 ): Promise<{ id: string }> {
   if (input.functionAId === input.functionBId) {
     throw new Error(
-      "a rule may not name the same business function on both sides",
+      "Pick two different business functions.",
     );
   }
   if (input.rationale.trim().length === 0) {
     throw new Error(
-      "a rule needs a rationale saying what the risk actually is; a rule nobody can explain is a rule nobody will defend when it fires",
+      "Add a rationale describing the risk.",
     );
   }
 
@@ -934,8 +934,7 @@ export async function detectDecisionGraph(
    * in words what it is.
    */
   const CONTEXT =
-    "In a small team mutual approval is normal and expected. This is context for a " +
-    "human to look at, not an accusation, and nothing has been blocked or removed.";
+    "Nothing was blocked or removed.";
 
   for (const pair of report.reciprocity) {
     drafts.push({
@@ -951,7 +950,7 @@ export async function detectDecisionGraph(
         requestIds: pair.requestIds,
         windowDays: input.reciprocityWindowDays,
         minimum: input.minReciprocalDecisions,
-        statement: CONTEXT,
+        statement: `These two people approve each other's requests. ${CONTEXT}`,
       },
     });
   }
@@ -966,8 +965,7 @@ export async function detectDecisionGraph(
         path: cycle.path,
         requestIds: cycle.requestIds,
         statement:
-          `${CONTEXT} A cycle is reported because a pairwise check cannot see one: ` +
-          "A approves for B, B for C, and C for A.",
+          `These people approve each other's requests in a cycle. ${CONTEXT}`,
       },
     });
   }
@@ -989,9 +987,7 @@ export async function detectDecisionGraph(
         b: found.b,
         requestIds: found.requestIds,
         statement:
-          `Each of these two people decided the other onto the opposite side of "${found.ruleName}". ` +
-          "Neither request violates the rule on its own, and neither person holds both sides; " +
-          "together they put the organization where the rule says it must not be.",
+          `These two people approved each other onto opposite sides of "${found.ruleName}".`,
       },
     });
   }
@@ -1005,9 +1001,7 @@ export async function detectDecisionGraph(
       detail: {
         requestIds: auto.requestIds,
         statement:
-          "This access was granted by a product with no approval stages, so no human decided it. " +
-          "That is a configuration choice rather than a fault; it is listed here because access " +
-          "nobody decided is precisely the access a recertification exists to have somebody decide.",
+          "Granted by a product with no approval stages. Nobody approved it.",
       },
     });
   }
@@ -1021,9 +1015,7 @@ export async function detectDecisionGraph(
       detail: {
         requestIds: actor.requestIds,
         statement:
-          "This account submitted requests and is not linked to a person, so its requests cannot " +
-          "be placed in the decision graph. It is either an integration worth knowing about or a " +
-          "problem worth knowing about, and either way silence is the wrong answer.",
+          "Account submitted requests but is not linked to a person. Link it or confirm it is an integration.",
       },
     });
   }

@@ -83,7 +83,7 @@ export const RESTRICTION_WITHHELD_ACTIONS: ReadonlySet<string> = new Set([
 export class ProvisionRunInFlightError extends Error {
   constructor(readonly targetSystemId: string) {
     super(
-      `another run for target ${targetSystemId} is already in progress; this one did not start`,
+      `Skipped: another run for target ${targetSystemId} is already in progress.`,
     );
     this.name = 'ProvisionRunInFlightError';
   }
@@ -224,7 +224,7 @@ async function adoptStaleRunsAndStart(
       where: { targetSystemId, status: 'running' },
       data: {
         status: 'failed',
-        error: 'this run was left running by a process that did not finish',
+        error: 'Interrupted: the process running it did not finish. A later run replaced it.',
         finishedAt: new Date(),
       },
     });
@@ -246,14 +246,14 @@ async function adoptStaleRunsAndStart(
         where: { id: { in: stale.map((r) => r.id) }, cancelState: 'requested' },
         data: {
           ...honouredCancellation(),
-          error: 'this run was interrupted mid-apply and was adopted by a later run',
+          error: 'Interrupted mid-apply. A later run took it over.',
         },
       });
       await tx.provisionRun.updateMany({
         where: { id: { in: stale.map((r) => r.id) }, status: 'applying' },
         data: {
           status: 'partially_applied',
-          error: 'this run was interrupted mid-apply and was adopted by a later run',
+          error: 'Interrupted mid-apply. A later run took it over.',
           finishedAt: new Date(),
         },
       });
@@ -555,9 +555,9 @@ export async function previewProvisionRun(
         where: { id: targetSystemId },
       });
       const config = await targetWithCredential(tx, provider, targetSystemId);
-      if (!config) throw new Error('target configuration or credential missing');
+      if (!config) throw new Error(`Target "${target.name}" has no configuration or credential.`);
       const profile = await tx.accountProfile.findFirst({ where: { targetSystemId } });
-      if (!profile) throw new Error('this target has no account profile');
+      if (!profile) throw new Error(`Target "${target.name}" has no account profile. Add one before running.`);
       // The remit is read here rather than in phase 5 because phase 4 needs
       // it: only groups a business rule names are worth probing for a
       // truncated membership, and probing every group in a domain would be an
@@ -992,7 +992,7 @@ export async function previewProvisionRun(
       const parsed = conditionSchema.safeParse(r.condition);
       if (!parsed.success) {
         throw new Error(
-          `the business rule "${r.name}" (${r.id}) has a condition this version cannot read, so the persons it applies to cannot be computed and this run would propose revoking everything it granted: ${parsed.error.issues[0]?.message ?? 'unparseable condition'}`,
+          `Run stopped: business rule "${r.name}" (${r.id}) has a condition this version cannot read (${parsed.error.issues[0]?.message ?? 'unparseable condition'}). Fix the rule and run again.`,
         );
       }
       return {
@@ -1420,7 +1420,7 @@ export async function previewProvisionRun(
     if (sod !== null && sod.introducedCritical > 0) {
       const named = sod.introduced.filter((i) => i.severity === 'critical');
       sodReasons.push(
-        `this run would introduce ${sod.introducedCritical} critical segregation-of-duties ` +
+        `would introduce ${sod.introducedCritical} critical segregation-of-duties ` +
           `violation${sod.introducedCritical === 1 ? '' : 's'}: ` +
           [...new Set(named.slice(0, 5).map((i) => i.ruleName))].join(', '),
       );
@@ -1608,8 +1608,8 @@ export async function previewProvisionRun(
       );
       if (unreserved.length > 0) {
         throw new Error(
-          `could not reserve an account for ${unreserved.length} person(s) on this target; ` +
-            `the correlation key ${unreserved[0]!.account!.correlationKey} is already held by another account`,
+          `Could not reserve accounts for ${unreserved.length} ${unreserved.length === 1 ? 'person' : 'people'}: ` +
+            `correlation key ${unreserved[0]!.account!.correlationKey} is already held by another account.`,
         );
       }
 

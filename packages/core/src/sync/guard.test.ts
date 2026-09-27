@@ -40,7 +40,7 @@ describe('evaluateGuard', () => {
     expect(verdict).toEqual({
       blocked: true,
       requiresConfirmation: false,
-      reason: 'the source returned no records',
+      reason: 'Source returned no records.',
     });
   });
 

@@ -155,7 +155,7 @@ describe('reconcile — the four outcomes', () => {
         entitlementId: 'ent-finance',
         subjectAnchor: null,
         detail: {
-          reason: 'Provision granted this entitlement and the target no longer holds it',
+          reason: 'Granted by Syntra, no longer held at the target.',
           origin: 'rule',
         },
         fingerprint: 'missing_grant:account-1:ent-finance:-',
@@ -177,7 +177,7 @@ describe('reconcile — the four outcomes', () => {
         entitlementId: 'ent-teaching',
         subjectAnchor: null,
         detail: {
-          reason: 'the target holds this entitlement and Provision did not grant it',
+          reason: 'Held at the target, not granted by Syntra.',
           enforcementMode: 'additive',
           proposedForRevocation: false,
         },
@@ -232,7 +232,7 @@ describe('reconcile — the four outcomes', () => {
     });
     const finding = result.findings.find((f) => f.entitlementId === 'ent-outside');
     expect(finding?.detail.proposedForRevocation).toBe(false);
-    expect(finding?.detail.reason).toContain('outside');
+    expect(finding?.detail.reason).toContain('No business rule');
     // And it is absent from the set the plan differences against, so nothing
     // downstream can propose revoking it either.
     expect(result.actual.get('person-1')!.heldWithinRemit.has('ent-outside')).toBe(false);
@@ -356,7 +356,7 @@ describe('reconcile — the four outcomes', () => {
           anchor: 'anchor-9',
           correlationKey: 'someone.else',
           dn: 'CN=Anna Novak,OU=Finance,OU=Users,DC=acme,DC=test',
-          reason: 'the target holds this account and it belongs to no person Syntra knows',
+          reason: 'Account belongs to no person Syntra knows.',
         },
         fingerprint: 'orphan_account:-:-:anchor-9',
       },
@@ -489,7 +489,7 @@ describe('reconcile — an account that vanished', () => {
           anchor: 'anchor-1',
           correlationKey: 'anna.novak',
           reason:
-            'Syntra holds this account and the target no longer returns its anchor',
+            'Account no longer returned by the target.',
         },
         fingerprint: 'account_missing_at_target:account-1:-:-',
       },
@@ -574,7 +574,7 @@ describe('reconcile — unexpected status', () => {
         detail: {
           syntraBelieves: 'active',
           targetReports: 'disabled',
-          reason: 'the account status at the target does not match what Syntra recorded',
+          reason: 'Account status at the target differs from the record in Syntra.',
         },
         fingerprint: 'unexpected_status:account-1:-:-',
       },
@@ -603,7 +603,7 @@ describe('reconcile — unexpected status', () => {
         detail: {
           syntraBelieves: 'disabled',
           targetReports: 'active',
-          reason: 'the account status at the target does not match what Syntra recorded',
+          reason: 'Account status at the target differs from the record in Syntra.',
         },
         fingerprint: 'unexpected_status:account-1:-:-',
       },
@@ -625,7 +625,7 @@ describe('reconcile — unexpected status', () => {
         detail: {
           syntraBelieves: 'archived',
           targetReports: 'active',
-          reason: 'the account status at the target does not match what Syntra recorded',
+          reason: 'Account status at the target differs from the record in Syntra.',
         },
         fingerprint: 'unexpected_status:account-1:-:-',
       },
@@ -728,7 +728,7 @@ describe('reconcile — the container check', () => {
     expect(result.extraUnprocessable.get('person-1')).toEqual({
       kind: 'container_missing',
       message:
-        'the container OU=Nowhere,OU=Users,DC=acme,DC=test does not exist in the target; Provision does not create it',
+        'Container OU=Nowhere,OU=Users,DC=acme,DC=test does not exist in the target. Create it there first.',
     });
     // And excluded from the plan entirely, exactly as a conflict and a
     // half-read object are. `actual` is what the planner differences against,
@@ -855,7 +855,7 @@ describe('reconcile — the container check', () => {
     expect(result.extraUnprocessable.get('person-1')).toEqual({
       kind: 'container_missing',
       message:
-        'the container OU=Nowhere,OU=Users,DC=acme,DC=test does not exist in the target; Provision does not create it',
+        'Container OU=Nowhere,OU=Users,DC=acme,DC=test does not exist in the target. Create it there first.',
     });
   });
 
@@ -871,7 +871,7 @@ describe('reconcile — persons it makes unprocessable', () => {
     expect(result.extraUnprocessable.get('person-1')).toEqual({
       kind: 'target_read_incomplete',
       message:
-        'the target returned this person account at anchor-1 but it could not be read in full, so it cannot be diffed against safely',
+        'Account at anchor-1 could not be read in full. Skipped for this run.',
     });
     // And no state to diff, so nothing downstream can act on half a truth.
     expect(result.actual.has('person-1')).toBe(false);
@@ -886,7 +886,7 @@ describe('reconcile — persons it makes unprocessable', () => {
     expect(result.extraUnprocessable.get('person-1')).toEqual({
       kind: 'account_conflict',
       message:
-        'this person account is in conflict: the correlation key anna.novak already exists in the target on an account Provision did not create',
+        'Account conflict: correlation key anna.novak already exists in the target on an account Syntra did not create.',
     });
     expect(result.actual.has('person-1')).toBe(false);
   });
@@ -899,7 +899,7 @@ describe('reconcile — persons it makes unprocessable', () => {
     // collide with, and silently overwrite, the account-status finding above.
     const result = run({ desired: [noAccount({ notYetStarted: true })] });
     const finding = result.findings.find(
-      (f) => f.detail.reason === 'this account belongs to somebody whose contract has not started',
+      (f) => f.detail.reason === 'Account belongs to someone whose contract has not started.',
     );
     expect(finding).toBeDefined();
     expect(finding!.kind).toBe('unexpected_status');
@@ -913,7 +913,7 @@ describe('reconcile — persons it makes unprocessable', () => {
     expect(finding!.detail).toEqual({
       anchor: 'anchor-1',
       correlationKey: 'anna.novak',
-      reason: 'this account belongs to somebody whose contract has not started',
+      reason: 'Account belongs to someone whose contract has not started.',
     });
     // Still reconciled, so the run's inventory and the guard's denominators
     // count this account. Not touching it is the planner's job, not a reason

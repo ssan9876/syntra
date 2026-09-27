@@ -538,7 +538,7 @@ describe('planActions — an account that vanished', () => {
     });
     expect(types(actions)).toEqual(['create_account']);
     expect(actions[0]!.requiresConfirmation).toBe(true);
-    expect(actions[0]!.message).toContain('vanished');
+    expect(actions[0]!.message).toContain('missing from the target');
   });
 });
 
@@ -1476,7 +1476,7 @@ describe('planActions — a re-enable whose disable date is unknown', () => {
     const actions = enableWith({ status: 'disabled', disabledAt: null });
     expect(types(actions)).toEqual(['enable_account', 'grant_entitlement']);
     expect(actions[0]!.requiresConfirmation).toBe(true);
-    expect(actions[0]!.message).toContain('no record of when');
+    expect(actions[0]!.message).toContain('disable date unknown');
   });
 
   it('auto-applies the first enable of a pre-hire account created disabled', () => {
@@ -1525,7 +1525,7 @@ describe('planActions — the immediate disable must not claim employment it can
     });
     expect(types(actions)).toEqual(['revoke_entitlement', 'disable_account']);
     expect(actions[1]!.message).not.toContain('still employed');
-    expect(actions[1]!.message).toContain('no contract in force today');
+    expect(actions[1]!.message).toContain('no contract is in force');
   });
 });
 

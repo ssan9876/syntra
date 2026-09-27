@@ -15,8 +15,8 @@ export class JobNotQueuedError extends Error {
   constructor(readonly jobName: string, cause?: unknown) {
     super(
       cause instanceof Error
-        ? `the job queue refused this run: ${cause.message}`
-        : 'the job queue did not accept this run',
+        ? `Job queue refused this run: ${cause.message}`
+        : 'Job queue did not accept this run.',
     );
     this.name = 'JobNotQueuedError';
     if (cause !== undefined) this.cause = cause;

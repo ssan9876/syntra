@@ -85,7 +85,7 @@ export class EmailDomainNotVerifiedError extends Error {
     readonly field: string,
     readonly domain: string,
   ) {
-    super(`${domain} is not a verified email domain for this organisation`);
+    super(`${domain} is not a verified email domain.`);
     this.name = 'EmailDomainNotVerifiedError';
   }
 }
@@ -144,7 +144,7 @@ export async function addEmailDomain(
     throw new EmailDomainError('invalid-domain', `"${input.trim()}" is not a domain name, such as contoso.com`);
   }
   const existing = await tx.emailDomain.findFirst({ where: { domain } });
-  if (existing) throw new EmailDomainError('duplicate-domain', `${domain} has already been added`);
+  if (existing) throw new EmailDomainError('duplicate-domain', `${domain} is already added.`);
   const row = await tx.emailDomain.create({
     data: {
       tenantId: await currentTenant(tx),
@@ -189,9 +189,9 @@ export async function lookupEmailDomainVerification(
   } catch (cause) {
     const code = (cause as { code?: string }).code;
     if (code === 'ENOTFOUND' || code === 'ENODATA') {
-      return { verified: false, reason: `${domain} has no TXT records yet` };
+      return { verified: false, reason: `${domain} has no TXT records yet.` };
     }
-    return { verified: false, reason: `the DNS lookup for ${domain} failed (${code ?? 'error'}); try again shortly` };
+    return { verified: false, reason: `DNS lookup for ${domain} failed (${code ?? 'error'}). Try again shortly.` };
   }
   if (found.some((txt) => txt.trim() === record)) return { verified: true };
   return {

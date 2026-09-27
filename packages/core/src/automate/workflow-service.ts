@@ -76,7 +76,7 @@ async function validateStages(
   if (JSON.stringify([...sequences].sort((a, b) => a - b)) !== JSON.stringify(expected)) {
     throw new WorkflowConfigurationError(
       'sequence-gap',
-      'Stages are numbered from one with no gaps and no duplicates; the request walks them in order.',
+      'Number stages 1, 2, 3… with no gaps or duplicates.',
     );
   }
 
@@ -87,7 +87,7 @@ async function validateStages(
     ) {
       throw new WorkflowConfigurationError(
         'fallback-required',
-        `Stage ${stage.sequence} uses ${stage.selector}, which legitimately resolves to nobody — a person with no manager, a chain shorter than n, a resource whose owner was never recorded. Name a fallback approver.`,
+        `Stage ${stage.sequence} uses ${stage.selector}, which can find no approver. Add a fallback approver.`,
       );
     }
 
@@ -122,13 +122,13 @@ async function validateStages(
     if (stage.onTimeout === 'expire' && stage.expiryHours === null) {
       throw new WorkflowConfigurationError(
         'expiry-hours-required',
-        `Stage ${stage.sequence} expires requests, so it needs an expiry window.`,
+        `Stage ${stage.sequence} expires requests. Set an expiry window.`,
       );
     }
     if (stage.onTimeout === 'escalate' && stage.escalationSelector === null) {
       throw new WorkflowConfigurationError(
         'escalation-required',
-        `Stage ${stage.sequence} escalates, so it needs somebody to escalate to.`,
+        `Stage ${stage.sequence} escalates. Choose who to escalate to.`,
       );
     }
     if (!Number.isInteger(stage.slaHours) || stage.slaHours <= 0) {
@@ -143,7 +143,7 @@ async function validateStages(
       if (bound > maxApprovers) {
         throw new WorkflowConfigurationError(
           'quorum-too-large',
-          `Stage ${stage.sequence} would need all ${bound} approvers to agree, and this tenant allows at most ${maxApprovers}. A stage that cannot complete is a request that sits forever.`,
+          `Stage ${stage.sequence} needs ${bound} approvers; the limit is ${maxApprovers}.`,
         );
       }
     }

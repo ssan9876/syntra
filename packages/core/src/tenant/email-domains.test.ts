@@ -103,7 +103,7 @@ describe('lookupEmailDomainVerification', () => {
     const outcome = await lookupEmailDomainVerification('contoso.com', record, async () => {
       throw Object.assign(new Error('nope'), { code: 'ENODATA' });
     });
-    expect(outcome).toEqual({ verified: false, reason: 'contoso.com has no TXT records yet' });
+    expect(outcome).toEqual({ verified: false, reason: 'contoso.com has no TXT records yet.' });
   });
 });
 

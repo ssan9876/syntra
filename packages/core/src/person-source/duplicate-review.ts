@@ -90,11 +90,11 @@ export function resolveDuplicateReview(
     if (resolution === 'keep_separate') {
       await tx.personImportChange.update({
         where: { id: review.changeId },
-        data: { status: 'proposed', message: 'Reviewed as a distinct person despite matching an existing business email' },
+        data: { status: 'proposed', message: 'Kept as a separate person despite a matching business email.' },
       });
     } else if (resolution === 'link_existing') {
       if (review.change.externalId === null) {
-        throw new Error('a source identity with no external id cannot be linked');
+        throw new Error('Cannot link a source record that has no external ID.');
       }
       await tx.personSourceLink.create({
         data: {
@@ -107,7 +107,7 @@ export function resolveDuplicateReview(
       });
       await tx.personImportChange.update({
         where: { id: review.changeId },
-        data: { status: 'skipped', message: 'Incoming source identity linked to the selected existing person' },
+        data: { status: 'skipped', message: 'Linked to the selected existing person.' },
       });
     } else {
       // A person's contract changes carry the same external id. Skipping only
@@ -115,7 +115,7 @@ export function resolveDuplicateReview(
       // because the person they belong to was deliberately not created.
       await tx.personImportChange.updateMany({
         where: { runId: review.runId, externalId: review.change.externalId, status: { in: ['proposed', 'needs_review'] } },
-        data: { status: 'skipped', message: 'Source record skipped after duplicate review' },
+        data: { status: 'skipped', message: 'Skipped after duplicate review.' },
       });
     }
     const remaining = await tx.personDuplicateReview.count({ where: { runId: review.runId, status: 'open' } });

@@ -243,10 +243,10 @@ export class SourceCountsChangedError extends Error {
     readonly acknowledged: OwnedObjectCounts,
   ) {
     super(
-      `this source now owns ${counts.users} user(s), ${counts.groups} ` +
+      `Source now owns ${counts.users} user(s), ${counts.groups} ` +
         `group(s) and ${counts.orgUnits} organizational unit(s), not the ` +
         `${acknowledged.users}, ${acknowledged.groups} and ` +
-        `${acknowledged.orgUnits} that were confirmed`,
+        `${acknowledged.orgUnits} you confirmed. Confirm again.`,
     );
     this.name = 'SourceCountsChangedError';
   }
@@ -256,9 +256,9 @@ export class SourceCountsChangedError extends Error {
 export class SourceOwnsObjectsError extends Error {
   constructor(readonly counts: OwnedObjectCounts) {
     super(
-      `this source still owns ${counts.users} user(s), ${counts.groups} ` +
-        `group(s) and ${counts.orgUnits} organizational unit(s); deleting it ` +
-        `deactivates them and detaches them from any source`,
+      `Source still owns ${counts.users} user(s), ${counts.groups} ` +
+        `group(s) and ${counts.orgUnits} organizational unit(s). Deleting it ` +
+        `deactivates and detaches them.`,
     );
     this.name = 'SourceOwnsObjectsError';
   }
@@ -428,7 +428,7 @@ export async function setMappings(
   );
   if (userCorrelation.length !== 1) {
     throw new Error(
-      'exactly one user mapping must be marked as the correlation key',
+      'Mark exactly one user mapping as the correlation key.',
     );
   }
 
@@ -445,9 +445,9 @@ export async function setMappings(
     );
     if (rejected.length > 0) {
       throw new Error(
-        `a ${objectType} mapping may not write ${rejected.join(', ')}; ` +
-          `assignable ${objectType} fields are ` +
-          `${ASSIGNABLE_FIELDS[objectType].join(', ')}`,
+        `A ${objectType} mapping cannot write ${rejected.join(', ')}. ` +
+          `Allowed: ` +
+          `${ASSIGNABLE_FIELDS[objectType].join(', ')}.`,
       );
     }
   }

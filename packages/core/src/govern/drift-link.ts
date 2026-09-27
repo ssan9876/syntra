@@ -246,7 +246,7 @@ export async function adoptDriftClosures(
             detail: {
               ...(finding.detail as Record<string, unknown>),
               resolvedBecause:
-                'Provision resolved the DriftFinding this aggregates; there is one problem underneath and it is closed',
+                'Resolved in Provision.',
               resolvedDriftFindingId: finding.driftFindingId,
             } as never,
           },

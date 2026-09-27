@@ -164,7 +164,7 @@ export function detectNoHumanDecision(holdings: readonly DetectHolding[]): Findi
         subjectKey: h.subjectKey,
         resourceName: h.resourceName,
         systemName: h.systemName,
-        note: 'this access was granted by a workflow with no approval stages; no human decided it',
+        note: 'Granted by a workflow with no approval stages.',
       },
     }));
 }
@@ -230,7 +230,7 @@ export function detectUnexplainedGains(
       detail: {
         subjectKey: e.subjectKey,
         resourceName: e.resourceName,
-        note: 'this access appeared between two snapshots and no Syntra audit event explains it',
+        note: 'Access appeared between two snapshots with no Syntra audit event.',
       },
     }));
 }
@@ -564,9 +564,9 @@ export async function acceptFinding(
   // that measures the calendar rather than the code.
   now: Date = new Date(),
 ): Promise<void> {
-  if (reason.trim().length === 0) throw new Error('accepting a finding requires a reason');
+  if (reason.trim().length === 0) throw new Error('Add a reason to accept this finding.');
   if (until.getTime() <= now.getTime()) {
-    throw new Error('the acceptance expiry must be in the future; there is no perpetual acceptance');
+    throw new Error('Acceptance expiry must be in the future.');
   }
 
   await withTenant(tenantId, async (tx) => {
@@ -714,7 +714,7 @@ export async function resolveRemediationItem(
   comment: string,
 ): Promise<void> {
   if (comment.trim().length === 0) {
-    throw new Error('closing a remediation item requires a comment saying what changed or why not');
+    throw new Error('Add a comment saying what changed.');
   }
   await withTenant(tenantId, async (tx) => {
     await tx.remediationItem.update({

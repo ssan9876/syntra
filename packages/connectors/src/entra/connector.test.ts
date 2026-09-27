@@ -227,7 +227,7 @@ describe('entraUserPrincipalName', () => {
     const named = entraUserPrincipalName({ tenantId: GUID }, 'fay.wong');
     expect('message' in named && named.message).toMatch(/userPrincipalDomain/);
     expect(entraUserPrincipalName({ tenantId: GUID, userPrincipalDomain: 'contoso.com' }, '  ')).toEqual({
-      message: 'the correlation key is blank',
+      message: 'Correlation key is blank.',
     });
   });
 });
@@ -236,7 +236,7 @@ describe('OAuth', () => {
   it('reaches Graph with a valid secret and reports rights as unverified', async () => {
     const result = await entraTargetConnector.test(config());
     expect(result.ok).toBe(true);
-    expect(result.message).toMatch(/reachable/);
+    expect(result.message).toMatch(/Connected to Microsoft Graph/);
     expect(result.sampleCounts?.user).toBe(1);
     expect(result.rights?.every((r) => r.status === 'unverified')).toBe(true);
     expect(result.rights?.[0]?.detail).toMatch(/admin consent/);

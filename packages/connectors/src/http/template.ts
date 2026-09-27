@@ -158,7 +158,7 @@ export function renderBody(template: unknown, vars: TemplateVars): unknown {
 
 export class MissingTemplateValueError extends Error {
   constructor(readonly placeholder: string) {
-    super(`the request path needs {{${placeholder}}} and there is no value for it`);
+    super(`Request path needs {{${placeholder}}}, which has no value.`);
     this.name = 'MissingTemplateValueError';
   }
 }

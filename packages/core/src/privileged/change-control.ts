@@ -233,7 +233,7 @@ export async function requestPrivilegedChange(
   const tenantId = await currentTenant(tx);
   const reason = (input.reason ?? '').trim();
   if (reason.length < CHANGE_REQUEST_REASON_MIN_LENGTH) {
-    refuse('reason-required', `This change needs a second administrator. Give a reason of at least ${CHANGE_REQUEST_REASON_MIN_LENGTH} characters for them to review (changeReason).`);
+    refuse('reason-required', `This change needs a second administrator. Give a reason (changeReason) of at least ${CHANGE_REQUEST_REASON_MIN_LENGTH} characters.`);
   }
   const created = await tx.privilegedChangeRequest.create({
     data: {
@@ -338,7 +338,7 @@ async function loadPending(tx: TenantClient, id: string, now: Date) {
   const row = await tx.privilegedChangeRequest.findFirst({ where: { id } });
   if (!row) return refuse('not-found', 'Change request not found');
   if (row.status === 'pending' && row.expiresAt <= now) {
-    refuse('expired', 'This request was not decided in time; ask for the change again');
+    refuse('expired', 'Request expired. Ask for the change again.');
   }
   if (row.status !== 'pending') refuse('not-pending', `This request is ${row.status}, not awaiting a decision`);
   return row;
@@ -372,7 +372,7 @@ export async function approvePrivilegedChange(
     return await withTenant(tenantId, async (tx) => {
       const row = await loadPending(tx, requestId, now);
       if (row.requestedByUserId === input.actorUserId) {
-        refuse('four-eyes-required', 'A different administrator must approve a change you requested');
+        refuse('four-eyes-required', 'Another administrator must approve your change.');
       }
       const permission = approverPermissionFor(row.changeClass as ChangeRequestClass);
       if (!(await hasPermission(tx, input.actorUserId, permission))) {
@@ -380,13 +380,13 @@ export async function approvePrivilegedChange(
       }
       const age = now.getTime() - input.stepUpAt.getTime();
       if (!(age >= 0 && age <= CHANGE_REQUEST_STEP_UP_MAX_AGE_MS)) {
-        refuse('step-up-required', `Approving a privileged change needs a console session started in the last ${CHANGE_REQUEST_STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then approve.`);
+        refuse('step-up-required', `Approving needs a console sign-in from the last ${CHANGE_REQUEST_STEP_UP_MAX_AGE_MS / 60_000} minutes. Elevate again, then approve.`);
       }
       const handler = handlers[row.operation];
       if (!handler) return refuse('unknown-operation', `No handler applies ${row.operation}`);
       const current = await handler.revision(tx, row.proposed);
       if (current !== row.baseRevision) {
-        refuse('stale', 'What this request changes has been modified since it was made; it can no longer be applied as reviewed. Ask for the change again.');
+        refuse('stale', 'The item this request changes was modified after the request. Ask for the change again.');
       }
 
       // Conditional on the status read above, so two approvers racing cannot
@@ -448,7 +448,7 @@ export async function rejectPrivilegedChange(
     return await withTenant(tenantId, async (tx) => {
       const row = await loadPending(tx, requestId, now);
       if (row.requestedByUserId === input.actorUserId) {
-        refuse('four-eyes-required', 'You cannot decide your own request; withdraw it instead');
+        refuse('four-eyes-required', 'You cannot decide your own request. Withdraw it instead.');
       }
       const permission = approverPermissionFor(row.changeClass as ChangeRequestClass);
       if (!(await hasPermission(tx, input.actorUserId, permission))) {
@@ -492,7 +492,7 @@ export async function withdrawPrivilegedChange(
   return withTenant(tenantId, async (tx) => {
     const row = await loadPending(tx, requestId, now);
     if (row.requestedByUserId !== input.actorUserId) {
-      refuse('forbidden', 'Only the administrator who asked for a change can withdraw it; reject it instead');
+      refuse('forbidden', 'Only the requester can withdraw a change. Reject it instead.');
     }
     const { count } = await tx.privilegedChangeRequest.updateMany({
       where: { id: requestId, status: 'pending' },

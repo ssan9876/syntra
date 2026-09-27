@@ -103,7 +103,7 @@ export function localMasterKeyProvider(masterKey: Buffer): MasterKeyProvider {
         // node:crypto with "Invalid authentication tag length", which tells an
         // operator nothing about the fix.
         throw new Error(
-          `this data key was wrapped by ${describeWrappedKey(wrapped)}, not by the local MASTER_KEY; configure that provider (see docs/configure.md, "Key management")`,
+          `Data key was wrapped by ${describeWrappedKey(wrapped)}, not the local MASTER_KEY. Configure that provider (docs/configure.md, "Key management").`,
         );
       }
       const decipher = createDecipheriv('aes-256-gcm', masterKey, wrapped.iv);
@@ -218,7 +218,7 @@ export function fallbackMasterKeyProvider(
       const candidates = all.filter((p) => p.recognizes(wrapped));
       if (candidates.length === 0) {
         throw new Error(
-          `this data key was wrapped by ${describeWrappedKey(wrapped)}, which no configured key-management provider recognises`,
+          `Data key was wrapped by ${describeWrappedKey(wrapped)}; no configured key-management provider matches it.`,
         );
       }
       let first: unknown;

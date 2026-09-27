@@ -463,7 +463,7 @@ describe('extending a grant that is about to expire', () => {
     });
     expect(outcome).toMatchObject({ ok: false, reason: 'already_held' });
     if (outcome.ok) throw new Error('unreachable');
-    expect(outcome.message).toContain('no longer live');
+    expect(outcome.message).toContain('Grant has ended');
   });
 });
 

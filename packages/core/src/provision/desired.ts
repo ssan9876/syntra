@@ -396,7 +396,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       ...empty,
       unprocessable: {
         kind: 'no_contracts',
-        message: `${fullName(person)} holds no contracts at all, so their access cannot be computed; this is an incomplete record, not a departure`,
+        message: `${fullName(person)} has no contracts. Add one to compute their access.`,
       },
     };
   }
@@ -445,7 +445,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       ...empty,
       unprocessable: {
         kind: 'unresolvable_rule',
-        message: `the rule "${rule.name}" names entitlement ${unresolvable}, which is ${status} in the target catalog; the rule cannot be resolved for this person and produces no desired state`,
+        message: `Rule "${rule.name}" grants entitlement ${unresolvable}, which is ${status} in the target catalog. Fix the rule or refresh the catalog.`,
       },
     };
   }
@@ -513,7 +513,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
     grantExceptions.push({
       grantId: grant.grantId,
       entitlementId: grant.entitlementId,
-      message: `grant ${grant.grantId} names entitlement ${grant.entitlementId}, which is ${status} in the target catalog; it is left out of desired state rather than planned against a group that is not there`,
+      message: `Grant ${grant.grantId}: entitlement ${grant.entitlementId} is ${status} in the target catalog. Left out of the plan.`,
     });
     return false;
   });
@@ -595,7 +595,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
         ...empty,
         unprocessable: {
           kind: 'template_unresolvable',
-          message: `the account profile template for "${name}" references ${rendered.missing.join(', ')}, which resolves to nothing for this person`,
+          message: `Profile attribute "${name}" uses ${rendered.missing.join(', ')}, which is empty for ${fullName(person)}.`,
         },
       };
     }
@@ -614,7 +614,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
         ...empty,
         unprocessable: {
           kind: 'template_unresolvable',
-          message: `the account profile template for "${name}" renders an empty value, which is not a value the directory accepts; an attribute a profile does not want written is one it does not name`,
+          message: `Profile attribute "${name}" renders an empty value for ${fullName(person)}. Fix the template or remove the attribute.`,
         },
       };
     }
@@ -625,7 +625,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
           ...empty,
           unprocessable: {
             kind: 'email_domain_unverified',
-            message: `the account profile gives "${name}" an address in ${domain}, which is not a verified email domain for this organisation`,
+            message: `Profile attribute "${name}" gives an address in ${domain}, which is not a verified email domain.`,
           },
         };
       }
@@ -684,8 +684,8 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       unprocessable: {
         kind: 'template_unresolvable',
         message: containerRendered.ok
-          ? 'the container template resolves to nothing for this person, and the profile has no fallback container'
-          : `the container template references ${containerRendered.missing.join(', ')}, which resolves to nothing for this person, and the profile has no fallback container`,
+          ? `Container template is empty for ${fullName(person)}, and the profile has no fallback container.`
+          : `Container template uses ${containerRendered.missing.join(', ')}, which is empty for ${fullName(person)}, and the profile has no fallback container.`,
       },
     };
   }
@@ -740,12 +740,12 @@ export function desiredState(input: DesiredStateInput): DesiredState {
             generated.reason === 'exhausted'
               ? {
                   kind: 'name_generation_exhausted',
-                  message: `no unique account name could be generated for ${fullName(person)} within ${generated.attempts} attempts`,
+                  message: `No unique account name for ${fullName(person)} after ${generated.attempts} attempts.`,
                 }
               : generated.reason === 'domain_unverified'
                 ? {
                     kind: 'email_domain_unverified',
-                    message: `the account name template renders an address in ${generated.domain}, which is not a verified email domain for this organisation`,
+                    message: `Account name template gives an address in ${generated.domain}, which is not a verified email domain.`,
                   }
               : generated.reason === 'malformed'
                 ? {
@@ -754,11 +754,11 @@ export function desiredState(input: DesiredStateInput): DesiredState {
                     // because the fix is the same -- the template or the
                     // person's data -- and the message says which.
                     kind: 'template_unresolvable',
-                    message: `the account name template ${generated.message}`,
+                    message: `Account name template ${generated.message}`,
                   }
                 : {
                     kind: 'template_unresolvable',
-                    message: `the account name template references ${generated.missing.join(', ')}, which resolves to nothing for this person`,
+                    message: `Account name template uses ${generated.missing.join(', ')}, which is empty for ${fullName(person)}.`,
                   },
         };
       }

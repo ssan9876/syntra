@@ -753,7 +753,7 @@ describe('testTargetConfiguration', () => {
         borrowFromTargetId: id,
       });
       expect(result.ok).toBe(false);
-      expect(result.message).toMatch(/only be borrowed for a target of the same type/);
+      expect(result.message).toMatch(/only be reused by a target of the same type/);
     }
   });
 
@@ -783,7 +783,7 @@ describe('testTargetConfiguration', () => {
         config: requested,
         borrowFromTargetId: id,
       });
-      expect(result.message).not.toMatch(/only be borrowed/);
+      expect(result.message).not.toMatch(/only be reused/);
       expect(result.message).not.toMatch(/no saved credential/);
     }
   });
@@ -801,7 +801,7 @@ describe('testTargetConfiguration', () => {
       borrowFromTargetId: id,
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/only be borrowed for a target of the same type/);
+    expect(result.message).toMatch(/only be reused by a target of the same type/);
   });
 
   it('refuses to borrow with the certificate check turned off', async () => {
@@ -817,7 +817,7 @@ describe('testTargetConfiguration', () => {
       borrowFromTargetId: id,
     });
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/only be borrowed for a target of the same type/);
+    expect(result.message).toMatch(/only be reused by a target of the same type/);
   });
 
   it('refuses to borrow from a target that is not there', async () => {

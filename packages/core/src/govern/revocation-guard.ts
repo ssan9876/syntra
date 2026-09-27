@@ -43,7 +43,7 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
   //    decisions made against a picture of the world from six weeks ago.
   if (input.snapshotAgeDays > input.maxSnapshotAgeDays) {
     refusals.push(
-      `the snapshot these decisions were made against is ${input.snapshotAgeDays} days old, past the limit of ${input.maxSnapshotAgeDays}. Re-base and let the reviewers look at what changed.`,
+      `Snapshot is ${input.snapshotAgeDays} days old (limit ${input.maxSnapshotAgeDays}). Re-base the campaign.`,
     );
   }
 
@@ -55,7 +55,7 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
   );
   if (offending.length > 0) {
     refusals.push(
-      `a source in this batch's scope is no longer current: ${offending.map((s) => s.sourceName).join(', ')}`,
+      `Source data is out of date: ${offending.map((s) => s.sourceName).join(', ')}`,
     );
   }
 
@@ -71,7 +71,7 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
       100;
     if (drop > input.thresholds.personPopulationDropPercent) {
       refusals.push(
-        `${Math.round(drop)}% fewer persons hold an active contract than at the last applied batch (${input.personsWithActiveContract} against ${input.previousPersonsWithActiveContract})`,
+        `People with an active contract fell ${Math.round(drop)}% since the last batch (${input.previousPersonsWithActiveContract} to ${input.personsWithActiveContract})`,
       );
     }
   }
@@ -85,7 +85,7 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
   //    anything about it.
   if (!input.hasEverApplied) {
     reasons.push(
-      'this is the first revocation batch in this tenant, so there is no prior state for a percentage to be a share of',
+      'First revocation batch in this tenant',
     );
   }
 
@@ -93,7 +93,7 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
     input.holdingsInScope === 0 ? 100 : (input.revocationsInBatch / input.holdingsInScope) * 100;
   if (batchShare > input.thresholds.batchThresholdPercent) {
     reasons.push(
-      `this batch revokes ${input.revocationsInBatch} of ${input.holdingsInScope} holdings in the campaign's scope (${Math.round(batchShare)}%, above ${input.thresholds.batchThresholdPercent}%)`,
+      `Revokes ${input.revocationsInBatch} of ${input.holdingsInScope} items in scope (${Math.round(batchShare)}%, limit ${input.thresholds.batchThresholdPercent}%)`,
     );
   }
 
@@ -106,20 +106,20 @@ export function evaluateRevocationGuard(input: GuardInput): GuardVerdict {
     // it exists for is worse than no axis, and the confirmation names it.
     if (!holders.known) {
       reasons.push(
-        `the current holder count of "${name}" is unknown (${holders.reason}), so this batch's share of it cannot be computed`,
+        `Holder count of "${name}" is unknown (${holders.reason})`,
       );
       continue;
     }
     if (holders.value === 0) {
       reasons.push(
-        `"${name}" has no recorded holders, so this batch's share of it cannot be computed`,
+        `"${name}" has no recorded holders`,
       );
       continue;
     }
     const share = (count / holders.value) * 100;
     if (share > input.thresholds.perResourceThresholdPercent) {
       reasons.push(
-        `this batch revokes ${count} of ${holders.value} holders of "${name}" (${Math.round(share)}%, above ${input.thresholds.perResourceThresholdPercent}%)`,
+        `Revokes ${count} of ${holders.value} holders of "${name}" (${Math.round(share)}%, limit ${input.thresholds.perResourceThresholdPercent}%)`,
       );
     }
   }

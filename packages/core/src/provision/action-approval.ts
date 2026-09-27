@@ -183,19 +183,19 @@ export async function approveHeldAction(
   if (!(APPROVABLE_RUN_STATUSES as readonly string[]).includes(run.status)) {
     throw new HeldActionNotApprovableError(
       'run-not-finished',
-      `this run is ${run.status}; approve its actions by applying the run itself, which can still be confirmed`,
+      `Run ${run.id} is ${run.status}. Apply the run itself to confirm its actions.`,
     );
   }
   if (action.status !== 'proposed' || !action.requiresConfirmation) {
     throw new HeldActionNotApprovableError(
       'action-not-held',
-      `this action is ${action.status}${action.requiresConfirmation ? '' : ' and never needed a confirmation'}, so there is nothing waiting to be approved`,
+      `Action ${action.id} is ${action.status}${action.requiresConfirmation ? '' : ' and needs no confirmation'}. Nothing to approve.`,
     );
   }
   if (action.accountId === null) {
     throw new HeldActionNotApprovableError(
       'action-names-no-account',
-      'this action names no account, so a later run could not recognise it as the same change',
+      `Action ${action.id} names no account, so it cannot be approved.`,
     );
   }
   const latest = await tx.provisionAction.findFirst({
@@ -210,7 +210,7 @@ export async function approveHeldAction(
   if (latest !== null && latest.id !== action.id) {
     throw new HeldActionNotApprovableError(
       'action-superseded',
-      `a later run (${latest.runId}) has planned this account's ${action.actionType} again; approve it there, where the plan is current`,
+      `Run ${latest.runId} planned this ${action.actionType} again. Approve it there.`,
     );
   }
   const standing = await tx.provisionActionApproval.findFirst({
@@ -225,7 +225,7 @@ export async function approveHeldAction(
   if (standing !== null) {
     throw new HeldActionNotApprovableError(
       'already-approved',
-      `this account's ${action.actionType} is already approved (${standing.id}) and waiting for the next run`,
+      `This ${action.actionType} is already approved (${standing.id}). It runs on the next run.`,
     );
   }
 
@@ -290,7 +290,7 @@ export async function revokeHeldActionApproval(
   if (state !== 'pending') {
     throw new HeldActionNotApprovableError(
       'approval-not-revocable',
-      `this approval is ${state}, so there is nothing left to revoke`,
+      `Approval ${approval.id} is ${state}. Nothing to revoke.`,
     );
   }
   // Conditional on still being live, so a run consuming it between the read
@@ -302,7 +302,7 @@ export async function revokeHeldActionApproval(
   if (count === 0) {
     throw new HeldActionNotApprovableError(
       'approval-not-revocable',
-      'a run used this approval before it could be revoked',
+      `Approval ${approval.id} was already used by a run.`,
     );
   }
   await recordEvent(tx, {
@@ -382,7 +382,7 @@ export async function standingConfirmationFor(
 /** The approval stood when it was read and does not now: revoked, or used by another apply. */
 export class StandingConfirmationLostError extends Error {
   constructor(readonly approvalId: string) {
-    super(`approval ${approvalId} no longer stands, so the action is deferred as unconfirmed`);
+    super(`Approval ${approvalId} was revoked or used. Action deferred.`);
     this.name = 'StandingConfirmationLostError';
   }
 }
@@ -524,7 +524,7 @@ export async function describeHeldActions(
     if (action.status !== 'proposed') reason = `this action is ${action.status}`;
     else if (action.accountId === null) reason = 'this action names no account';
     else if (superseded.has(key)) reason = 'a later run has planned this change again';
-    else if (liveByKey.has(key)) reason = 'already approved and waiting for the next run';
+    else if (liveByKey.has(key)) reason = 'already approved; runs on the next run';
     return {
       actionId: action.id,
       status: action.status,

@@ -280,7 +280,7 @@ export async function* graphPaginate(
   for (let page = 0; next !== undefined; page += 1) {
     if (page >= MAX_PAGES) {
       throw new GraphPagingError(
-        `${path} did not stop paging after ${MAX_PAGES} pages; refusing to return a partial list`,
+        `Incomplete read: ${path} was still paging after ${MAX_PAGES} pages. No partial list was returned.`,
       );
     }
     const response: GraphResponse = await graphRequest(connection, {

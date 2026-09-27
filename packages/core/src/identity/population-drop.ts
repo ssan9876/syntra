@@ -42,8 +42,8 @@ export function populationDropRefusal(input: PopulationDropInput): string | null
   // human could usefully confirm about a population that has entirely gone.
   if (input.current === 0) {
     return (
-      `no person in this tenant holds an active contract at all, which is upstream ` +
-      `of every action this ${input.subject} could take`
+      `no person in this tenant holds an active contract. ` +
+      `Check the HR feed before this ${input.subject} goes ahead`
     );
   }
 
@@ -58,7 +58,7 @@ export function populationDropRefusal(input: PopulationDropInput): string | null
   return (
     `the number of people holding an active contract has fallen from ` +
     `${input.previous} to ${input.current} (${drop.toFixed(1)}%), above the ` +
-    `${input.thresholdPercent}% limit; this is the signature of a broken HR feed, ` +
-    `and every action in this ${input.subject} is downstream of that count`
+    `${input.thresholdPercent}% limit. ` +
+    `Check the HR feed before confirming this ${input.subject}`
   );
 }

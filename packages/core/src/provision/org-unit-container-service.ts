@@ -57,7 +57,7 @@ export function validateContainerDn(
     return {
       ok: false,
       reason: 'malformed',
-      message: 'this target has no base DN to validate a container against',
+      message: 'this target has no base DN',
     };
   }
 
@@ -366,7 +366,7 @@ export async function containersForOrgUnit(
       derivedDn = derivation.dns.get(orgUnitId) ?? null;
       problem =
         derivation.problems.find((p) => p.orgUnitId === orgUnitId)?.message ??
-        (unit !== undefined && unit.status !== 'active' ? 'this unit is deactivated, so it is not mirrored' : null);
+        (unit !== undefined && unit.status !== 'active' ? 'deactivated; not mirrored' : null);
       if (derivedDn !== null && row === undefined) {
         const taken = await tx.orgUnitContainer.findFirst({
           where: { targetSystemId: target.id, dn: { equals: derivedDn, mode: 'insensitive' } },

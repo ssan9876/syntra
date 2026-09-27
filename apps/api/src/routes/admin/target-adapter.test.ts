@@ -136,7 +136,7 @@ describe('adapter rollout controls', () => {
 
     const rollback = await send('POST', `/api/admin/targets/${id}/adapter/rollback`, cookie, { reason: 'Nothing to roll back to yet' });
     expect(rollback.statusCode).toBe(409);
-    expect(rollback.json().detail).toMatch(/no previous certified adapter release/);
+    expect(rollback.json().detail).toMatch(/No earlier certified adapter release/);
 
     const events = await withTenant(ctx.tenantId, (tx) =>
       tx.auditEvent.findMany({ where: { action: 'provision.target.adapter.select', targetId: id } }),

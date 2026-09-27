@@ -89,7 +89,7 @@ export async function recordDecision(
       if (request.status !== 'blocked_no_approver') {
         throw new DecisionRefusedError(
           'not-blocked',
-          'Only a request with nobody to approve it can be decided by an administrator.',
+          'Administrators can only decide requests that have no approver.',
         );
       }
       const allowed = await hasPermission(
@@ -100,13 +100,13 @@ export async function recordDecision(
       if (!allowed) {
         throw new DecisionRefusedError(
           'not-permitted',
-          'Deciding a blocked request by hand requires automate.manage.',
+          'You need automate.manage to decide this request.',
         );
       }
     } else if (request.status !== 'pending_approval') {
       throw new DecisionRefusedError(
         'not-open',
-        'That request is not waiting for a decision.',
+        'Request is not waiting for a decision.',
       );
     }
 
@@ -121,14 +121,14 @@ export async function recordDecision(
     ) {
       throw new DecisionRefusedError(
         'self-approval',
-        'Nobody may decide a request they are the subject or the submitter of.',
+        'You cannot decide a request you raised or that is for you.',
       );
     }
 
     if (input.decision === 'reject' && (input.comment ?? '').trim() === '') {
       throw new DecisionRefusedError(
         'comment-required',
-        'Say why. A refusal with no reason is a request the person will simply raise again.',
+        'Add a reason for refusing.',
       );
     }
 
@@ -186,7 +186,7 @@ export async function recordDecision(
             if (reopened === 'blocked') {
               throw new DecisionRefusedError(
                 'not-an-approver',
-                'This request no longer resolves to anybody, including you.',
+                'Request has no approver, including you.',
               );
             }
             onStep = await tx.approvalStepApprover.findFirst({
@@ -195,7 +195,7 @@ export async function recordDecision(
           }
 
           if (onStep === null) {
-            throw new DecisionRefusedError('not-an-approver', 'This request is not with you.');
+            throw new DecisionRefusedError('not-an-approver', 'Request is not assigned to you.');
           }
           return { via: onStep.via, onBehalfOfPersonId: onStep.onBehalfOfPersonId };
         })();
@@ -270,7 +270,7 @@ export async function recordDecision(
     });
     const requesterName =
       request.requestedByPersonId === null
-        ? 'somebody whose account is not linked to a person'
+        ? 'an account not linked to a person'
         : (names.get(`person:${request.requestedByPersonId}`) ?? 'the requester');
     const vars = {
       productName: request.product?.name ?? 'the requested access',
@@ -389,7 +389,7 @@ export async function recordDecision(
           where: { id: request.id },
           data: {
             status: 'blocked_no_approver',
-            statusReason: `stage ${next.sequence} resolved to nobody who can decide it, and so did its fallback`,
+            statusReason: `Stage ${next.sequence} has no approver, and its fallback has none either.`,
           },
         });
         return { status: 'blocked_no_approver' };
@@ -496,13 +496,13 @@ export async function cancelRequest(
     if (request.requestedByUserId !== actorUserId) {
       throw new DecisionRefusedError(
         'not-the-requester',
-        'Only the person who raised a request can withdraw it.',
+        'Only the requester can withdraw this request.',
       );
     }
     if (!['pending_approval', 'blocked_no_approver'].includes(request.status)) {
       throw new DecisionRefusedError(
         'too-late',
-        'This has already been decided. To give the access back, use "hand it back" on the grant.',
+        'Request is already decided. To give up the access, use "Hand it back" on the grant.',
       );
     }
 
@@ -517,7 +517,7 @@ export async function cancelRequest(
     });
     await tx.accessRequest.update({
       where: { id: requestId },
-      data: { status: 'cancelled', statusReason: 'withdrawn by the requester', decidedAt: now },
+      data: { status: 'cancelled', statusReason: 'Withdrawn by the requester.', decidedAt: now },
     });
     await recordEvent(tx, {
       actorUserId,

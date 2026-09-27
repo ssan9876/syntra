@@ -245,10 +245,8 @@ export async function resolveItemReviewers(
           status: 'blocked_no_reviewer',
           statusReason:
             subject === null
-              ? 'this item is an account that belongs to nobody, so no selector over people can resolve it, ' +
-                'and the campaign fallback also resolved to nobody. Attribute the account or name a fallback person.'
-              : 'the reviewer selector and the fallback both resolved to nobody who may decide this. ' +
-                'The likeliest cause is that everybody they resolved to would be attesting to their own access.',
+              ? 'No reviewer: the account has no owner and the campaign has no fallback. Assign an owner or set a fallback reviewer.'
+              : 'No reviewer: the selector and the fallback found nobody other than the person themselves.',
         },
       });
       continue;
@@ -354,7 +352,7 @@ export async function reassignInvalidReviewers(
         for (const personId of invalid) {
           await tx.campaignItemReviewer.updateMany({
             where: { itemId: item.id, personId, unassignedAt: null },
-            data: { unassignedAt: now, unassignedReason: 'this reviewer is no longer valid' },
+            data: { unassignedAt: now, unassignedReason: 'Reviewer is no longer valid.' },
           });
         }
 
@@ -372,7 +370,7 @@ export async function reassignInvalidReviewers(
             where: { id: item.id },
             data: {
               status: 'blocked_no_reviewer',
-              statusReason: 'the reviewer became invalid and re-resolution yielded nobody',
+              statusReason: 'Reviewer is no longer valid and no replacement was found.',
             },
           });
           continue;
@@ -398,7 +396,7 @@ export async function reassignInvalidReviewers(
           where: { id: item.id },
           data: {
             status: 'pending',
-            statusReason: 'the previous reviewer became invalid and this item was reassigned',
+            statusReason: 'Reassigned: the previous reviewer is no longer valid.',
           },
         });
         reassigned += 1;
@@ -517,11 +515,9 @@ export async function mootDepartedSubjects(
           data: {
             status: 'moot',
             statusReason:
-              `the subject's contracts have all ended${
+              `Person left${
                 departedOn === undefined ? '' : ` on ${departedOn.toISOString().slice(0, 10)}`
-              }. ` +
-              `Provision's leaver ladder and Automate's lapse sweep now own this holding; asking a manager to attest to it would be theatre. ` +
-              `This item is NOT counted as certified in any figure.`,
+              }. Their access is removed by offboarding. Not counted as certified.`,
           },
         });
         mooted += 1;
@@ -580,7 +576,7 @@ export async function mootVanishedHoldings(
           where: { id: { in: gone.map((i) => i.id) } },
           data: {
             status: 'moot',
-            statusReason: `snapshot ${currentSnapshotId} no longer shows this holding`,
+            statusReason: `Access no longer exists in snapshot ${currentSnapshotId}.`,
           },
         });
         mooted += result.count;
@@ -876,7 +872,7 @@ export async function closeDueCampaigns(
           where: { id: { in: page.map((i) => i.id) } },
           data: {
             status: 'undecided',
-            statusReason: 'the campaign closed and nobody decided this item. It was NOT attested.',
+            statusReason: 'Campaign closed with no decision. Not certified.',
           },
         });
         for (const item of page) {
@@ -944,9 +940,8 @@ export async function closeDueCampaigns(
             ownerPersonId: campaign.ownerPersonId,
             dueAt: new Date(now.getTime() + 7 * 86_400_000),
             description:
-              `The revocations decided in "${campaign.name}" cannot be executed: ` +
-              `${batch.blockedReason ?? 'the guard refused the batch'}. ` +
-              'Nothing was removed and nothing will be until this is resolved.',
+              `Revocations in "${campaign.name}" are blocked: ` +
+              `${batch.blockedReason ?? 'refused by the guard'}. Nothing was removed.`,
             deepLink: `/admin/govern/campaigns/${campaign.id}`,
           }),
         );
@@ -1245,8 +1240,8 @@ export async function previewReviewerResolution(
               resourceName: holding.resourceName,
               reason:
                 subject === null
-                  ? 'this holding belongs to an account with no person, and the fallback is not a named person'
-                  : 'the selector and the fallback both resolved to nobody who may decide it',
+                  ? 'Account has no owner and the fallback is not a named person.'
+                  : 'Selector and fallback found no reviewer.',
             });
           }
           continue;

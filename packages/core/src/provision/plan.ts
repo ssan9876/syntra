@@ -232,7 +232,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
       attributedRuleIds: [],
       attributedGrantIds: [],
       requiresConfirmation: false,
-      message: `create the container ${dn}, a missing parent in the mirrored org-unit tree`,
+      message: `create the container ${dn} (missing parent in the mirrored tree)`,
       revocationOrderId: null,
     });
   }
@@ -419,7 +419,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
           },
           requiresConfirmation: true,
           message:
-            'this account vanished from the target; recreating it is never automatic, because it usually vanished because somebody deleted it deliberately',
+            'account missing from the target; never recreated automatically',
         });
         continue;
       }
@@ -502,7 +502,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
             after: { correlationKey: state.account.correlationKey },
             requiresConfirmation: true,
             message:
-              'renaming breaks certificate subjects, profile paths, file ownership and mailbox aliases, so it is always confirmed',
+              'renames always need confirmation',
           });
         }
 
@@ -542,11 +542,11 @@ export function planActions(input: PlanInput): PlannedAction[] {
             requiresConfirmation: outsideWindow || disableDateUnknown,
             ...(outsideWindow
               ? {
-                  message: `this account has been disabled for ${disabledDays} days, longer than the ${ladder.reenableWithoutConfirmationDays}-day window; months of accumulated entitlements come back with the login`,
+                  message: `disabled for ${disabledDays} days, beyond the ${ladder.reenableWithoutConfirmationDays}-day window; its old entitlements come back with it`,
                 }
               : disableDateUnknown
                 ? {
-                    message: `this account is recorded as disabled and Syntra holds no record of when it was disabled, so it cannot be shown to be inside the ${ladder.reenableWithoutConfirmationDays}-day window; months of accumulated entitlements come back with the login`,
+                    message: `disable date unknown, so not provably inside the ${ladder.reenableWithoutConfirmationDays}-day window; its old entitlements come back with it`,
                   }
                 : {}),
           });
@@ -595,7 +595,7 @@ export function planActions(input: PlanInput): PlannedAction[] {
             ? {}
             : {
                 message:
-                  'revoked immediately: the person is still employed, so the least-privilege answer is to take the old access away now and they are present to be asked',
+                  'revoked now: the person is still employed',
               }),
         });
       }
@@ -680,16 +680,16 @@ export function planActions(input: PlanInput): PlannedAction[] {
             after: { enabled: false },
             message: departed
               ? late
-                ? `this departure was observed late: the disable fell due on ${addDays(endDate!, ladder.disableGraceDays).toISOString().slice(0, 10)} and this is the first run to see it`
+                ? `departure observed late: the disable was due on ${addDays(endDate!, ladder.disableGraceDays).toISOString().slice(0, 10)}`
                 : null
               : employedNow
-                ? 'disabled immediately: this account is no longer required and the person is still employed, so there is no departure date to measure a grace period from'
+                ? 'disabled now: account no longer required; the person is still employed'
                 : // Not "still employed": one of their contracts is
                   // open-ended, so there is no departure date, but none of
                   // them is in force today either. Saying they are employed
                   // would be asserting the one thing this subsystem must
                   // never assert without evidence.
-                  'disabled immediately: this account is no longer required, there is no contract in force today, and no contract has an end date to measure a grace period from',
+                  'disabled now: account no longer required; no contract is in force or has an end date',
           });
         }
 

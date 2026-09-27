@@ -401,7 +401,7 @@ describe('a refused risk acceptance', () => {
     expect(item.ownerPersonId).not.toBe(beneficiaryId);
     // The approver is named in the description, because §14 wants them told and
     // a RemediationItem carries one owner.
-    expect(item.description).toContain('refused by');
+    expect(item.description).toContain('refused the exception');
   });
 });
 

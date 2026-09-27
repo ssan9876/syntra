@@ -108,7 +108,7 @@ export function guardedFetch(options: GuardedFetchOptions = {}): GuardedFetch {
         if (classifyAddress(entry.address) === 'blocked') {
           throw new Error(
             `${url.hostname} resolves to ${entry.address}, which is inside this deployment's own network. ` +
-              'Set OUTBOUND_ALLOW_PRIVATE=true if that is intended.',
+              'Set OUTBOUND_ALLOW_PRIVATE=true to allow it.',
           );
         }
       }

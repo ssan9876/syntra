@@ -79,7 +79,7 @@ async function validateProduct(tx: TenantClient, input: ProductInput): Promise<v
   if (input.grants.length === 0) {
     throw new ProductConfigurationError(
       'no-grants',
-      'A product has to grant something. Name at least one resource.',
+      'Add at least one resource to this product.',
     );
   }
 
@@ -98,7 +98,7 @@ async function validateProduct(tx: TenantClient, input: ProductInput): Promise<v
     if (targets.size > 1) {
       throw new ProductConfigurationError(
         'bundle-spans-targets',
-        'Every entitlement in one product must belong to the same target system, so a single Provision run can fulfil the whole request.',
+        'All entitlements in a product must be on the same target system.',
       );
     }
     const entitlements = await tx.entitlement.findMany({
@@ -110,19 +110,19 @@ async function validateProduct(tx: TenantClient, input: ProductInput): Promise<v
       if (entitlement === undefined) {
         throw new ProductConfigurationError(
           'entitlement-missing',
-          'One of the entitlements named here no longer exists on that target.',
+          'An entitlement in this product no longer exists on the target.',
         );
       }
       if (!entitlement.requestable) {
         throw new ProductConfigurationError(
           'entitlement-not-requestable',
-          `${entitlement.displayName} is not marked requestable. Publish it on the target's catalog first.`,
+          `${entitlement.displayName} is not requestable. Mark it requestable on the target first.`,
         );
       }
       if (entitlement.targetSystemId !== grant.targetSystemId) {
         throw new ProductConfigurationError(
           'entitlement-target-mismatch',
-          `${entitlement.displayName} does not belong to the target system named here.`,
+          `${entitlement.displayName} is not on this target system.`,
         );
       }
     }
@@ -138,7 +138,7 @@ async function validateProduct(tx: TenantClient, input: ProductInput): Promise<v
       if (group === undefined) {
         throw new ProductConfigurationError(
           'group-missing',
-          'One of the groups named here no longer exists.',
+          'A group in this product no longer exists.',
         );
       }
       // A synced group's membership is rewritten by its source every run. A
@@ -148,7 +148,7 @@ async function validateProduct(tx: TenantClient, input: ProductInput): Promise<v
       if (group.sourceId !== null) {
         throw new ProductConfigurationError(
           'group-is-synced',
-          `${group.name} is owned by the directory source ${group.source?.name ?? 'unknown'}, which rewrites its membership on every run. Request the target entitlement it comes from instead.`,
+          `${group.name} is synced from "${group.source?.name ?? 'unknown'}". Use the matching target entitlement instead.`,
         );
       }
     }
@@ -816,7 +816,7 @@ export async function updateAutomateSettings(
         if (!Array.isArray(next) || next.some((d) => !Number.isInteger(d) || d < 0)) {
           throw new ProductConfigurationError(
             'setting-invalid',
-            'expiryWarningDays must be a list of whole numbers of days.',
+            'expiryWarningDays must be a list of whole numbers.',
           );
         }
       }

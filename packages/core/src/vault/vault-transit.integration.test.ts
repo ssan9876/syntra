@@ -181,7 +181,7 @@ describe.skipIf(!reachable)('vault-transit against a real Vault', () => {
       expect(await withTenant(tenant, (tx) => getSecret(tx, after, 'ldap.bindPassword'))).toBe('hunter2');
       expect(await withTenant(tenant, (tx) => getSecret(tx, after, 'webhook.secret'))).toBe('whsec');
       expect(await withTenant(tenant, (tx) => getSecret(tx, after, 'scim.token'))).toBe('scim');
-      await expect(withTenant(tenant, (tx) => getSecret(tx, local, 'ldap.bindPassword'))).rejects.toThrow(/not by the local MASTER_KEY/);
+      await expect(withTenant(tenant, (tx) => getSecret(tx, local, 'ldap.bindPassword'))).rejects.toThrow(/not the local MASTER_KEY/);
     });
   });
 });

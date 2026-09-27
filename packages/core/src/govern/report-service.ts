@@ -309,10 +309,10 @@ export async function snapshotInForceOn(
       nearest: after?.asOf ?? null,
       statement:
         after === null
-          ? `no snapshot covers ${iso}: this tenant has no complete snapshot at all`
-          : `no snapshot covers ${iso}: the earliest complete snapshot is ${after.asOf
+          ? `No snapshot covers ${iso}. There are no complete snapshots yet.`
+          : `No snapshot covers ${iso}. The earliest is ${after.asOf
               .toISOString()
-              .slice(0, 10)}, which is after that date`,
+              .slice(0, 10)}.`,
     };
   }
 
@@ -326,10 +326,9 @@ export async function snapshotInForceOn(
       covered: false,
       nearest: before.asOf,
       statement:
-        `no snapshot covers ${iso}: the nearest is ${before.asOf.toISOString().slice(0, 10)} and the ` +
-        `next is ${after === null ? 'none' : after.asOf.toISOString().slice(0, 10)}, a gap of ` +
-        `${Math.round(gapDays)} days. Reporting either one as the picture on ${iso} would be a ` +
-        `different date wearing this one's label.`,
+        `No snapshot covers ${iso}. Nearest: ${before.asOf.toISOString().slice(0, 10)}; ` +
+        `next: ${after === null ? 'none' : after.asOf.toISOString().slice(0, 10)} ` +
+        `(${Math.round(gapDays)}-day gap).`,
     };
   }
 
@@ -679,8 +678,8 @@ export async function whoApprovedIt(
     // an unattributable one it is the finding. It is not a failure of the report.
     statement:
       relevant.length > 0
-        ? 'this access was requested and decided; every stage and decision is below'
-        : `no approval record exists for this holding. It is explained by: ${
+        ? 'Requested and approved. Stages and decisions below.'
+        : `No approval record. Source: ${
             attributions.length === 0
               ? 'nothing at all'
               : attributions.map((a) => a.kind).join(', ')

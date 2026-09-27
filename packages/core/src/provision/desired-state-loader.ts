@@ -273,7 +273,7 @@ async function projectOne(
       notYetStarted: false,
       unprocessable: {
         kind: 'no_profile',
-        message: 'this target has no account profile, so nothing can be planned for it',
+        message: 'This target has no account profile.',
       },
       catalogUnverified: true,
     };
@@ -284,7 +284,7 @@ async function projectOne(
   for (const rule of ruleRows) {
     const parsed = conditionSchema.safeParse(rule.condition);
     if (!parsed.success) {
-      ruleUnreadable = `the business rule "${rule.name}" has a condition this version cannot read`;
+      ruleUnreadable = `Business rule "${rule.name}" has a condition this version cannot read.`;
       continue;
     }
     rules.push({

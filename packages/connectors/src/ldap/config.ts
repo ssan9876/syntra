@@ -89,8 +89,7 @@ export const ldapConfigSchema = ldapConfigObject
         code: z.ZodIssueCode.custom,
         path: ['tlsMode'],
         message:
-          `an ldaps:// URL is implicit TLS, so it cannot also be ` +
-          `"${config.tlsMode}"; use an ldap:// URL for that mode`,
+          `tlsMode "${config.tlsMode}" does not work with an ldaps:// URL. Use an ldap:// URL.`,
       });
     }
 

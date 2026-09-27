@@ -172,7 +172,7 @@ export function mapPersonRecord(
     return {
       failed: true,
       anchor: record.externalId,
-      reason: `the source could not be read completely for this person: ${record.readFailure}`,
+      reason: `Could not read this person completely from the source: ${record.readFailure}`,
     };
   }
 
@@ -181,7 +181,7 @@ export function mapPersonRecord(
     return {
       failed: true,
       anchor: record.externalId,
-      reason: 'the correlation column is missing or empty in this row',
+      reason: 'Correlation column missing or empty in this row.',
     };
   }
 
@@ -192,7 +192,7 @@ export function mapPersonRecord(
     return {
       failed: true,
       anchor: person.correlation,
-      reason: 'no start date is mapped, and a contract cannot exist without one',
+      reason: 'No start date is mapped. A contract needs one.',
     };
   }
   const startDate = parseIsoDate(rawStart);
@@ -223,7 +223,7 @@ export function mapPersonRecord(
     return {
       failed: true,
       anchor: person.correlation,
-      reason: `"${rawSequence}" is not a whole number, so it cannot be a contract sequence`,
+      reason: `Contract sequence "${rawSequence}" is not a whole number.`,
     };
   }
 

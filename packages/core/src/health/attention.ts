@@ -128,12 +128,12 @@ export function runAttentionSummary(run: RunCounters & {
 }): string {
   const planned = plannedPhrase(run);
   if (run.status === 'blocked') {
-    const reason = run.blockedReason?.split('; ')[0] ?? 'no reason was recorded';
+    const reason = run.blockedReason?.split('; ')[0] ?? 'no reason recorded';
     return run.requiresConfirmation
-      ? `Held for confirmation: ${reason}`
-      : `Refused by the safety guard: ${reason}`;
+      ? `Needs confirmation: ${reason}`
+      : `Blocked by the safety guard: ${reason}`;
   }
-  return planned ? `Waiting to be applied: would ${planned}` : 'Waiting to be applied: no changes planned';
+  return planned ? `Ready to apply: would ${planned}` : 'Ready to apply: no changes';
 }
 
 export async function readAttentionSummary(

@@ -447,7 +447,7 @@ export async function runTickJob(
             where: { id: step.requestId },
             data: {
               status: 'expired',
-              statusReason: `nobody decided within ${stage.expiryHours} hours`,
+              statusReason: `Not decided within ${stage.expiryHours} hours.`,
               decidedAt: now,
             },
           });

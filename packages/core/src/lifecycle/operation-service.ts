@@ -99,7 +99,7 @@ export function lifecycleInputFingerprint(input: unknown): string {
 export class LifecycleApprovalRequiredError extends Error {
   constructor(readonly operationId: string, readonly reason: string | null) {
     super(
-      `This operation needs approval before it may change a target${reason ? `: ${reason}` : '.'}`,
+      reason ? `Approval required. ${reason}` : 'Approval required before any target is changed.',
     );
     this.name = 'LifecycleApprovalRequiredError';
   }
@@ -122,8 +122,8 @@ export class LifecycleVerificationRequiredError extends Error {
   constructor(readonly operationId: string, readonly reason: 'missing' | 'already-confirmed') {
     super(
       reason === 'missing'
-        ? 'A complete target read-back is required before retrying this operation.'
-        : 'Target state is already confirmed; retrying would repeat a completed write.',
+        ? 'Read the target back in full before retrying.'
+        : 'Target already confirmed. Retrying would repeat the write.',
     );
     this.name = 'LifecycleVerificationRequiredError';
   }
@@ -301,7 +301,7 @@ export async function transitionLifecycleStep(
     const step = operation.steps.find((candidate) => candidate.key === stepKey);
     if (!step) throw new Error(`Unknown lifecycle step: ${stepKey}`);
     if (operation.rejectedAt) {
-      throw new Error('This operation was rejected and cannot progress');
+      throw new Error('Operation was rejected.');
     }
     // The gate. A target step cannot start, and cannot be declared done,
     // while a person still has to sign for it. Failing or skipping it is
@@ -452,14 +452,14 @@ export async function approveLifecycleOperation(
   return withTenant(tenantId, async (tx) => {
     const operation = await tx.lifecycleOperation.findFirstOrThrow({ where: { id: operationId } });
     if (!operation.approvalRequired) {
-      throw new LifecycleApprovalError('This operation does not need approval', 'not-pending');
+      throw new LifecycleApprovalError('Operation does not need approval.', 'not-pending');
     }
     if (operation.approvedAt || operation.rejectedAt) {
-      throw new LifecycleApprovalError('This operation was already decided', 'already-decided');
+      throw new LifecycleApprovalError('Operation was already approved or rejected.', 'already-decided');
     }
     if (operation.requestedByUserId && operation.requestedByUserId === approverUserId) {
       throw new LifecycleApprovalError(
-        'The person who requested an operation cannot approve it',
+        'You requested this operation, so you cannot approve it.',
         'four-eyes',
       );
     }
@@ -487,17 +487,17 @@ export async function rejectLifecycleOperation(
   return withTenant(tenantId, async (tx) => {
     const operation = await tx.lifecycleOperation.findFirstOrThrow({ where: { id: operationId } });
     if (!operation.approvalRequired) {
-      throw new LifecycleApprovalError('This operation does not need approval', 'not-pending');
+      throw new LifecycleApprovalError('Operation does not need approval.', 'not-pending');
     }
     if (operation.approvedAt || operation.rejectedAt) {
-      throw new LifecycleApprovalError('This operation was already decided', 'already-decided');
+      throw new LifecycleApprovalError('Operation was already approved or rejected.', 'already-decided');
     }
     const now = new Date();
     await tx.lifecycleStep.updateMany({
       where: { operationId, status: { in: ['pending', 'running'] } },
       data: {
         status: 'skipped',
-        message: `Not performed: the operation was rejected (${reason})`,
+        message: `Skipped: operation rejected (${reason}).`,
         completedAt: now,
       },
     });
@@ -533,7 +533,7 @@ export async function cancelLifecycleOperation(
     const now = new Date();
     await tx.lifecycleStep.updateMany({
       where: { operationId, status: 'pending' },
-      data: { status: 'skipped', message: `Not performed: the operation was cancelled (${reason})`, completedAt: now },
+      data: { status: 'skipped', message: `Skipped: operation cancelled (${reason}).`, completedAt: now },
     });
     const running = await tx.lifecycleStep.findMany({ where: { operationId, status: 'running' } });
     for (const step of running) {
@@ -541,7 +541,7 @@ export async function cancelLifecycleOperation(
     }
     await tx.lifecycleStep.updateMany({
       where: { operationId, status: 'running' },
-      data: { status: 'failed', message: `Abandoned: the operation was cancelled (${reason}). A write that was in flight may have landed; verify the target.`, responseCategory: 'unavailable', completedAt: now },
+      data: { status: 'failed', message: `Abandoned: operation cancelled mid-write (${reason}). Check the target.`, responseCategory: 'unavailable', completedAt: now },
     });
     return tx.lifecycleOperation.update({
       where: { id: operationId },

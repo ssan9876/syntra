@@ -195,7 +195,7 @@ export async function fetchLatestRelease(
       },
     };
   } catch {
-    return { ok: false, reason: 'the forge returned something that was not a release' };
+    return { ok: false, reason: 'The forge did not return a release.' };
   }
 }
 
@@ -259,8 +259,7 @@ export async function checkForUpdate(
       current: build.version,
       updatable: false,
       reason:
-        'this install is a working tree rather than a release, so there is no ' +
-        'version to update from; use deploy.sh',
+        'This install is a working tree, not a release. Update it with deploy.sh.',
       latest: null,
       updateAvailable: false,
     };
@@ -270,7 +269,7 @@ export async function checkForUpdate(
     return {
       current: build.version,
       updatable: false,
-      reason: 'no release token is configured, so new versions cannot be looked up',
+      reason: 'No release token is configured. New versions cannot be checked.',
       latest: null,
       updateAvailable: false,
     };
