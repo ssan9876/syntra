@@ -9,13 +9,12 @@
  * env-reading glue.
  */
 import {
-  ALL_PERMISSIONS,
   createMasterKeyProvider,
   ensureActiveKey,
   parseKeyManagement,
   type KeyManagementConfig,
   assignRole,
-  createRole,
+  createBuiltInRoles,
   createUser,
   hashPassword,
   setPasswordHash,
@@ -146,10 +145,9 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
     });
     await setPasswordHash(tx, admin.id, adminHash);
 
-    const adminRole = await createRole(tx, 'Owner', ALL_PERMISSIONS, {
-      builtIn: true,
-      description: 'Full administrative access to this tenant.',
-    });
+    // Owner holds everything but the restricted permissions; Data deletion
+    // (`person.purge`) starts with no holder and only an Owner can assign it.
+    const { owner: adminRole } = await createBuiltInRoles(tx);
     await assignRole(tx, admin.id, adminRole.id);
 
     created = true;

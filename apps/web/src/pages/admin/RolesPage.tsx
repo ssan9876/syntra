@@ -35,6 +35,8 @@ interface RoleRow {
   description: string | null;
   permissions: string[];
   builtIn: boolean;
+  /** 'owner' | 'data-deletion' for the roles the product installs. */
+  systemKey?: string | null;
   assignmentCount: number;
   holders: Holder[];
 }
@@ -73,10 +75,17 @@ const initials = (holder: Holder) =>
 export function RolesPage() {
   const { data, error, loading, reload } = useApiResource<{
     catalog: string[];
+    /** Held only through the Data deletion role: shown, never offered. */
+    restricted?: string[];
+    viewerIsOwner?: boolean;
     roles: RoleRow[];
   }>('/api/admin/roles');
   const roles = data?.roles ?? [];
   const catalog = data?.catalog ?? [];
+  const restricted = new Set(data?.restricted ?? []);
+  /** Only an Owner grants or removes the Data deletion role. */
+  const mayChangeHolders = (role: RoleRow) =>
+    role.systemKey !== 'data-deletion' || data?.viewerIsOwner === true;
 
   // The selection is a location, like a tab: a link to "the Help desk role"
   // pasted into a ticket must open on it.
@@ -236,6 +245,10 @@ export function RolesPage() {
     }
     return [...byModule];
   })();
+  // The editor's grid: the restricted permissions are never a checkbox.
+  const editableGroups = groups
+    .map(([module, permissions]) => [module, permissions.filter((p) => !restricted.has(p))] as [string, string[]])
+    .filter(([, permissions]) => permissions.length > 0);
 
   /** Accounts not already holding this role AT THE CHOSEN SCOPE. */
   const grantable = (role: RoleRow, scope: string) => {
@@ -460,10 +473,10 @@ export function RolesPage() {
                   />
                 </div>
                 <PermissionGrid
-                  groups={groups}
+                  groups={editableGroups}
                   held={chosen}
                   onToggle={toggle}
-                  count={`${chosen.size} of ${catalog.length}`}
+                  count={`${chosen.size} of ${catalog.length - restricted.size}`}
                 />
               </Panel>
               <FormActions
@@ -502,9 +515,12 @@ export function RolesPage() {
                   )}
                 </div>
                 <div className="flex flex-wrap items-start gap-2">
-                  <Button variant="secondary" onClick={() => edit(selected)}>
-                    Edit
-                  </Button>
+                  {/* Data deletion carries person.purge and nothing else, for good. */}
+                  {selected.systemKey !== 'data-deletion' && (
+                    <Button variant="secondary" onClick={() => edit(selected)}>
+                      Edit
+                    </Button>
+                  )}
                   {/* A built-in role is what the seed wrote and what the
                       permission backfill targets, so it is not offered. */}
                   {!selected.builtIn && (
@@ -531,7 +547,9 @@ export function RolesPage() {
                 title="People"
                 count={selected.holders.length}
                 action={
-                  usersError ? (
+                  !mayChangeHolders(selected) ? (
+                    <Status tone="neutral">Only an Owner can grant this role</Status>
+                  ) : usersError ? (
                     <Status tone="neutral">Needs directory.read to grant</Status>
                   ) : usersLoading || granting || grantable(selected, '').length === 0 ? null : (
                     <Button
@@ -611,21 +629,23 @@ export function RolesPage() {
                           <Status tone="neutral">{unitNames.get(holder.scopeOrgUnitId) ?? 'scoped'}</Status>
                         )}
                         {holder.status !== 'active' && <Status tone="inactive">cannot sign in</Status>}
-                        <button
-                          type="button"
-                          aria-label={
-                            holder.scopeOrgUnitId === null
-                              ? `Revoke ${holder.login}`
-                              : `Revoke ${holder.login} in ${unitNames.get(holder.scopeOrgUnitId) ?? 'one unit'}`
-                          }
-                          title="Revoke"
-                          onClick={() => void revoke(selected, holder)}
-                          className="grid size-6 place-items-center rounded-full text-muted transition-colors duration-150 ease-out-quart hover:bg-danger-soft hover:text-danger"
-                        >
-                          <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
-                            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                          </svg>
-                        </button>
+                        {mayChangeHolders(selected) && (
+                          <button
+                            type="button"
+                            aria-label={
+                              holder.scopeOrgUnitId === null
+                                ? `Revoke ${holder.login}`
+                                : `Revoke ${holder.login} in ${unitNames.get(holder.scopeOrgUnitId) ?? 'one unit'}`
+                            }
+                            title="Revoke"
+                            onClick={() => void revoke(selected, holder)}
+                            className="grid size-6 place-items-center rounded-full text-muted transition-colors duration-150 ease-out-quart hover:bg-danger-soft hover:text-danger"
+                          >
+                            <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
+                              <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                            </svg>
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>

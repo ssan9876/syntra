@@ -3,11 +3,14 @@ import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser } from '../directory/user-service.js';
 import { createOrgUnit } from '../directory/org-unit-service.js';
-import { ALL_PERMISSIONS, PERMISSIONS } from './permissions.js';
+import { OWNER_PERMISSIONS, PERMISSIONS } from './permissions.js';
 import {
+  assertMayChangeRoleHolders,
   assignRole,
   countHoldersOf,
+  createBuiltInRoles,
   createRole,
+  isOwner,
   deleteRole,
   hasPermission,
   isAdministrator,
@@ -309,7 +312,7 @@ describe('deleting a role', () => {
   it('refuses a built-in role', async () => {
     await expect(
       withTenant(tenantId, async (tx) => {
-        const role = await createRole(tx, 'Owner', ALL_PERMISSIONS, { builtIn: true });
+        const role = await createRole(tx, 'Owner', OWNER_PERMISSIONS, { builtIn: true });
         await deleteRole(tx, role.id);
       }),
     ).rejects.toThrow(/built-in/);
@@ -361,5 +364,78 @@ describe('countHoldersOf', () => {
       return countHoldersOf(tx, PERMISSIONS.RBAC_MANAGE);
     });
     expect(count).toBe(0);
+  });
+});
+
+describe('the Data deletion role', () => {
+  it('is created beside Owner, which does not hold person.purge', async () => {
+    const { owner, dataDeletion } = await withTenant(tenantId, (tx) => createBuiltInRoles(tx));
+    expect(owner.systemKey).toBe('owner');
+    expect(owner.permissions).not.toContain(PERMISSIONS.PERSON_PURGE);
+    expect(dataDeletion).toMatchObject({
+      name: 'Data deletion',
+      systemKey: 'data-deletion',
+      builtIn: true,
+      permissions: [PERMISSIONS.PERSON_PURGE],
+      description: 'Permanently delete people from Syntra.',
+    });
+  });
+
+  it('person.purge cannot be put on any other role', async () => {
+    await expect(
+      withTenant(tenantId, (tx) => createRole(tx, 'Purger', [PERMISSIONS.PERSON_PURGE])),
+    ).rejects.toMatchObject({ code: 'restricted-permission' });
+
+    const { owner } = await withTenant(tenantId, (tx) => createBuiltInRoles(tx));
+    await expect(
+      withTenant(tenantId, (tx) =>
+        updateRole(tx, owner.id, { permissions: [...owner.permissions, PERMISSIONS.PERSON_PURGE] }),
+      ),
+    ).rejects.toMatchObject({ code: 'restricted-permission' });
+  });
+
+  it('its permissions cannot be edited, its name can, and it cannot be deleted', async () => {
+    const { dataDeletion } = await withTenant(tenantId, (tx) => createBuiltInRoles(tx));
+    await expect(
+      withTenant(tenantId, (tx) =>
+        updateRole(tx, dataDeletion.id, { permissions: [PERMISSIONS.PERSON_PURGE, PERMISSIONS.AUDIT_READ] }),
+      ),
+    ).rejects.toMatchObject({ code: 'system-role-permissions' });
+    await withTenant(tenantId, (tx) =>
+      updateRole(tx, dataDeletion.id, { description: 'Erasure team', permissions: [PERMISSIONS.PERSON_PURGE] }),
+    );
+    await expect(withTenant(tenantId, (tx) => deleteRole(tx, dataDeletion.id))).rejects.toMatchObject({
+      code: 'built-in-role',
+    });
+  });
+
+  it('only a tenant-wide Owner may grant or remove it', async () => {
+    const { owner, dataDeletion } = await withTenant(tenantId, (tx) => createBuiltInRoles(tx));
+    const { admin, scoped } = await withTenant(tenantId, async (tx) => {
+      const admin = await createUser(tx, { login: 'rbac', email: 'rbac@acme.test', displayName: 'R' });
+      const rbac = await createRole(tx, 'Role admin', [PERMISSIONS.RBAC_MANAGE]);
+      await assignRole(tx, admin.id, rbac.id);
+      const scoped = await createUser(tx, { login: 'scoped', email: 'scoped@acme.test', displayName: 'S' });
+      const unit = await createOrgUnit(tx, 'Cardiology');
+      await assignRole(tx, scoped.id, owner.id, unit.id);
+      await assignRole(tx, userId, owner.id);
+      return { admin, scoped };
+    });
+
+    await withTenant(tenantId, async (tx) => {
+      expect(await isOwner(tx, userId)).toBe(true);
+      expect(await isOwner(tx, scoped.id)).toBe(false);
+      expect(await isOwner(tx, admin.id)).toBe(false);
+
+      await assertMayChangeRoleHolders(tx, userId, dataDeletion.id);
+      await expect(assertMayChangeRoleHolders(tx, admin.id, dataDeletion.id)).rejects.toMatchObject({
+        code: 'owner-only',
+      });
+      await expect(assertMayChangeRoleHolders(tx, scoped.id, dataDeletion.id)).rejects.toMatchObject({
+        code: 'owner-only',
+      });
+      // Any other role: no Owner needed.
+      await assertMayChangeRoleHolders(tx, admin.id, owner.id);
+    });
   });
 });

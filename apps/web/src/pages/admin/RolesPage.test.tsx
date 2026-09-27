@@ -623,3 +623,75 @@ describe('role presets', () => {
     await waitFor(() => expect(sent).toEqual(['/api/admin/roles/presets/auditor']));
   });
 });
+
+describe('the Data deletion role', () => {
+  const dataDeletion = {
+    id: 'r9',
+    name: 'Data deletion',
+    description: 'Permanently delete people from Syntra.',
+    permissions: ['person.purge'],
+    builtIn: true,
+    systemKey: 'data-deletion',
+    assignmentCount: 1,
+    holders: [{ userId: 'u1', login: 'jdoe', displayName: 'Jane Doe', status: 'active', scopeOrgUnitId: null }],
+  };
+
+  function mockRoles(viewerIsOwner: boolean) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input);
+      if (url.includes('/roles/presets')) return Promise.resolve(json({ presets: [] }));
+      if (url.includes('/api/admin/roles')) {
+        return Promise.resolve(
+          json({
+            catalog: [...CATALOG, 'person.purge'],
+            restricted: ['person.purge'],
+            viewerIsOwner,
+            roles: [...roles.map((r) => ({ ...r, systemKey: 'owner' })), dataDeletion],
+          }),
+        );
+      }
+      if (url.includes('/api/admin/users')) return Promise.resolve(json({ users: USERS }));
+      return Promise.resolve(json({}));
+    });
+  }
+
+  const renderAt = (roleId: string) =>
+    render(
+      <MemoryRouter initialEntries={[`/admin/roles?role=${roleId}`]}>
+        <RolesPage />
+      </MemoryRouter>,
+    );
+
+  it('shows as built in, with no Edit and no Delete', async () => {
+    mockRoles(true);
+    renderAt('r9');
+    const heading = await screen.findByRole('heading', { name: /Data deletion/ });
+    expect(within(heading).getByText('built in')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
+
+  it('offers granting and revoking to an Owner', async () => {
+    mockRoles(true);
+    renderAt('r9');
+    expect(await screen.findByRole('button', { name: 'Grant role' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke jdoe' })).toBeInTheDocument();
+  });
+
+  it('offers neither to anybody else', async () => {
+    mockRoles(false);
+    renderAt('r9');
+    expect(await screen.findByText('Only an Owner can grant this role')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Grant role' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke jdoe' })).toBeNull();
+  });
+
+  it('never offers person.purge as a checkbox on another role', async () => {
+    const user = userEvent.setup();
+    mockRoles(true);
+    renderAt('r1');
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('checkbox', { name: 'person.purge' })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'rbac.manage' })).toBeInTheDocument();
+  });
+});

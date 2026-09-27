@@ -2,8 +2,19 @@ import type { TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { issueApiToken } from '../auth/api-token-service.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
-import { RoleRefusedError, assignRole, countHoldersOf, updateRole } from '../rbac/rbac-service.js';
-import { privilegedPermissionsIn, revisionOf, type PrivilegedChangeHandler } from './change-control.js';
+import {
+  RoleRefusedError,
+  assertMayChangeRoleHolders,
+  assignRole,
+  countHoldersOf,
+  updateRole,
+} from '../rbac/rbac-service.js';
+import {
+  ChangeRequestRefusedError,
+  privilegedPermissionsIn,
+  revisionOf,
+  type PrivilegedChangeHandler,
+} from './change-control.js';
 
 /**
  * The change classes whose proposals core can apply on its own: privileged
@@ -96,6 +107,14 @@ export const roleAssignHandler: PrivilegedChangeHandler = {
   revision: (tx, proposed) => roleAssignRevision(tx, proposed as RoleAssignProposal),
   async apply(tx, raw, context) {
     const proposed = raw as RoleAssignProposal;
+    // The Data deletion role needs an Owner on BOTH sides: the route refused a
+    // non-Owner requester, and this refuses a non-Owner approver.
+    try {
+      await assertMayChangeRoleHolders(tx, context.actorUserId, proposed.roleId);
+    } catch (cause) {
+      if (cause instanceof RoleRefusedError) throw new ChangeRequestRefusedError('forbidden', cause.message);
+      throw cause;
+    }
     await assignRole(tx, proposed.userId, proposed.roleId, proposed.scopeOrgUnitId ?? undefined);
     await recordEvent(tx, {
       actorUserId: context.actorUserId,

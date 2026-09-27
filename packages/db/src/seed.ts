@@ -11,7 +11,6 @@ import { prisma } from './client.js';
 import { withTenant } from './with-tenant.js';
 import { seedMarkerFound } from './seed-guard.js';
 import {
-  ALL_PERMISSIONS,
   addRule,
   ensureActiveKey,
   localMasterKeyProvider,
@@ -23,7 +22,7 @@ import {
   createGroup,
   createOrgUnit,
   createPerson,
-  createRole,
+  createBuiltInRoles,
   createUser,
   addMember,
   hashPassword,
@@ -108,10 +107,9 @@ await withTenant(tenant.id, async (tx) => {
   });
   await setPasswordHash(tx, owner.id, adminHash);
 
-  const ownerRole = await createRole(tx, 'Owner', ALL_PERMISSIONS, {
-    builtIn: true,
-    description: 'Full administrative access to this tenant.',
-  });
+  // Owner holds everything but the restricted permissions; Data deletion
+  // (`person.purge`) starts with no holder and only an Owner can assign it.
+  const { owner: ownerRole } = await createBuiltInRoles(tx);
   await assignRole(tx, owner.id, ownerRole.id);
 
   const nurse = await createUser(tx, {

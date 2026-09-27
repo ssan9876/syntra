@@ -112,15 +112,21 @@ describe('bootstrapTenant', () => {
       expect(users[0]!.login).toBe('admin');
       expect(users[0]!.email).toBe('admin@northwind.example');
 
-      const roles = await tx.role.findMany();
-      expect(roles).toHaveLength(1);
-      expect(roles[0]!.builtIn).toBe(true);
-      expect(roles[0]!.permissions.length).toBeGreaterThan(0);
+      // Owner, held by the admin; Data deletion, held by nobody.
+      const roles = await tx.role.findMany({ orderBy: { name: 'asc' } });
+      expect(roles.map((r) => [r.name, r.systemKey, r.builtIn])).toEqual([
+        ['Data deletion', 'data-deletion', true],
+        ['Owner', 'owner', true],
+      ]);
+      const owner = roles.find((r) => r.systemKey === 'owner')!;
+      expect(owner.permissions.length).toBeGreaterThan(0);
+      expect(owner.permissions).not.toContain('person.purge');
+      expect(roles.find((r) => r.systemKey === 'data-deletion')!.permissions).toEqual(['person.purge']);
 
       const assignments = await tx.roleAssignment.findMany();
       expect(assignments).toHaveLength(1);
       expect(assignments[0]!.userId).toBe(users[0]!.id);
-      expect(assignments[0]!.roleId).toBe(roles[0]!.id);
+      expect(assignments[0]!.roleId).toBe(owner.id);
 
       // Nothing beyond the one admin: no demo groups, org units, people,
       // applications -- unlike seed.ts, this is deliberately empty.
@@ -152,7 +158,7 @@ describe('bootstrapTenant', () => {
 
     await withTenant(tenant.id, async (tx) => {
       expect(await tx.user.count()).toBe(1);
-      expect(await tx.role.count()).toBe(1);
+      expect(await tx.role.count()).toBe(2);
       expect(await tx.roleAssignment.count()).toBe(1);
     });
   });

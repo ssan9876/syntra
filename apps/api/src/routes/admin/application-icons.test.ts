@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignApplication,
   assignRole,
@@ -63,7 +63,7 @@ beforeEach(async () => {
   await withTenant(ctx.tenantId, async (tx) => {
     const admin = await createUser(tx, { login: 'admin', email: 'admin@acme.test', displayName: 'Ada' });
     await setPasswordHash(tx, admin.id, PASSWORD_HASH);
-    await assignRole(tx, admin.id, (await createRole(tx, 'Owner', ALL_PERMISSIONS)).id);
+    await assignRole(tx, admin.id, (await createRole(tx, 'Owner', OWNER_PERMISSIONS)).id);
 
     const reader = await createUser(tx, { login: 'reader', email: 'reader@acme.test', displayName: 'Rea' });
     await setPasswordHash(tx, reader.id, PASSWORD_HASH);

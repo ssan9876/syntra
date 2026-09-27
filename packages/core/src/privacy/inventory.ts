@@ -479,6 +479,7 @@ const RAW = {
     description: 'none',
     permissions: 'none',
     builtIn: 'none',
+    systemKey: 'none',
   }),
   RoleAssignment: table('directory', {
     id: 'identity',

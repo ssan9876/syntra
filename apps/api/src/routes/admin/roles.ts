@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   idParam,
   patchRoleBody,
@@ -10,8 +10,11 @@ import {
 import {
   ALL_PERMISSIONS,
   PERMISSIONS,
+  RESTRICTED_PERMISSIONS,
   RoleRefusedError,
+  assertMayChangeRoleHolders,
   assertPermissionNames,
+  assertRolePermissionChange,
   assignRole,
   countHoldersOf,
   createRole,
@@ -19,6 +22,7 @@ import {
   ROLE_PRESETS,
   deleteRole,
   isChangeClassHeld,
+  isOwner,
   listRolesWithAssignmentCounts,
   privilegedPermissionsIn,
   recordEvent,
@@ -78,10 +82,43 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
   /** Domain refusals become 4xx problems carrying their code. */
   const asProblem = (cause: unknown): never => {
     if (cause instanceof RoleRefusedError) {
-      const status = cause.code === 'unknown-permission' ? 422 : 409;
+      const status =
+        cause.code === 'unknown-permission' || cause.code === 'restricted-permission' ? 422
+          : cause.code === 'owner-only' ? 403
+            : 409;
       throw new ProblemError(status, cause.code, 'Cannot be saved', cause.message);
     }
     throw cause;
+  };
+
+  /**
+   * The Owner-only rule for the Data deletion role. A refusal is audited in
+   * the same transaction (which then commits) and returned for the caller to
+   * throw once it has.
+   */
+  const ownerOnlyRefusal = async (
+    tx: Parameters<typeof countHoldersOf>[0],
+    request: FastifyRequest,
+    roleId: string,
+    userId: string,
+    action: 'rbac.role_assigned' | 'rbac.role_revoked',
+  ): Promise<RoleRefusedError | null> => {
+    try {
+      await assertMayChangeRoleHolders(tx, request.session.userId, roleId);
+      return null;
+    } catch (cause) {
+      if (!(cause instanceof RoleRefusedError)) throw cause;
+      await recordEvent(tx, {
+        actorUserId: request.session.userId,
+        action,
+        targetType: 'User',
+        targetId: userId,
+        outcome: 'failure',
+        sourceIp: request.ip,
+        payload: { roleId, reason: 'owner_only' },
+      });
+      return cause;
+    }
   };
 
   app.get(
@@ -132,7 +169,13 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       // hard-coded copy in the web bundle is the second definition this
       // module exists to avoid.
       catalog: [...ALL_PERMISSIONS],
-      roles: await request.db((tx) => listRolesWithAssignmentCounts(tx)),
+      // Shown, never offered as a checkbox: only the Data deletion role holds them.
+      restricted: [...RESTRICTED_PERMISSIONS],
+      ...(await request.db(async (tx) => ({
+        roles: await listRolesWithAssignmentCounts(tx),
+        // Whether this caller may grant or remove the Data deletion role.
+        viewerIsOwner: await isOwner(tx, request.session.userId),
+      }))),
     }),
   );
 
@@ -180,6 +223,15 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
           // next -- so where the tenant holds privileged role grants for a
           // second administrator, it is held too. Otherwise assigning a
           // harmless role and then widening it would walk round the hold.
+          // The restricted-permission rules first, so a change that can never
+          // be applied is refused now rather than held for an approver.
+          if (body.permissions !== undefined) {
+            const current = await tx.role.findUnique({
+              where: { id },
+              select: { name: true, systemKey: true, permissions: true },
+            });
+            if (current) assertRolePermissionChange(current, body.permissions);
+          }
           if (body.permissions !== undefined && (await isChangeClassHeld(tx, 'role_grant'))) {
             const role = await tx.role.findUnique({ where: { id }, select: { name: true, permissions: true } });
             if (!role) throw new ProblemError(404, 'not-found', 'Role not found');
@@ -270,6 +322,10 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
         });
         if (!user) throw new ProblemError(404, 'not-found', 'User not found');
 
+        // Data deletion is granted by an Owner only, held or not.
+        const refused = await ownerOnlyRefusal(tx, request, id, body.userId, 'rbac.role_assigned');
+        if (refused) return refused;
+
         // SEPARATION OF DUTIES: a role carrying a privileged permission is
         // granted by a second administrator where the tenant says so.
         if ((await isChangeClassHeld(tx, 'role_grant')) && (await roleIsPrivileged(tx, id))) {
@@ -299,6 +355,7 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
         });
         return null;
       });
+      if (held instanceof RoleRefusedError) return asProblem(held);
       if (held) return heldReply(reply, held);
       return reply.status(204).send();
     },
@@ -319,7 +376,9 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
       // argument since it was written; only this layer never passed it.
       const { scopeOrgUnitId } = roleAssignmentQuery.parse(request.query);
       try {
-        await request.db(async (tx) => {
+        const refused = await request.db(async (tx) => {
+          const ownerOnly = await ownerOnlyRefusal(tx, request, id, userId, 'rbac.role_revoked');
+          if (ownerOnly) return ownerOnly;
           // Nothing held -- including another tenant's role or user, which
           // RLS hides -- is still a 204 (the removal is idempotent), but it
           // is not an event. It was recorded as `rbac.role_revoked`, success,
@@ -343,7 +402,9 @@ export async function registerAdminRoleRoutes(app: FastifyInstance): Promise<voi
             // leaves the log unable to say which happened.
             payload: { roleId: id, scopeOrgUnitId: scopeOrgUnitId ?? null },
           });
+          return null;
         });
+        if (refused) throw refused;
       } catch (cause) {
         asProblem(cause);
       }

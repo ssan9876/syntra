@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   assignRole,
   createRole,
   createUser,
@@ -110,7 +110,7 @@ beforeAll(async () => {
     const user = await createUser(tx, { login: 'prober', email: 'prober@acme.test', displayName: 'Prober' });
     await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
     await setPasswordHash(tx, user.id, hash);
-    const role = await createRole(tx, 'Everything', ALL_PERMISSIONS);
+    const role = await createRole(tx, 'Everything', OWNER_PERMISSIONS);
     await assignRole(tx, user.id, role.id);
     const issued = await issueApiToken(tx, { userId: user.id, name: 'probe', scopes: [], expiresAt: null, createdBy: user.id });
     return issued.token;

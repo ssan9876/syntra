@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createGroup,
@@ -132,7 +132,7 @@ describe('a deactivated user and a session already in flight', () => {
     );
 
   it('refuses a privileged write the moment the administrator is deactivated', async () => {
-    const admin = await seedAdmin([...ALL_PERMISSIONS]);
+    const admin = await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await authCookie('admin');
 
     // The session works, and it can write.
@@ -173,7 +173,7 @@ describe('a deactivated user and a session already in flight', () => {
   });
 
   it('refuses a session that predates the revoking deactivation', async () => {
-    const admin = await seedAdmin([...ALL_PERMISSIONS]);
+    const admin = await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await authCookie('admin');
     expect((await get('/api/admin/users', cookie)).statusCode).toBe(200);
 

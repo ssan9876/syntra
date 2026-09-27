@@ -647,10 +647,15 @@ model Role {
   description String?
   permissions String[]
   builtIn     Boolean  @default(false)
+  /// Stable identity of a role the product installs: 'owner' | 'data-deletion'.
+  /// Null for every role an administrator created. Rules key on this, never on
+  /// the name, which can be edited.
+  systemKey   String?
 
   assignments RoleAssignment[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, systemKey])
   @@index([tenantId])
 }
 

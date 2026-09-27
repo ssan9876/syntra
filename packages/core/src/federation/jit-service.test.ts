@@ -4,7 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { createUser, deactivateUser } from '../directory/user-service.js';
 import { hashPassword, setPasswordHash } from '../auth/password.js';
 import { assignRole, createRole } from '../rbac/rbac-service.js';
-import { ALL_PERMISSIONS } from '../rbac/permissions.js';
+import { OWNER_PERMISSIONS } from '../rbac/permissions.js';
 import { upsertUpstream } from './upstream-service.js';
 import { linkOrProvision, mapClaims } from './jit-service.js';
 import { localMasterKeyProvider } from '../vault/master-key.js';
@@ -213,7 +213,7 @@ describe('linkOrProvision', () => {
         email: 'x@acme.test',
         displayName: 'Old',
       });
-      const role = await createRole(tx, 'Owner', [...ALL_PERMISSIONS]);
+      const role = await createRole(tx, 'Owner', [...OWNER_PERMISSIONS]);
       await assignRole(tx, user.id, role.id);
     });
 

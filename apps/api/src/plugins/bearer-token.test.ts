@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createRole,
@@ -134,7 +134,7 @@ describe('the routes a token cannot reach', () => {
   it('refuses elevation, whatever the token holds', async () => {
     // A token that could elevate would be a token that could mint a session,
     // which is a credential upgrade.
-    const { token } = await serviceAccount([...ALL_PERMISSIONS]);
+    const { token } = await serviceAccount([...OWNER_PERMISSIONS]);
 
     const res = await call('POST', '/api/auth/elevate', token, { password: PASSWORD });
 
@@ -145,7 +145,7 @@ describe('the routes a token cannot reach', () => {
   it('refuses setting a person\'s password', async () => {
     // Handing a program the ability to set a human's credential is a
     // different authority from managing the directory.
-    const { token } = await serviceAccount([...ALL_PERMISSIONS]);
+    const { token } = await serviceAccount([...OWNER_PERMISSIONS]);
     const victim = await withTenant(ctx.tenantId, (tx) =>
       createUser(tx, { login: 'ada', email: 'ada@acme.test', displayName: 'Ada' }),
     );
@@ -159,14 +159,14 @@ describe('the routes a token cannot reach', () => {
   });
 
   it('refuses the portal', async () => {
-    const { token } = await serviceAccount([...ALL_PERMISSIONS]);
+    const { token } = await serviceAccount([...OWNER_PERMISSIONS]);
 
     expect((await call('GET', '/api/portal/applications', token)).statusCode).toBe(403);
   });
 
   it('refuses with 403 and never 401, because the credential was fine', async () => {
     // 401 would send an integrator to check a token that is perfectly good.
-    const { token } = await serviceAccount([...ALL_PERMISSIONS]);
+    const { token } = await serviceAccount([...OWNER_PERMISSIONS]);
 
     const res = await call('POST', '/api/auth/elevate', token, { password: PASSWORD });
 
@@ -193,7 +193,7 @@ describe('a cookie beats a header', () => {
       payload: { login: 'person', password: PASSWORD },
     });
     const cookie = login.cookies.find((c) => c.name === 'syntra_session')!.value;
-    const { token } = await serviceAccount([...ALL_PERMISSIONS]);
+    const { token } = await serviceAccount([...OWNER_PERMISSIONS]);
 
     // The person holds no permissions; the token holds all of them. If the
     // header won, this would be a 200.

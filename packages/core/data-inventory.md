@@ -2413,7 +2413,7 @@ Not personal data: `id`, `tenantId`, `resourceType`, `resourceId`, `ownerGroupId
 
 #### `Role`
 
-No personal data. Columns: `id`, `tenantId`, `name`, `description`, `permissions`, `builtIn`.
+No personal data. Columns: `id`, `tenantId`, `name`, `description`, `permissions`, `builtIn`, `systemKey`.
 
 #### `RuleEntitlement`
 

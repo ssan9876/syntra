@@ -95,6 +95,7 @@ export const PRIVILEGED_PERMISSIONS: readonly Permission[] = [
   PERMISSIONS.SECRETS_WRITE,
   PERMISSIONS.DEPLOYMENT_MANAGE,
   PERMISSIONS.ACCESS_MANAGE,
+  PERMISSIONS.PERSON_PURGE,
 ];
 
 export function privilegedPermissionsIn(permissions: readonly string[]): string[] {

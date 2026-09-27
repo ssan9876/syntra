@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   assignRole,
   createGroup,
   createOrgUnit,
@@ -52,7 +52,7 @@ beforeEach(async () => {
       displayName: 'Admin',
     });
     await setPasswordHash(tx, admin.id, PASSWORD_HASH);
-    const role = await createRole(tx, 'Everything', [...ALL_PERMISSIONS]);
+    const role = await createRole(tx, 'Everything', [...OWNER_PERMISSIONS]);
     await assignRole(tx, admin.id, role.id);
   });
 

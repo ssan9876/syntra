@@ -18542,6 +18542,84 @@
             "$ref": "#/components/responses/Problem"
           }
         }
+      },
+      "delete": {
+        "operationId": "deletePersonsById",
+        "tags": [
+          "Persons"
+        ],
+        "summary": "Delete a person permanently",
+        "description": "Requires `person.purge`, held only through the built-in Data deletion role. Deletes the person with their contracts, placements, provision receipts, source links, lifecycle operations, duplicate reviews, closed privacy cases, provision exceptions and target account records. Accounts in target systems are not touched. Linked user accounts are unlinked and deactivated, not deleted. `confirm` must be the person's full name (`400 confirm-mismatch` otherwise); `reason` needs at least 10 characters. Answers `409 person-active` for an active person and `409 open-privacy-case` while a privacy case is open. Needs a console session elevated within the step-up window (`403 step-up-required` otherwise); API tokens are refused.\n\nRequires `person.purge`. API tokens are refused here (`403 token-not-accepted`); sign in as a person.",
+        "x-syntra-permission": [
+          "person.purge"
+        ],
+        "x-syntra-token-allowed": false,
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 1000
+                  },
+                  "confirm": {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                },
+                "required": [
+                  "reason",
+                  "confirm"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
       }
     },
     "/api/admin/persons/{id}/access": {
@@ -22010,7 +22088,7 @@
           "Roles"
         ],
         "summary": "List roles with their assignment counts and the permission catalog",
-        "description": "Requires `rbac.manage`.",
+        "description": "`restricted` lists the permissions only the built-in Data deletion role holds (`person.purge`). `viewerIsOwner` says whether the caller may grant or remove that role.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -22144,7 +22222,7 @@
           "Roles"
         ],
         "summary": "Update a role",
-        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`. Adding a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
+        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`, `422 restricted-permission` for `person.purge` on any role but Data deletion, and `409 system-role-permissions` for a change to the permissions of the Data deletion role. Adding a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -22293,7 +22371,7 @@
           "Roles"
         ],
         "summary": "Assign a role to a user",
-        "description": "Assigning a role that carries a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
+        "description": "Only a tenant-wide Owner may assign the Data deletion role (`403 owner-only`). Assigning a role that carries a privileged permission is a privileged role grant. Where the tenant holds this change class for a second administrator (Change control), the change is not applied: the answer is `202` with the stored change request, given a reason in the `X-Syntra-Change-Reason` header, or `409 change-approval-required` without one.\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],
@@ -22384,7 +22462,7 @@
           "Roles"
         ],
         "summary": "Revoke a role from a user",
-        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`.\n\nRequires `rbac.manage`.",
+        "description": "Refused with `would-strand-rbac` if nobody would be left holding `rbac.manage`. Only a tenant-wide Owner may remove the Data deletion role (`403 owner-only`).\n\nRequires `rbac.manage`.",
         "x-syntra-permission": [
           "rbac.manage"
         ],

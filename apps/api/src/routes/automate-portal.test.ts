@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   assignRole,
   createProduct,
   createRole,
@@ -551,7 +551,7 @@ describe('delegated tasks', () => {
     const task = await seedTask();
     const boId = await userIdFor('bo');
     await withTenant(ctx.tenantId, async (tx) => {
-      const role = await createRole(tx, 'Privileged', ALL_PERMISSIONS);
+      const role = await createRole(tx, 'Privileged', OWNER_PERMISSIONS);
       await assignRole(tx, boId, role.id);
     });
 
@@ -568,7 +568,7 @@ describe('delegated tasks', () => {
     const task = await seedTask();
     const boId = await userIdFor('bo');
     await withTenant(ctx.tenantId, async (tx) => {
-      const role = await createRole(tx, 'Privileged', ALL_PERMISSIONS);
+      const role = await createRole(tx, 'Privileged', OWNER_PERMISSIONS);
       await assignRole(tx, boId, role.id);
     });
 
