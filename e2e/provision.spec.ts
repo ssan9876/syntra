@@ -385,7 +385,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // not poll. On a loaded runner the click lands on a run still `running`,
   // whose detail shows no verdict at all and never will without a reload.
   // That is what failed the v1.9.0 release: a race, not a regression.
-  const blocked = page.getByText('This run is blocked');
+  const blocked = page.getByText('Run blocked');
   await expect(async () => {
     if ((await blocked.count()) === 0) {
       await page.reload();

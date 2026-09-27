@@ -310,7 +310,7 @@ test('a directory source is created, tested, mapped, run, partly applied and ski
   // screen is the only place those records are visible at all -- so their
   // absence is what says nothing was silently dropped.
   await expect(page.getByText(/could not be mapped/i)).toHaveCount(0);
-  await expect(page.getByText(/could not be resolved/i)).toHaveCount(0);
+  await expect(page.getByText('Group members not synced')).toHaveCount(0);
 
   // Skip one proposed change outright. It is recorded as skipped on the run
   // and never applied.

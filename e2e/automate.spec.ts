@@ -470,7 +470,7 @@ test('a team lead adds a member from the portal with no administrative session',
   const panel = page.locator('section').filter({ hasText: fixture.wardGroupId });
   await expect(panel).toBeVisible();
 
-  await panel.getByLabel(/add somebody/i).fill(fixture.approverPersonId);
+  await panel.getByLabel('Person ID').fill(fixture.approverPersonId);
   await panel.getByRole('button', { name: 'Add' }).click();
 
   // The grant landed and the list re-read it.
@@ -508,7 +508,7 @@ test('a team lead adds a member from the portal with no administrative session',
 test('a blocked sweep is reviewed and confirmed', async ({ page }) => {
   await signIn(page, 'admin', ADMIN!);
   await elevateTo(page, '/admin/automate/sweeps');
-  await page.getByRole('button', { name: /run a preview now/i }).click();
+  await page.getByRole('button', { name: /^Run preview$/ }).click();
 
   // Scoped to the LIST, not `getByRole('link').first()` — which picks up the
   // console's own navigation and walks off to another page entirely, then
@@ -522,6 +522,6 @@ test('a blocked sweep is reviewed and confirmed', async ({ page }) => {
   await expect(page.getByText('Sweep stopped')).toBeVisible();
   await expect(page.getByText(/threshold 10%/)).toBeVisible();
 
-  await page.getByRole('button', { name: /apply the ticked rows/i }).click();
+  await page.getByRole('button', { name: 'Apply selected' }).click();
   await expect(page.getByText(/applied/i).first()).toBeVisible();
 });
