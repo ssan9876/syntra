@@ -544,6 +544,7 @@ export async function executeTenantDeletion(
     withTenant(tenantId, async (tx) => {
       // Bounded, so an erasure waiting on a lock it cannot get fails with a
       // clear error rather than holding the tenant's exclusive lock forever.
+      // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
       await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '30s'`);
       const request = await tx.tenantDeletionRequest.findFirst({ where: { id: requestId } });
       if (!request) return refuse('not-found', 'Deletion request not found');
@@ -578,13 +579,16 @@ export async function executeTenantDeletion(
       // even when no child row exists. ALTER TABLE holds its lock until
       // commit either way, so a narrower window would buy nothing.
       for (const [table, rule] of Object.entries(APPEND_ONLY_ERASED)) {
+        // eslint-disable-next-line no-restricted-syntax -- table and rule names from the APPEND_ONLY_ERASED constant
         await tx.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE RULE ${rule}`);
       }
       for (const table of order) {
+        // eslint-disable-next-line no-restricted-syntax -- table names read from pg_catalog by erasureOrder; the tenant id is bound as $1
         const count = await tx.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "tenantId" = $1::uuid`, tenantId);
         if (count > 0) rowsDeleted[table] = count;
       }
       for (const [table, rule] of Object.entries(APPEND_ONLY_ERASED)) {
+        // eslint-disable-next-line no-restricted-syntax -- table and rule names from the APPEND_ONLY_ERASED constant
         await tx.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE RULE ${rule}`);
       }
       const priorRequests = await tx.tenantDeletionRequest.deleteMany({ where: { id: { not: requestId } } });

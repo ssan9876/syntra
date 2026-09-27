@@ -173,6 +173,7 @@ export type QueueInspector = (tenantId: string | null, failedSince: Date) => Pro
 
 export const pgBossInspector: QueueInspector = async (tenantId, failedSince) => {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement; the since-date and tenant id are bound as $1 and $2
     const rows = await prisma.$queryRawUnsafe<QueueGroup[]>(
       `select name,
               state::text as state,

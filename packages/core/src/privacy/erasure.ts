@@ -220,6 +220,7 @@ async function pseudonymizeRows(tx: TenantClient, entry: TableEntry, rowIds: str
     .filter((f) => f.treatment !== null)
     .map((f) => assignment(entry.model, f.name, f.treatment!, params, columns));
   const sql = `UPDATE ${quoteIdent(entry.model)} SET ${sets.join(', ')} WHERE "id" = ANY($1::uuid[])`;
+  // eslint-disable-next-line no-restricted-syntax -- identifiers come from the Prisma schema through quoteIdent; every value is a bound parameter
   return tx.$executeRawUnsafe(sql, ...params);
 }
 

@@ -75,6 +75,7 @@ export interface MetricsSnapshot {
  */
 async function pendingJobs(): Promise<number | null> {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     const rows = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
       `select count(*)::bigint as count from pgboss.job where state in ('created', 'retry')`,
     );

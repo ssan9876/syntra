@@ -76,6 +76,7 @@ async function within<T>(ms: number, work: () => Promise<T>): Promise<T> {
 
 async function queueReadable(): Promise<boolean> {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     await prisma.$queryRawUnsafe('select 1 from pgboss.job limit 1');
     return true;
   } catch {
@@ -93,6 +94,7 @@ export async function componentHealth(deps: StatusDeps): Promise<StatusComponent
 
   let databaseUp = false;
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     await within(ms, () => prisma.$queryRawUnsafe('SELECT 1'));
     databaseUp = true;
     const state = await within(ms, () => migrationState());
@@ -391,6 +393,7 @@ export async function deploymentStatus(deps: DeploymentStatusDeps, now: Date = n
 
   let pending: number | null;
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     const rows = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
       `select count(*)::bigint as count from pgboss.job where state in ('created', 'retry')`,
     );

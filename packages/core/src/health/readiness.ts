@@ -112,6 +112,7 @@ async function withTimeout(
  */
 async function probeDatabase(): Promise<Probe> {
   try {
+    // eslint-disable-next-line no-restricted-syntax -- a fixed statement, no interpolation
     await prisma.$queryRawUnsafe('SELECT 1');
     return pass('database', 'reachable');
   } catch (cause) {
