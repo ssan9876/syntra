@@ -127,7 +127,7 @@ describe('AccountSessions', () => {
     await userEvent.click(await screen.findByRole('button', { name: /revoke/i }));
 
     await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(/could not end that session/i),
+      expect(screen.getByRole('alert')).toHaveTextContent(/could not (revoke the session|sign out everywhere)/i),
     );
   });
 });

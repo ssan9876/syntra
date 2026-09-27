@@ -81,7 +81,7 @@ export function IncidentsTab() {
                     </p>
                   </div>
                   <Link className="link shrink-0 text-sm" to={run.href}>
-                    Review the run
+                    Review run
                   </Link>
                 </div>
               </li>
@@ -101,7 +101,7 @@ export function IncidentsTab() {
                     </div>
                   </div>
                   <Link className="link shrink-0 text-sm" to={item.href}>
-                    Review and approve
+                    Review
                   </Link>
                 </div>
               </li>
@@ -141,7 +141,7 @@ export function IncidentsTab() {
             <div className="p-6">
               {/* The answer somebody wants most often. A dashboard that
                   manufactures a row to look busy is one people stop reading. */}
-              <Empty title="Nothing is broken" />
+              <Empty title="No incidents" />
             </div>
           )}
 

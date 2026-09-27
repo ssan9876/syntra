@@ -124,7 +124,7 @@ export function GovernCampaignNewPage() {
         }),
       );
     } catch (cause) {
-      report(cause, 'That scope could not be previewed.');
+      report(cause, 'Scope preview failed.');
     }
   };
 
@@ -145,7 +145,7 @@ export function GovernCampaignNewPage() {
         }),
       );
     } catch (cause) {
-      report(cause, 'The reviewers could not be resolved.');
+      report(cause, 'Reviewer preview failed.');
     }
   };
 
@@ -175,7 +175,7 @@ export function GovernCampaignNewPage() {
       // started, so the next screen is the one with the Start button on it.
       navigate(`/admin/govern/campaigns/${created.id}`);
     } catch (cause) {
-      report(cause, 'That campaign could not be created.');
+      report(cause, `Review “${name}” could not be created.`);
     } finally {
       setBusy(false);
     }
@@ -261,7 +261,7 @@ export function GovernCampaignNewPage() {
                 </p>
               )}
               {scopePreview.holdings === 0 && (
-                <Alert tone="warning">Nobody would have anything to review.</Alert>
+                <Alert tone="warning">This scope covers no holdings.</Alert>
               )}
             </div>
           )}
@@ -301,7 +301,7 @@ export function GovernCampaignNewPage() {
                     value={reviewerPreview.viaFallback.toLocaleString()}
                   />
                   <Metric
-                    label="Resolve to nobody"
+                    label="No reviewer"
                     value={reviewerPreview.blocked.toLocaleString()}
                     tone="warning"
                     quietWhenZero
@@ -339,7 +339,7 @@ export function GovernCampaignNewPage() {
 
       <div className="mt-6">
         <Button variant="primary" loading={busy} disabled={!ready} onClick={() => void create()}>
-          Create the campaign
+          Create review
         </Button>
       </div>
     </>

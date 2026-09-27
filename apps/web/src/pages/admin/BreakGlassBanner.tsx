@@ -53,17 +53,17 @@ export function BreakGlassBanner() {
           key={activation.id}
           tone={activation.status === 'active' ? 'danger' : 'warning'}
           title={activation.status === 'active'
-            ? `Emergency access is active for ${activation.displayName ?? 'an emergency account'} until ${when(activation.expiresAt)}`
-            : `Emergency access requested for ${activation.displayName ?? 'an emergency account'}: takes effect ${when(activation.activatesAt)}`}
+            ? `Emergency access active: ${activation.displayName ?? 'emergency account'} until ${when(activation.expiresAt)}`
+            : `Emergency access requested: ${activation.displayName ?? 'emergency account'}, starts ${when(activation.activatesAt)}`}
         >
-          {activation.id === status.viewerActivationId ? 'You are signed in under this activation. ' : ''}
+          {activation.id === status.viewerActivationId ? 'You are signed in with this access. ' : ''}
           Reason: {activation.reason}{' '}
-          <Link className="link" to="/admin/settings?tab=break-glass">Review or end it</Link>
+          <Link className="link" to="/admin/settings?tab=break-glass">Review</Link>
         </Alert>
       ))}
       {status.reviewsDue > 0 ? (
-        <Alert tone="warning" title={`${status.reviewsDue} emergency access review${status.reviewsDue === 1 ? '' : 's'} outstanding`}>
-          <Link className="link" to="/admin/settings?tab=break-glass">Complete the review</Link>
+        <Alert tone="warning" title={`${status.reviewsDue} emergency access review${status.reviewsDue === 1 ? '' : 's'} due`}>
+          <Link className="link" to="/admin/settings?tab=break-glass">Complete review</Link>
         </Alert>
       ) : null}
     </div>

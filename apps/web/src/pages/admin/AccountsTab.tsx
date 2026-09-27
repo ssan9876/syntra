@@ -309,7 +309,7 @@ export function AccountsTab() {
                   error={errs.orgUnitId}
                   warning={
                     chosen && placedIn
-                      ? `${chosen.givenName} ${chosen.familyName} is already placed in ${placedIn} — access only`
+                      ? `${chosen.givenName} ${chosen.familyName} stays placed in ${placedIn}. This unit sets access only.`
                       : undefined
                   }
                   options={[
@@ -354,7 +354,7 @@ export function AccountsTab() {
                 }
                 secondaryAction={
                   <Link to="/admin/users?tab=people" className="link">
-                    Start from a person instead
+                    Add a person
                   </Link>
                 }
               />

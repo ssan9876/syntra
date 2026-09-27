@@ -112,7 +112,7 @@ function CatalogPicker({
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That could not be created.',
+            : `${chosen.name} was not added.`,
       );
     } finally {
       setBusy(false);
@@ -322,14 +322,14 @@ export function ApplicationsPage() {
     } catch (cause) {
       const marked = formFieldErrors(cause);
       if (cause instanceof ApiError && cause.problem.status === 409) {
-        setSlugError('That slug is already used.');
+        setSlugError(`Slug ${slug} is already in use.`);
       } else if (Object.keys(marked).length > 0) {
         setFormFields(marked);
       } else {
         setFormError(
           cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That application could not be saved.',
+            : `${name || 'Application'} was not saved.`,
         );
       }
     } finally {

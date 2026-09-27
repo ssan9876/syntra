@@ -90,8 +90,8 @@ describe('BreakGlassBanner', () => {
       }),
     });
     render(<MemoryRouter><BreakGlassBanner /></MemoryRouter>);
-    expect(await screen.findByText(/Emergency access is active for Emergency/)).toBeVisible();
-    expect(screen.getByText(/1 emergency access review outstanding/)).toBeVisible();
+    expect(await screen.findByText(/Emergency access active: Emergency/)).toBeVisible();
+    expect(screen.getByText(/1 emergency access review due/)).toBeVisible();
   });
 
   it('renders nothing when all is quiet', async () => {

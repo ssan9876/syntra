@@ -59,8 +59,8 @@ const ROUTE_LABEL: Record<string, string> = {
   requires_change_role: 'Cannot be removed: a Syntra role',
   requires_change_directory_source: 'Cannot be removed: a directory source owns it',
   requires_change_direct_assignment: 'Cannot be removed: assigned by hand in Syntra',
-  requires_change_account: 'Cannot be removed: this is an account, not an entitlement',
-  requires_change_syntra_user: 'Cannot be removed: this is a Syntra login',
+  requires_change_account: 'Cannot be removed: an account, not an entitlement',
+  requires_change_syntra_user: 'Cannot be removed: a Syntra login',
 };
 
 const DISPATCHABLE = ['automate_grant', 'revocation_order'];
@@ -100,18 +100,18 @@ export function GovernBatchPage() {
           blocked plan, because an administrator should not have to learn a
           third one. */}
       {blocked && (
-        <Alert tone="danger" title="Blocked — confirming will not unblock it">
+        <Alert tone="danger" title="Blocked">
           {data?.batch.blockedReason}
         </Alert>
       )}
       {data?.batch.requiresConfirmation === true && !blocked && (
-        <Alert tone="warning" title="This batch needs an explicit confirmation">
+        <Alert tone="warning" title="Needs confirmation">
           {data.batch.blockedReason}
         </Alert>
       )}
       {data !== null && data.withheldOutOfScope > 0 && (
         <Alert tone="info">
-          {data.withheldOutOfScope} rows outside your org unit are not listed.
+          {data.withheldOutOfScope} rows outside your org unit are hidden.
         </Alert>
       )}
 
@@ -133,10 +133,10 @@ export function GovernBatchPage() {
               and was deleted with the rest of the prose. Restored as state:
               shown while it is TRUE, and gone the moment it stops being. */}
           {!finished && (
-            <Alert tone="warning">Nothing here has happened yet.</Alert>
+            <Alert tone="warning">Not dispatched. No access has been removed yet.</Alert>
           )}
 
-          <Panel title={`${dispatchable.length} removals Govern can dispatch`}>
+          <Panel title={`${dispatchable.length} removals to dispatch`}>
             <Table stickyHeader label="Removals">
               <thead>
                 <tr>
@@ -164,7 +164,7 @@ export function GovernBatchPage() {
                           size="sm"
                           variant="ghost"
                           onClick={() => {
-                            const reason = window.prompt('Why are you skipping this one?');
+                            const reason = window.prompt('Reason for skipping');
                             if (reason === null || reason.trim() === '') return;
                             void api(`/api/admin/govern/dispatches/${d.id}/skip`, {
                               method: 'POST',
@@ -175,7 +175,7 @@ export function GovernBatchPage() {
                                 toast({ title: 'Row skipped' });
                                 reload();
                               })
-                              .catch(() => setActionError('Could not skip that row.'));
+                              .catch(() => setActionError(`Row for ${d.holdingDescriptor.subjectKey ?? 'unknown person'} could not be skipped.`));
                           }}
                         >
                           Skip
@@ -197,7 +197,7 @@ export function GovernBatchPage() {
               // The title carries "not removed": everything else here is a
               // removal, and a reader who skims would otherwise leave
               // believing these had been dealt with.
-              title={`${requiresChange.length} not removed — require a change elsewhere`}
+              title={`${requiresChange.length} not removed: need a change elsewhere`}
             >
               <ul className="divide-y divide-border-subtle">
                 {requiresChange.map((d) => (
@@ -229,7 +229,7 @@ export function GovernBatchPage() {
               onClick={() => {
                 if (
                   !window.confirm(
-                    `Dispatch ${dispatchable.length} removals? This is irreversible.`,
+                    `Dispatch ${dispatchable.length} removals? This cannot be undone.`,
                   )
                 ) {
                   return;
@@ -251,7 +251,7 @@ export function GovernBatchPage() {
                     setActionError(
                       cause instanceof ApiError
                         ? (cause.problem.detail ?? cause.problem.title)
-                        : 'Could not confirm this batch.',
+                        : 'Batch could not be dispatched.',
                     ),
                   );
               }}
@@ -261,11 +261,11 @@ export function GovernBatchPage() {
           )}
 
           {finished && (
-            <Panel title={`This batch is ${data.batch.status}`} bodyClassName="p-4">
+            <Panel title={`Batch ${data.batch.status.replace(/_/g, ' ')}`} bodyClassName="p-4">
               <MetricRow>
                 <Metric label="Dispatched" value={data.batch.dispatchedCount} />
                 <Metric
-                  label="Require a change elsewhere"
+                  label="Need a change elsewhere"
                   value={data.batch.requiresChangeCount}
                   quietWhenZero
                 />

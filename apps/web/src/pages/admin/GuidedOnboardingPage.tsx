@@ -173,7 +173,7 @@ export function GuidedOnboardingPage() {
       setErrors(fieldErrors(error));
       setProblem(error instanceof ApiError
         ? (error.problem.detail ?? error.problem.title)
-        : error instanceof Error ? error.message : 'Onboarding could not be started.');
+        : error instanceof Error ? error.message : 'Onboarding not started.');
     } finally {
       setBusy(false);
     }
@@ -240,7 +240,7 @@ export function GuidedOnboardingPage() {
             : <StateBadge state={enabled.length > 0 ? 'pending' : 'inactive'}>{`${enabled.length} will receive work`}</StateBadge>}
       >
         {targets.error
-          ? <Alert tone="warning">Targets could not be loaded: {targets.error}</Alert>
+          ? <Alert tone="warning">Targets not loaded: {targets.error}</Alert>
           : enabled.length > 0 && <ul className="flex flex-wrap gap-2 sm:col-span-2" aria-label="Targets receiving work">
             {enabled.map((target) => <li key={target.id} className="rounded-full border border-border-control px-2.5 py-0.5 text-sm text-ink">{target.name}</li>)}
           </ul>}

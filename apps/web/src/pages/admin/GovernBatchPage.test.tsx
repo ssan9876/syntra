@@ -99,14 +99,14 @@ describe('GovernBatchPage', () => {
     // before they press an irreversible button, and a `requires_change` row
     // removes nothing.
     expect(
-      await screen.findByRole('heading', { name: '2 removals Govern can dispatch' }),
+      await screen.findByRole('heading', { name: '2 removals to dispatch' }),
     ).toBeInTheDocument();
 
     const dispatchable = screen.getByRole('table');
     expect(within(dispatchable).queryByText('Cora Clark')).toBeNull();
 
     const changes = screen
-      .getByRole('heading', { name: '1 not removed — require a change elsewhere' })
+      .getByRole('heading', { name: '1 not removed: need a change elsewhere' })
       .closest('section') as HTMLElement;
     expect(within(changes).getByText(/Cora Clark/)).toBeInTheDocument();
     expect(

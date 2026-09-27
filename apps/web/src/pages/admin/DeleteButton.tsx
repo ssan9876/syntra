@@ -90,7 +90,7 @@ export function DeleteButton({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `That ${label} could not be deleted.`,
+          : `${confirmWord} was not deleted.`,
       );
     } finally {
       setBusy(false);
@@ -128,13 +128,13 @@ export function DeleteButton({
     >
       <div>
         <p id={headingId} className="font-semibold text-danger">
-          Delete this {label}?
+          Delete {label} {confirmWord}?
         </p>
         <p className="mt-0.5 text-ink">{warning}</p>
       </div>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <Field
-        label={`To confirm, type ${confirmWord}`}
+        label={`Type ${confirmWord} to confirm`}
         value={typed}
         onChange={setTyped}
         ref={confirmRef}

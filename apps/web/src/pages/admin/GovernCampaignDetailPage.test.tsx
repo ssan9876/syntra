@@ -75,7 +75,7 @@ describe('starting a campaign', () => {
     const sent = mockApi({ status: 'draft' });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Start it' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Start review' }));
 
     await waitFor(() => expect(sent.some((s) => s.url.endsWith('/c-1/start'))).toBe(true));
     expect(await screen.findByText(/12 item\(s\) generated/)).toBeInTheDocument();
@@ -90,15 +90,15 @@ describe('starting a campaign', () => {
     mockApi({ status: 'draft', start: json({ itemCount: 12, blockedCount: 4 }) });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Start it' }));
-    expect(await screen.findByText(/4 resolved to nobody/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Start review' }));
+    expect(await screen.findByText(/4 have no reviewer/)).toBeInTheDocument();
   });
 
   it('does not offer it once the campaign has closed', async () => {
     mockApi({ status: 'closed_complete' });
     renderPage();
     await screen.findByRole('button', { name: 'Re-base' });
-    expect(screen.queryByRole('button', { name: 'Start it' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start review' })).toBeNull();
   });
 
   /** `CampaignRefusedError` carries a real sentence; it has to reach the page. */
@@ -117,7 +117,7 @@ describe('starting a campaign', () => {
     });
     renderPage();
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Start it' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Start review' }));
     expect(await screen.findByText('this scope covers no holdings')).toBeInTheDocument();
   });
 });

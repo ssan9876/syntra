@@ -105,7 +105,7 @@ describe('ExportsTab', () => {
       expect(calls.some((c) => c.method === 'POST' && c.url === '/api/admin/exports/x-1/revoke')).toBe(true),
     );
     await waitFor(() =>
-      expect(screen.getAllByRole('status').some((el) => el.textContent?.includes('file has been erased'))).toBe(true),
+      expect(screen.getAllByRole('status').some((el) => el.textContent?.includes('file erased'))).toBe(true),
     );
   });
 

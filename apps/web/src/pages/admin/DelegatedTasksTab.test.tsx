@@ -83,7 +83,7 @@ describe('DelegatedTasksTab', () => {
   it('says what a task is for when there are none', async () => {
     mockApi();
     renderPage();
-    expect(await screen.findByText(/nothing is delegated yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no tasks yet/i)).toBeInTheDocument();
   });
 
   it('warns when a task admits nobody', async () => {

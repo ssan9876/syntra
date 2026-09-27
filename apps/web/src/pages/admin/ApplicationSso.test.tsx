@@ -141,7 +141,7 @@ describe('ApplicationSso launch address', () => {
     await user.clear(await screen.findByDisplayValue('https://acme.slack.com'));
     await user.click(screen.getByRole('button', { name: /save saml settings/i }));
 
-    expect(await screen.findAllByText(/cannot be removed/i)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/cannot be cleared/i)).not.toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
 });
@@ -271,7 +271,7 @@ describe('ApplicationSso', () => {
     const sent = mockApi({ oidc: oidcClient() });
     renderPanel();
 
-    await user.click(await screen.findByLabelText(/this is a machine, not a person/i));
+    await user.click(await screen.findByLabelText(/machine client/i));
     await user.click(screen.getByRole('button', { name: /save openid connect/i }));
 
     await waitFor(() => expect(sent).toHaveLength(1));
@@ -289,7 +289,7 @@ describe('ApplicationSso', () => {
     renderPanel();
 
     expect(await screen.findByLabelText(/redirect uris/i)).toBeInTheDocument();
-    await user.click(screen.getByLabelText(/this is a machine, not a person/i));
+    await user.click(screen.getByLabelText(/machine client/i));
     expect(screen.queryByLabelText(/redirect uris/i)).toBeNull();
   });
 

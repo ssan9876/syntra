@@ -69,7 +69,7 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
 
 /** "2 items need your attention" */
 export function attentionHeadline(total: number): string {
-  return `${count(total, 'item needs', 'items need')} your attention`;
+  return `${count(total, 'item needs', 'items need')} attention`;
 }
 
 /**
@@ -81,12 +81,12 @@ export function attentionHeadline(total: number): string {
  */
 export function runSentence(item: AttentionRunItem): string {
   const what = item.status === 'blocked'
-    ? item.requiresConfirmation ? 'is held for review' : 'was refused by the safety guard'
-    : 'is waiting to be applied';
+    ? item.requiresConfirmation ? 'held for review' : 'blocked by the safety guard'
+    : 'ready to apply';
   const detail = item.status === 'blocked'
     ? (item.blockedReason?.split('; ')[0] ?? item.summary)
     : (item.planned ?? 'no changes planned');
-  return `A provisioning run on ${item.targetName} ${what} — ${detail}`;
+  return `${item.targetName}: run ${what} — ${detail}`;
 }
 
 const HELD_NOUNS: Record<string, [string, string]> = {
@@ -102,21 +102,21 @@ const HELD_NOUNS: Record<string, [string, string]> = {
 export function heldActionsSentence(item: AttentionHeldActionsItem): string {
   const only = item.actionTypes.length === 1 ? HELD_NOUNS[item.actionTypes[0]!] : undefined;
   const [one, many] = only ?? ['held change', 'held changes'];
-  return `${count(item.count, one, many)} on ${item.targetName} ${item.count === 1 ? 'is' : 'are'} waiting for your approval`;
+  return `${item.targetName}: ${count(item.count, one, many)} waiting for approval`;
 }
 
 /** "1 lifecycle operation failed", "2 onboardings wait for read-back verification". */
 export function lifecycleSentences(section: NonNullable<AttentionSummary['lifecycle']>): string[] {
   const lines: string[] = [];
-  if (section.failed > 0) lines.push(`${count(section.failed, 'lifecycle operation has', 'lifecycle operations have')} failed`);
+  if (section.failed > 0) lines.push(`${count(section.failed, 'lifecycle operation', 'lifecycle operations')} failed`);
   if (section.awaitingVerification > 0) {
-    lines.push(`${count(section.awaitingVerification, 'lifecycle operation is', 'lifecycle operations are')} waiting for the target account to be verified`);
+    lines.push(`${count(section.awaitingVerification, 'lifecycle operation', 'lifecycle operations')} waiting for account verification`);
   }
   return lines;
 }
 
 export function changeRequestSentence(n: number): string {
-  return `${count(n, 'privileged change is', 'privileged changes are')} waiting for a second administrator`;
+  return `${count(n, 'privileged change', 'privileged changes')} waiting for a second approver`;
 }
 
 /**

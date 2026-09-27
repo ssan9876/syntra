@@ -69,13 +69,13 @@ export function LifecycleSimulationPage() {
       setRanWith(basis);
       history.reload();
     } catch (error) {
-      setProblem(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'Simulation could not run.');
+      setProblem(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'Simulation failed.');
     } finally { setBusy(false); }
   };
   const load = async (id: string) => {
     setBusy(true); setProblem('');
     try { setResult(await api<Simulation>(`/api/admin/lifecycle-simulations/${id}`)); setRanWith(null); }
-    catch { setProblem('That simulation could not be loaded.'); }
+    catch { setProblem('Simulation not loaded.'); }
     finally { setBusy(false); }
   };
   const outcome = result?.result;
@@ -87,7 +87,7 @@ export function LifecycleSimulationPage() {
       <div className="grid gap-4 sm:grid-cols-3">
         <Select label="Scenario" value={kind} onChange={(value) => setKind(value as typeof kind)} options={[{ value: 'hire', label: 'Joiner' }, { value: 'move', label: 'Mover' }, { value: 'leaver', label: 'Leaver' }]} />
         <Select label="Scope" value={scope} onChange={(value) => setScope(value as typeof scope)} options={[{ value: 'department', label: 'Every active person in a department' }, { value: 'person', label: 'One person' }]} />
-        {scope === 'person' ? <Field name="personId" label="Person ID" value={personId} onChange={setPersonId} /> : <Field name="department" label="Department" value={department} onChange={setDepartment} placeholder="exactly as recorded on the primary contract" />}
+        {scope === 'person' ? <Field name="personId" label="Person ID" value={personId} onChange={setPersonId} /> : <Field name="department" label="Department" value={department} onChange={setDepartment} placeholder="As on the primary contract" />}
       </div>
       {kind === 'move' ? <div className="grid gap-4 sm:grid-cols-3">
         <Field label="New department (optional)" value={newDepartment} onChange={setNewDepartment} />

@@ -83,7 +83,7 @@ describe('creating a campaign', () => {
     await screen.findByLabelText('Name');
     await fillTheEssentials();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Create the campaign' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create review' }));
 
     await waitFor(() =>
       expect(sent.filter((s) => s.url.endsWith('/campaigns'))).toHaveLength(1),
@@ -128,7 +128,7 @@ describe('creating a campaign', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /targetEntitlement/ }));
 
     await userEvent.click(screen.getByRole('button', { name: 'Preview reviewers' }));
-    expect(await screen.findByText('Resolve to nobody')).toBeInTheDocument();
+    expect(await screen.findByText('No reviewer')).toBeInTheDocument();
     expect(screen.getByText('17')).toBeInTheDocument();
     expect(screen.getByText(/no manager/)).toBeInTheDocument();
   });
@@ -143,7 +143,7 @@ describe('creating a campaign', () => {
     await screen.findByLabelText('Name');
     await userEvent.type(screen.getByLabelText('Name'), 'Empty');
 
-    expect(screen.getByRole('button', { name: 'Create the campaign' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create review' })).toBeDisabled();
     expect(sent.filter((s) => s.url.endsWith('/campaigns'))).toHaveLength(0);
   });
 
@@ -162,7 +162,7 @@ describe('creating a campaign', () => {
     renderPage();
     await screen.findByLabelText('Name');
     await fillTheEssentials();
-    await userEvent.click(screen.getByRole('button', { name: 'Create the campaign' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create review' }));
 
     expect(
       await screen.findByText('the snapshot is older than maxSnapshotAgeDays'),

@@ -280,7 +280,7 @@ function SamlPanel({
         ? null
         : cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'That could not be saved.',
+          : 'SAML settings not saved.',
     );
   };
 
@@ -297,7 +297,7 @@ function SamlPanel({
       const nextLaunchUrl = form.launchUrl.trim();
       if (nextLaunchUrl !== initial.launchUrl && nextLaunchUrl === '') {
         setErrors({
-          launchUrl: 'A launch address cannot be removed.',
+          launchUrl: 'Launch address cannot be cleared.',
         });
         return;
       }
@@ -694,7 +694,7 @@ function OidcPanel({
           ? null
           : cause instanceof ApiError
             ? (cause.problem.detail ?? cause.problem.title)
-            : 'That could not be saved.',
+            : 'OpenID Connect settings not saved.',
       );
     } finally {
       setBusy(false);
@@ -747,7 +747,7 @@ function OidcPanel({
             className="sm:col-span-2"
             checked={form.clientCredentialsEnabled}
             onChange={(v) => set('clientCredentialsEnabled', v)}
-            label="This is a machine, not a person"
+            label="Machine client (no user sign-in)"
             // The reason this control exists at all: the grant was implemented,
             // enforced at the token endpoint and advertised by the provider, and
             // could be turned on only with SQL.

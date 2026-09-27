@@ -137,7 +137,7 @@ export function EmployeeMover({
       });
       setPreview(result);
       setStale(false);
-      setMessage(result.changes.length ? '' : 'No employment changes found.');
+      setMessage(result.changes.length ? '' : 'Nothing to change: the values match the current contract.');
     } catch (error) {
       setMessage(error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'The change could not be previewed.');
     } finally {
@@ -157,9 +157,9 @@ export function EmployeeMover({
       setPreview(null);
       setOperationId(operation.id);
       setMessage(operation.status === 'awaiting_approval'
-        ? 'Saved. Target changes await approval.'
-        : 'Employment change completed.');
-      toast({ tone: 'success', title: operation.status === 'awaiting_approval' ? 'Employment change awaiting approval' : 'Employment change applied' });
+        ? 'Saved. Target changes are waiting for approval.'
+        : 'Employment change applied.');
+      toast({ tone: 'success', title: operation.status === 'awaiting_approval' ? 'Waiting for approval' : 'Employment change applied' });
       onApplied?.();
     } catch (error) {
       setPreview(null);
@@ -194,7 +194,7 @@ export function EmployeeMover({
           <PersonPicker name="managerPersonId" label="New manager" value={manager} onChange={changeManager} exclude={personId} />
         </div>
         <div aria-live="polite">{message && <Alert tone={message.includes('could not') || message.includes('changed since') ? 'danger' : 'info'}>{message}</Alert>}</div>
-        {operationId ? <Link className="link" to={`/admin/lifecycle-operations/${operationId}`}>Open the mover operation</Link> : null}
+        {operationId ? <Link className="link" to={`/admin/lifecycle-operations/${operationId}`}>Open operation</Link> : null}
         {preview && preview.changes.length > 0 && (
           <section aria-label="Employment changes" className="space-y-2 text-sm">
             <h3 className="font-medium text-ink">Employment changes</h3>
@@ -211,7 +211,7 @@ export function EmployeeMover({
         {preview && (
           <section aria-label="Target access preview" className="space-y-2 text-sm">
             <h3 className="font-medium text-ink">Target access</h3>
-            {unverified ? <Alert tone="warning">Unverified targets: removals are not guaranteed.</Alert> : null}
+            {unverified ? <Alert tone="warning">Removals not verified on {access.filter((delta) => delta.unverified).map((delta) => delta.targetName).join(', ')}.</Alert> : null}
             {access.length === 0 ? <p className="text-muted">No enabled targets.</p> : (
               <Table tight>
                 <thead><tr><th scope="col">Target</th><th scope="col">Account</th><th scope="col">Add</th><th scope="col">Retain</th><th scope="col">Remove</th></tr></thead>
@@ -226,8 +226,8 @@ export function EmployeeMover({
                 </tbody>
               </Table>
             )}
-            {preview.approval?.required ? <Alert tone="info" title="Approval will be required">{preview.approval.reason}</Alert> : null}
-            {preview.sloMinutes ? <p className="text-muted">Service level: {preview.sloMinutes} minutes from apply.</p> : null}
+            {preview.approval?.required ? <Alert tone="info" title="Needs approval">{preview.approval.reason}</Alert> : null}
+            {preview.sloMinutes ? <p className="text-muted">Due {preview.sloMinutes} minutes after apply.</p> : null}
           </section>
         )}
         <FormActions
@@ -238,7 +238,7 @@ export function EmployeeMover({
           <Button variant={preview ? 'secondary' : 'primary'} loading={busy} onClick={() => void review()}>Preview change</Button>
           {preview && preview.changes.length > 0 && (
             <Button loading={busy} variant="danger" onClick={() => void apply()}>
-              Apply reviewed change
+              Apply change
             </Button>
           )}
         </FormActions>

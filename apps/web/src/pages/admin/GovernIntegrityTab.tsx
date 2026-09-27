@@ -50,18 +50,18 @@ export function GovernIntegrityTab() {
             tone={status.anchoring.configured ? 'info' : 'warning'}
             title={
               status.anchoring.configured
-                ? 'Anchoring is configured'
-                : 'Anchoring is not configured'
+                ? 'Anchoring on'
+                : 'Anchoring off'
             }
           >
             {status.anchoring.statement}
           </Alert>
 
-          <Alert tone="info" title="What the last checkpoint is worth">
+          <Alert tone="info" title="Last checkpoint">
             {status.checkpointStatement}
           </Alert>
 
-          <Panel title="The chain">
+          <Panel title="Audit chain">
             <dl className="grid grid-cols-2 gap-2 p-4">
               <dt className="text-muted">Head sequence</dt>
               <dd className="text-ink">{status.headSequence}</dd>
@@ -97,7 +97,7 @@ export function GovernIntegrityTab() {
                   setActionError(
                     cause instanceof ApiError
                       ? (cause.problem.detail ?? cause.problem.title)
-                      : 'Could not verify the chain.',
+                      : 'Audit chain verification could not start.',
                   ),
                 )
                 .finally(() => setVerifying(false));

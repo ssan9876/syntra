@@ -50,7 +50,7 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
       setError(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Those could not be worked out.',
+          : 'Rule suggestions failed to load.',
       );
     } finally {
       setLoading(false);
@@ -59,7 +59,7 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
 
   return (
     <Panel
-      title="Rules this data already follows"
+      title="Suggested rules"
       actions={
         <Button size="sm" variant="secondary" loading={loading} onClick={look}>
           {candidates === null ? 'Look for rules' : 'Look again'}
@@ -70,7 +70,7 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
       {loading && <SkeletonRows rows={4} cols={4} />}
 
       {candidates !== null && candidates.length === 0 && !loading && (
-        <Empty title="No pattern strong enough to suggest" />
+        <Empty title="No suggested rules" />
       )}
 
       {candidates !== null && candidates.length > 0 && !loading && (
@@ -78,7 +78,7 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
           <thead>
             <tr>
               <th scope="col">Suggested rule</th>
-              <th scope="col">How true it already is</th>
+              <th scope="col">Already holds it</th>
               <th scope="col">Held elsewhere</th>
             </tr>
           </thead>
@@ -108,8 +108,8 @@ export function GovernRuleCandidates({ snapshotId }: { snapshotId: string }) {
                       six people, where forty others hold the same thing, is a
                       description of six people and not of the resource. */}
                   {c.outsideHolders === 0
-                    ? 'nobody else'
-                    : `${c.outsideHolders} others, for other reasons`}
+                    ? 'none'
+                    : `${c.outsideHolders} others`}
                 </td>
               </tr>
             ))}
