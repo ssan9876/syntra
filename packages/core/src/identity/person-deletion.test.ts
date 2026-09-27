@@ -55,6 +55,8 @@ async function giveThePersonHistory() {
         verificationAttestation: 'Called back on file number',
         verifiedByUserId: actorId,
         openedByUserId: actorId,
+        closedAt: now,
+        closedByUserId: actorId,
       },
     });
     const active = await createUser(tx, { login: 'anovak', email: 'anna.novak@acme.test', displayName: 'Anna Novak' });
