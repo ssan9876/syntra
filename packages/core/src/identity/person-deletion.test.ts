@@ -33,7 +33,7 @@ async function giveThePersonHistory() {
   return withTenant(tenantId, async (tx) => {
     await tx.contract.create({ data: { tenantId, personId, startDate: now } });
     const target = await tx.targetSystem.create({
-      data: { tenantId, name: 'Acme AD', secretName: 'target/ad/bind', config: { url: 'ldaps://dc.acme.test:636' } },
+      data: { tenantId, name: 'Acme AD', secretName: 'target/ad/bind', config: { url: 'ldaps://dc.acme.test:636', tlsMode: 'ldaps' } },
     });
     await tx.targetAccount.create({
       data: { tenantId, targetSystemId: target.id, personId, anchor: 'a1', correlationKey: 'anna.novak', status: 'inactive' },

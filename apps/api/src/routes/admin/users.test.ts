@@ -519,6 +519,7 @@ describe('GET /api/admin/users/:id', () => {
       id: person.id,
       givenName: 'Maya',
       familyName: 'Okafor',
+      businessEmail: null,
     });
   });
 
