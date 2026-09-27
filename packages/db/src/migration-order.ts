@@ -153,6 +153,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261109000000_email_domains',
   '20261110000000_person_email_unique',
   '20261111000000_data_deletion_role',
+  '20261112000000_target_delete_after_days',
 ];
 
 /**

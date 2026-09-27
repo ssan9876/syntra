@@ -66,6 +66,23 @@ describe('connector lifecycle metadata', () => {
     }
   });
 
+  it('certifies delete for Active Directory and Entra ID only, and does not refuse it there', () => {
+    for (const type of ['activeDirectory', 'entraId']) {
+      const metadata = connectorLifecycleMetadata(type);
+      expect(metadata.certification.capabilities).toContain('delete_account');
+      expect(
+        capabilityRefusalReason(type, metadata, capabilitiesForTarget(type, {}), 'delete_account'),
+      ).toBeNull();
+    }
+    for (const type of ['scim2', 'httpJson']) {
+      const metadata = connectorLifecycleMetadata(type);
+      expect(metadata.certification.capabilities).not.toContain('delete_account');
+      expect(
+        capabilityRefusalReason(type, metadata, capabilitiesForTarget(type, {}), 'delete_account'),
+      ).toMatch(/not certified to delete accounts/);
+    }
+  });
+
   it('keeps controlled connectors visible without claiming general support', () => {
     expect(connectorLifecycleMetadata('entraId')).toMatchObject({
       supportState: 'preview',

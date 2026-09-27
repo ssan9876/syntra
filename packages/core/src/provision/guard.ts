@@ -6,6 +6,7 @@ export interface GuardThresholds {
   createAccountThresholdPercent: number;
   disableAccountThresholdPercent: number;
   archiveAccountThresholdPercent: number;
+  deleteAccountThresholdPercent: number;
   revokeEntitlementThresholdPercent: number;
   deactivateSyntraUserThresholdPercent: number;
   perEntitlementThresholdPercent: number;
@@ -165,6 +166,15 @@ const POPULATIONS: Population[] = [
     threshold: (t) => t.archiveAccountThresholdPercent,
   },
   {
+    // Its own population and its own threshold: a delete is the one action
+    // that cannot be walked back from Syntra.
+    actionType: 'delete_account',
+    verb: 'delete',
+    noun: 'accounts',
+    total: (i) => i.accountsAtTarget,
+    threshold: (t) => t.deleteAccountThresholdPercent,
+  },
+  {
     actionType: 'update_account',
     verb: 'move',
     noun: 'accounts to a different container',
@@ -225,6 +235,7 @@ const THRESHOLD_KEYS = [
   'createAccountThresholdPercent',
   'disableAccountThresholdPercent',
   'archiveAccountThresholdPercent',
+  'deleteAccountThresholdPercent',
   'revokeEntitlementThresholdPercent',
   'deactivateSyntraUserThresholdPercent',
   'perEntitlementThresholdPercent',

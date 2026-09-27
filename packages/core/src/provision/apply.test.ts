@@ -1549,6 +1549,156 @@ describe('applyProvisionRun: the leaver ladder', () => {
   });
 });
 
+describe('applyProvisionRun: the delete, the last rung', () => {
+  /**
+   * A leaver whose contract ended on 1 January, already disabled at the
+   * target and in Syntra, holding Finance. The target was created with the
+   * 30-day delete Active Directory starts with.
+   */
+  const disabledLeaver = async () => {
+    const seeded = await seedLeaver('Bea', 'Vos', 'bea.vos', {
+      endDate: day('2026-01-01'),
+      holds: ['guid-finance'],
+    });
+    await target.write({ domain: 'acme.test' } as never, {
+      op: 'disable_account',
+      actionId: 'seed-disable',
+      anchor: seeded.anchor,
+      reason: 'left',
+    });
+    await withTenant(tenantId, async (tx) => {
+      await tx.targetAccount.update({
+        where: { id: seeded.accountId },
+        data: { status: 'disabled', disabledAt: day('2026-01-02') },
+      });
+      await tx.accountEntitlement.create({
+        data: { tenantId, accountId: seeded.accountId, entitlementId, origin: 'rule' },
+      });
+    });
+    await leaversOnly();
+    return seeded;
+  };
+
+  const previewAndConfirm = async (connector: unknown = target) => {
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: connector as never,
+    });
+    await applyProvisionRun(tenantId, provider, run.id, {
+      confirm: true,
+      confirmedByUserId: await seedConfirmingUser(),
+      connector: connector as never,
+      sleep: noSleep,
+    });
+    return run;
+  };
+
+  it('deletes the account at the target, records it deleted and audits it', async () => {
+    const { accountId, anchor } = await disabledLeaver();
+    const run = await previewAndConfirm();
+
+    const action = (await actionsOf(run.id)).find((a) => a.actionType === 'delete_account')!;
+    expect(action.status).toBe('applied');
+    expect(target.calls.filter((c) => c.op === 'delete_account')).toEqual([
+      { op: 'delete_account', actionId: action.id, anchor },
+    ]);
+    expect(target.deleted.has(anchor)).toBe(true);
+
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('deleted');
+    // Kept, so an object restored at the target is still recognised.
+    expect(account.anchor).toBe(anchor);
+    const holdings = await withTenant(tenantId, (tx) =>
+      tx.accountEntitlement.findMany({ where: { accountId } }),
+    );
+    expect(holdings.every((h) => h.state === 'revoked')).toBe(true);
+
+    const [event] = await eventsOf('provision.account.deleted');
+    expect(event).toMatchObject({ targetType: 'TargetAccount', targetId: accountId, outcome: 'success' });
+    expect(event!.payload).toMatchObject({ targetSystemId: targetId, correlationKey: 'bea.vos', anchor });
+  });
+
+  it('counts a delete that finds the account already gone as done', async () => {
+    const { accountId } = await disabledLeaver();
+    const alreadyGone = intercepting('delete_account', () => ({
+      ok: true,
+      message: 'account already deleted',
+    }));
+    const run = await previewAndConfirm(alreadyGone);
+    const action = (await actionsOf(run.id)).find((a) => a.actionType === 'delete_account')!;
+    expect(action.status).toBe('applied');
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('deleted');
+  });
+
+  it('does not record a delete the target refused', async () => {
+    const { accountId } = await disabledLeaver();
+    const refusing = intercepting('delete_account', () => ({
+      ok: false,
+      message: 'Not deleted: account is enabled. Disable it first.',
+      failure: 'rejected',
+    }));
+    const run = await previewAndConfirm(refusing);
+    const action = (await actionsOf(run.id)).find((a) => a.actionType === 'delete_account')!;
+    expect(action.status).toBe('failed');
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('disabled');
+    expect(await eventsOf('provision.account.deleted')).toHaveLength(0);
+  });
+
+  it('proposes nothing and reports no drift on the run after the delete', async () => {
+    const { accountId } = await disabledLeaver();
+    await previewAndConfirm();
+    // One object left at the target, so the next run is not refused for an
+    // empty read before it records anything.
+    await target.write({ domain: 'acme.test' } as never, {
+      op: 'create_account',
+      actionId: 'seed-other',
+      correlationKey: 'someone.else',
+      attributes: { distinguishedName: [`CN=someone.else,${USERS}`] },
+      enabled: true,
+      initialPassword: 'Aa1!seed-password',
+    });
+    const next = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const actions = (await actionsOf(next.id)).filter((a) => a.accountId === accountId);
+    expect(actions).toEqual([]);
+    const findings = await withTenant(tenantId, (tx) =>
+      tx.driftFinding.findMany({ where: { accountId } }),
+    );
+    expect(findings.filter((f) => f.kind === 'account_missing_at_target')).toEqual([]);
+  });
+
+  it('resolves an in-flight delete whose object is gone as applied', async () => {
+    const { accountId, anchor } = await disabledLeaver();
+    const run = await previewProvisionRun(tenantId, provider, targetId, {
+      now: NOW,
+      connector: target as never,
+    });
+    const deleteId = (await actionsOf(run.id)).find((a) => a.actionType === 'delete_account')!.id;
+    // The write landed; the process died before step 3.
+    await target.write({ domain: 'acme.test' } as never, { op: 'delete_account', actionId: deleteId, anchor });
+    await withTenant(tenantId, (tx) =>
+      tx.provisionAction.update({ where: { id: deleteId }, data: { status: 'in_flight' } }),
+    );
+    await resolveInFlightActions(tenantId, provider, targetId, { connector: target as never });
+    const action = (await actionsOf(run.id)).find((a) => a.id === deleteId)!;
+    expect(action.status).toBe('applied');
+    const account = await withTenant(tenantId, (tx) =>
+      tx.targetAccount.findUniqueOrThrow({ where: { id: accountId } }),
+    );
+    expect(account.status).toBe('deleted');
+  });
+});
+
 describe('applyProvisionRun: the confirmation gate on one action', () => {
   /**
    * An unblocked run, so `confirm` can be left off and the per-action gate is

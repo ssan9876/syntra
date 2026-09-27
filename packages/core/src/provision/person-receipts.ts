@@ -208,7 +208,7 @@ async function verifyReceiptAtTarget(
   }
   const connector = (options.connector ?? targetConnectorFor(prepared.target.type)) as unknown as TargetConnector<unknown>;
   const expected = {
-    accountPresent: prepared.account.status !== 'archived',
+    accountPresent: prepared.account.status !== 'archived' && prepared.account.status !== 'deleted',
     enabled: prepared.account.status === 'active',
     attributes: {},
     entitlements: prepared.account.entitlements.map((item) => item.entitlement.externalId).sort(),

@@ -44,11 +44,15 @@ export interface Target {
   entitlementRevocationDelayDays: number;
   disableGraceDays: number;
   archiveAfterDays: number | null;
+  /** Null means never. Absent from an older API: never. */
+  deleteAfterDays?: number | null;
   reenableWithoutConfirmationDays: number;
   renameEnabled: boolean;
   createAccountThresholdPercent: number;
   disableAccountThresholdPercent: number;
   archiveAccountThresholdPercent: number;
+  /** Absent from an older API: the default, 2. */
+  deleteAccountThresholdPercent?: number;
   revokeEntitlementThresholdPercent: number;
   deactivateSyntraUserThresholdPercent: number;
   perEntitlementThresholdPercent: number;
@@ -115,11 +119,13 @@ export interface Form {
   entitlementRevocationDelayDays: string;
   disableGraceDays: string;
   archiveAfterDays: string;
+  deleteAfterDays: string;
   reenableWithoutConfirmationDays: string;
   renameEnabled: boolean;
   createAccountThresholdPercent: string;
   disableAccountThresholdPercent: string;
   archiveAccountThresholdPercent: string;
+  deleteAccountThresholdPercent: string;
   revokeEntitlementThresholdPercent: string;
   deactivateSyntraUserThresholdPercent: string;
   perEntitlementThresholdPercent: string;
@@ -159,11 +165,14 @@ export const BLANK: Form = {
   entitlementRevocationDelayDays: '0',
   disableGraceDays: '0',
   archiveAfterDays: '',
+  // What the server gives a new Active Directory or Entra ID target.
+  deleteAfterDays: '30',
   reenableWithoutConfirmationDays: '7',
   renameEnabled: false,
   createAccountThresholdPercent: '20',
   disableAccountThresholdPercent: '10',
   archiveAccountThresholdPercent: '2',
+  deleteAccountThresholdPercent: '2',
   revokeEntitlementThresholdPercent: '10',
   deactivateSyntraUserThresholdPercent: '10',
   perEntitlementThresholdPercent: '50',
@@ -194,10 +203,16 @@ export const ENTRA_CORRELATION_FIELDS = [
   ...Array.from({ length: 15 }, (_, i) => `extensionAttribute${i + 1}`),
 ];
 
+/** Target types whose connector deletes accounts (`delete_account`). */
+export const DELETE_CAPABLE_TYPES: ReadonlySet<string> = new Set(['activeDirectory', 'entraId']);
+
+export const deletesAccounts = (type: string): boolean => DELETE_CAPABLE_TYPES.has(type);
+
 export const THRESHOLDS = [
   ['createAccountThresholdPercent', 'Accounts created'],
   ['disableAccountThresholdPercent', 'Accounts disabled'],
   ['archiveAccountThresholdPercent', 'Accounts archived'],
+  ['deleteAccountThresholdPercent', 'Accounts deleted'],
   ['revokeEntitlementThresholdPercent', 'Entitlements revoked'],
   ['deactivateSyntraUserThresholdPercent', 'Syntra logins deactivated'],
   ['perEntitlementThresholdPercent', 'Holders of any one entitlement'],
@@ -330,6 +345,10 @@ export function formFrom(target: Target): Form {
     // Null means never, and an empty box is how "never" is typed.
     archiveAfterDays:
       target.archiveAfterDays === null ? '' : String(target.archiveAfterDays),
+    deleteAfterDays:
+      target.deleteAfterDays === undefined || target.deleteAfterDays === null
+        ? ''
+        : String(target.deleteAfterDays),
     reenableWithoutConfirmationDays: String(
       target.reenableWithoutConfirmationDays,
     ),
@@ -337,6 +356,7 @@ export function formFrom(target: Target): Form {
     createAccountThresholdPercent: String(target.createAccountThresholdPercent),
     disableAccountThresholdPercent: String(target.disableAccountThresholdPercent),
     archiveAccountThresholdPercent: String(target.archiveAccountThresholdPercent),
+    deleteAccountThresholdPercent: String(target.deleteAccountThresholdPercent ?? 2),
     revokeEntitlementThresholdPercent: String(
       target.revokeEntitlementThresholdPercent,
     ),
@@ -466,6 +486,24 @@ export function validateNumbers(
       bad.archiveAfterDays = 'a whole number of days, or blank for never';
     } else {
       values.archiveAfterDays = value;
+    }
+  }
+
+  // Blank is `null`: never delete. Checked against the rungs it follows,
+  // where those are valid; the server checks the same.
+  const deletion = form.deleteAfterDays.trim();
+  if (deletion === '') {
+    values.deleteAfterDays = null;
+  } else {
+    const value = Number(deletion);
+    if (!Number.isInteger(value) || value < 0 || value > 3650) {
+      bad.deleteAfterDays = 'a whole number of days, or blank for never';
+    } else if (typeof values.disableGraceDays === 'number' && value < values.disableGraceDays) {
+      bad.deleteAfterDays = `at least ${values.disableGraceDays}, the disable grace days`;
+    } else if (typeof values.archiveAfterDays === 'number' && value < values.archiveAfterDays) {
+      bad.deleteAfterDays = `at least ${values.archiveAfterDays}, the archive days`;
+    } else {
+      values.deleteAfterDays = value;
     }
   }
 

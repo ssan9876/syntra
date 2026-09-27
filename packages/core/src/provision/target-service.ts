@@ -8,6 +8,7 @@ import {
   forgetAccessTokens,
   forgetEntraTokens,
   TARGET_CONNECTOR_TYPES,
+  targetConnectorCapabilities,
   type ConnectionResult,
 } from '@syntra/connectors';
 import { z } from 'zod';
@@ -175,7 +176,7 @@ const createScalarsSchema = z.object({
 });
 
 /**
- * The seven threshold columns, named explicitly.
+ * The eight threshold columns, named explicitly.
  *
  * `updateTarget` picks from this rather than spreading `input.thresholds` into
  * Prisma's `data`: a spread makes any extra key a Prisma error at run time
@@ -188,6 +189,7 @@ const THRESHOLD_FIELDS = [
   'createAccountThresholdPercent',
   'disableAccountThresholdPercent',
   'archiveAccountThresholdPercent',
+  'deleteAccountThresholdPercent',
   'revokeEntitlementThresholdPercent',
   'deactivateSyntraUserThresholdPercent',
   'perEntitlementThresholdPercent',
@@ -283,10 +285,19 @@ const ladderInputSchema = z
     entitlementRevocationDelayDays: z.number().int().min(0).max(3650).optional(),
     disableGraceDays: z.number().int().min(0).max(3650).optional(),
     archiveAfterDays: z.number().int().min(0).max(3650).nullable().optional(),
+    deleteAfterDays: z.number().int().min(0).max(3650).nullable().optional(),
     reenableWithoutConfirmationDays: z.number().int().min(0).max(3650).optional(),
     renameEnabled: z.boolean().optional(),
   })
   .strict();
+
+/**
+ * `deleteAfterDays` for a new target: 30 where the connector can delete,
+ * null (never) everywhere else.
+ */
+export function defaultDeleteAfterDays(type: string): number | null {
+  return targetConnectorCapabilities(type).deleteAccount ? 30 : null;
+}
 
 const runSettingsSchema = z
   .object({
@@ -332,10 +343,13 @@ export class LadderConfigurationError extends Error {
  * and logged, the exact sentence explaining what was wrong. The whole point of
  * this function is the message, and it was the one thing that did not escape.
  */
-function assertLadder(ladder: {
+export function assertLadder(ladder: {
   entitlementRevocationDelayDays: number;
   disableGraceDays: number;
   archiveAfterDays: number | null;
+  deleteAfterDays?: number | null;
+  /** The target's type, for whether its connector can delete at all. */
+  type?: string;
 }): void {
   if (ladder.entitlementRevocationDelayDays > ladder.disableGraceDays) {
     throw new LadderConfigurationError(
@@ -352,6 +366,29 @@ function assertLadder(ladder: {
       'ladder-archive-not-after-disable',
       'ladder.archiveAfterDays',
       'the archive must fall strictly after the disable',
+    );
+  }
+  const deleteAfterDays = ladder.deleteAfterDays ?? null;
+  if (deleteAfterDays === null) return;
+  if (ladder.type !== undefined && !targetConnectorCapabilities(ladder.type).deleteAccount) {
+    throw new LadderConfigurationError(
+      'ladder-delete-unsupported',
+      'ladder.deleteAfterDays',
+      'Delete accounts after N days inactive is not available for this target type. Leave it empty.',
+    );
+  }
+  if (deleteAfterDays < ladder.disableGraceDays) {
+    throw new LadderConfigurationError(
+      'ladder-delete-before-disable',
+      'ladder.deleteAfterDays',
+      `Delete accounts after N days inactive must be at least ${ladder.disableGraceDays}, the disable grace days.`,
+    );
+  }
+  if (ladder.archiveAfterDays !== null && deleteAfterDays < ladder.archiveAfterDays) {
+    throw new LadderConfigurationError(
+      'ladder-delete-before-archive',
+      'ladder.deleteAfterDays',
+      `Delete accounts after N days inactive must be at least ${ladder.archiveAfterDays}, the archive days.`,
     );
   }
 }
@@ -410,6 +447,7 @@ export async function createTarget(
         autoConfirmRenames: scalars.autoConfirmRenames ?? false,
         enabled: scalars.enabled ?? true,
         enforcementMode: scalars.enforcementMode ?? 'additive',
+        deleteAfterDays: defaultDeleteAfterDays(scalars.type),
       },
     });
 
@@ -436,6 +474,7 @@ export async function createTarget(
           : {}),
         enforcementMode: scalars.enforcementMode ?? 'additive',
         autoConfirmRenames: scalars.autoConfirmRenames ?? false,
+        deleteAfterDays: defaultDeleteAfterDays(scalars.type),
       },
     });
 
@@ -560,8 +599,12 @@ export async function updateTarget(
         ladderInput.archiveAfterDays === undefined
           ? before.archiveAfterDays
           : ladderInput.archiveAfterDays,
+      deleteAfterDays:
+        ladderInput.deleteAfterDays === undefined
+          ? before.deleteAfterDays
+          : ladderInput.deleteAfterDays,
     };
-    assertLadder(ladder);
+    assertLadder({ ...ladder, type: scalars.type ?? before.type });
 
     // Mirroring is judged against the configuration the target will HAVE, so
     // a save that changes the base DN and the root together is checked as one.
@@ -644,7 +687,8 @@ export async function updateTarget(
         entitlementRevocationDelayDays: ladder.entitlementRevocationDelayDays,
         disableGraceDays: ladder.disableGraceDays,
         archiveAfterDays: ladder.archiveAfterDays,
-        // Seven named columns, never a spread of whatever arrived.
+        deleteAfterDays: ladder.deleteAfterDays,
+        // Eight named columns, never a spread of whatever arrived.
         ...thresholds,
         ...(maintenanceWindow === undefined ? {} : {
           maintenanceWindowEnabled: maintenanceWindow.enabled,

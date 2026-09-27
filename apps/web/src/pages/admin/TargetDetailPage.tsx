@@ -36,6 +36,7 @@ import {
   OWNED_CONFIG_KEYS,
   THRESHOLDS,
   configFromForm,
+  deletesAccounts,
   formFrom,
   skipAdvice,
   validateNumbers,
@@ -74,6 +75,7 @@ const LABELS: Record<string, string> = {
   entitlementRevocationDelayDays: 'Entitlement revocation delay (days)',
   disableGraceDays: 'Disable grace (days)',
   archiveAfterDays: 'Archive after (days)',
+  deleteAfterDays: 'Delete accounts after N days inactive',
   reenableWithoutConfirmationDays: 'Re-enable without confirmation (days)',
   ...Object.fromEntries(THRESHOLDS),
 };
@@ -87,7 +89,7 @@ const ENFORCEMENT_FIELDS = new Set(['schedule', 'enforcementMode', 'maxAttempts'
 const MIRROR_FIELDS = new Set(['mirrorOrgUnits', 'orgUnitRootDn']);
 const LADDER_FIELDS = new Set([
   'preHireDays', 'entitlementRevocationDelayDays', 'disableGraceDays',
-  'archiveAfterDays', 'reenableWithoutConfirmationDays',
+  'archiveAfterDays', 'deleteAfterDays', 'reenableWithoutConfirmationDays',
 ]);
 const THRESHOLD_FIELDS = new Set<string>(THRESHOLDS.map(([key]) => key));
 
@@ -465,6 +467,9 @@ export function TargetDetailPage() {
                 entitlementRevocationDelayDays: n.entitlementRevocationDelayDays,
                 disableGraceDays: n.disableGraceDays,
                 archiveAfterDays: n.archiveAfterDays,
+                // Only where the connector deletes: the server refuses it
+                // anywhere else.
+                ...(deletesAccounts(form.type) ? { deleteAfterDays: n.deleteAfterDays } : {}),
                 reenableWithoutConfirmationDays:
                   n.reenableWithoutConfirmationDays,
                 renameEnabled: form.renameEnabled,
@@ -514,6 +519,7 @@ export function TargetDetailPage() {
             entitlementRevocationDelayDays: n.entitlementRevocationDelayDays,
             disableGraceDays: n.disableGraceDays,
             archiveAfterDays: n.archiveAfterDays,
+            ...(deletesAccounts(form.type) ? { deleteAfterDays: n.deleteAfterDays } : {}),
             reenableWithoutConfirmationDays: n.reenableWithoutConfirmationDays,
             renameEnabled: form.renameEnabled,
           },
@@ -997,6 +1003,17 @@ export function TargetDetailPage() {
               placeholder="Never"
               {...mark('archiveAfterDays')}
             />
+            {deletesAccounts(form.type) && (
+              <Field
+                label="Delete accounts after N days inactive"
+                name="deleteAfterDays"
+                value={form.deleteAfterDays}
+                onChange={(v) => set('deleteAfterDays', v)}
+                inputMode="numeric"
+                placeholder="Never"
+                {...mark('deleteAfterDays')}
+              />
+            )}
             <Field
               label="Re-enable without confirmation (days)"
               name="reenableWithoutConfirmationDays"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLANK, configFromForm, formFrom, validateNumbers, skipAdvice, type Target } from './target-form.js';
+import { BLANK, configFromForm, deletesAccounts, formFrom, validateNumbers, skipAdvice, type Target } from './target-form.js';
 
 const target = (overrides: Partial<Target> = {}): Target => ({
   id: 't1',
@@ -143,5 +143,47 @@ describe('skipAdvice', () => {
 
   it('falls back when no time can be read', () => {
     expect(skipAdvice('a run is awaiting review')).toBe('Skipped: a run is waiting for review. Apply or cancel it.');
+  });
+});
+
+describe('Delete accounts after N days inactive', () => {
+  it('reads null as an empty box and a number as itself', () => {
+    expect(formFrom(target({ deleteAfterDays: null })).deleteAfterDays).toBe('');
+    expect(formFrom(target({ deleteAfterDays: 30 })).deleteAfterDays).toBe('30');
+    // An older API that does not send the field: never.
+    expect(formFrom(target()).deleteAfterDays).toBe('');
+  });
+
+  it('starts a new target at 30 days, the server default for AD and Entra ID', () => {
+    expect(BLANK.deleteAfterDays).toBe('30');
+  });
+
+  it('sends blank as null and refuses a number before the disable or the archive', () => {
+    expect(validateNumbers({ ...BLANK, deleteAfterDays: '' })).toMatchObject({ values: { deleteAfterDays: null } });
+    expect(validateNumbers({ ...BLANK, deleteAfterDays: '30' })).toMatchObject({ values: { deleteAfterDays: 30 } });
+    expect(validateNumbers({ ...BLANK, deleteAfterDays: 'soon' })).toMatchObject({
+      bad: { deleteAfterDays: 'a whole number of days, or blank for never' },
+    });
+    expect(validateNumbers({ ...BLANK, disableGraceDays: '14', deleteAfterDays: '7' })).toMatchObject({
+      bad: { deleteAfterDays: 'at least 14, the disable grace days' },
+    });
+    expect(validateNumbers({ ...BLANK, archiveAfterDays: '60', deleteAfterDays: '30' })).toMatchObject({
+      bad: { deleteAfterDays: 'at least 60, the archive days' },
+    });
+    expect(validateNumbers({ ...BLANK, archiveAfterDays: '60', deleteAfterDays: '60' })).toMatchObject({
+      values: { deleteAfterDays: 60 },
+    });
+  });
+
+  it('is offered only where the connector deletes', () => {
+    expect(deletesAccounts('activeDirectory')).toBe(true);
+    expect(deletesAccounts('entraId')).toBe(true);
+    expect(deletesAccounts('scim2')).toBe(false);
+    expect(deletesAccounts('httpJson')).toBe(false);
+  });
+
+  it('reads the delete threshold, defaulting to 2 from an older API', () => {
+    expect(formFrom(target({ deleteAccountThresholdPercent: 5 })).deleteAccountThresholdPercent).toBe('5');
+    expect(formFrom(target()).deleteAccountThresholdPercent).toBe('2');
   });
 });

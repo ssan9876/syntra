@@ -277,7 +277,7 @@ describe('adTargetConnector — test and discovery', () => {
     // over-privileged bind is a visible choice rather than a default. Read
     // through Active Directory's effective-rights attributes -- it never
     // writes a probe object, because there would then be a probe object to
-    // delete and this connector has no delete.
+    // clean up.
     const result = await adTargetConnector.test(config);
     expect(result.ok).toBe(true);
     const rights = result.rights!;
@@ -1172,14 +1172,11 @@ describe('adTargetConnector — the account lifecycle', () => {
     expect(String(held.searchEntries[0]!.member ?? '')).toContain('moe.frey');
   });
 
-  it('has no delete operation to call', async () => {
-    // Not disabled, not configuration-gated: absent, so that no configuration
-    // mistake can produce one.
-    //
+  it('refuses an operation it does not implement', async () => {
     // `await expect(...)`, not a bare `expect(promise)`: without the await the
-    // assertion never runs, the loop creates three unhandled rejections, and
-    // the test passes whatever the connector does.
-    const ops = ['delete_account', 'purge_account', 'destroy_account'];
+    // assertion never runs, the loop creates unhandled rejections, and the
+    // test passes whatever the connector does.
+    const ops = ['purge_account', 'destroy_account'];
     for (const op of ops) {
       await expect(
         adTargetConnector.write(config, { op, actionId: 'x', anchor: 'a' } as never),
@@ -1190,14 +1187,104 @@ describe('adTargetConnector — the account lifecycle', () => {
   it('refuses an operation it does not implement BEFORE it binds', async () => {
     // Pointed at a host that does not exist. A connector that opened the
     // connection first would answer `transient` here -- and `transient` is
-    // retried, so a delete this connector refuses would be attempted again and
-    // again. The refusal has to precede the connection to be a refusal.
+    // retried. The refusal has to precede the connection to be a refusal.
     const result = await adTargetConnector.write(
       { ...config, url: 'ldaps://127.0.0.1:1' },
-      { op: 'delete_account', actionId: 'x', anchor: 'a' } as never,
+      { op: 'purge_account', actionId: 'x', anchor: 'a' } as never,
     );
     expect(result.failure).toBe('rejected');
-    expect(result.message).toContain('there is no delete of any kind');
+    expect(result.message).toContain('is not supported by this connector');
+  });
+});
+
+describe('adTargetConnector — delete_account', () => {
+  const anchorFor = async (actionId: string, key: string) => {
+    const result = await adTargetConnector.write(config, createOp(actionId, key));
+    return result.anchor!;
+  };
+  const exists = async (base: string, sam: string) => {
+    const { searchEntries } = await admin.search(base, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${sam})`,
+      attributes: ['dn'],
+    });
+    return searchEntries.length > 0;
+  };
+
+  it('deletes a disabled account inside the base DN', async () => {
+    const anchor = await anchorFor('del-1', 'ada.lind');
+    await adTargetConnector.write(config, {
+      op: 'disable_account',
+      actionId: 'del-1-d',
+      anchor,
+      reason: 'left',
+    });
+    const result = await adTargetConnector.write(config, {
+      op: 'delete_account',
+      actionId: 'del-1-x',
+      anchor,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(await exists(testOu, 'ada.lind')).toBe(false);
+  });
+
+  it('deletes a disabled account in the archive container', async () => {
+    const anchor = await anchorFor('del-2', 'bo.kent');
+    await adTargetConnector.write(config, {
+      op: 'archive_account',
+      actionId: 'del-2-a',
+      anchor,
+      entitlementDns: [],
+    });
+    const result = await adTargetConnector.write(config, {
+      op: 'delete_account',
+      actionId: 'del-2-x',
+      anchor,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(await exists(archiveOu, 'bo.kent')).toBe(false);
+  });
+
+  it('refuses an enabled account and leaves it in place', async () => {
+    const anchor = await anchorFor('del-3', 'cy.moss');
+    const result = await adTargetConnector.write(config, {
+      op: 'delete_account',
+      actionId: 'del-3-x',
+      anchor,
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toContain('is enabled');
+    expect(await exists(testOu, 'cy.moss')).toBe(true);
+  });
+
+  it('refuses an account moved outside the base DN and the archive container', async () => {
+    const anchor = await anchorFor('del-4', 'di.voss');
+    await adTargetConnector.write(config, {
+      op: 'disable_account',
+      actionId: 'del-4-d',
+      anchor,
+      reason: 'left',
+    });
+    await admin.modifyDN(`CN=di.voss,${testOu}`, `CN=di.voss,${groupsOu}`);
+    const result = await adTargetConnector.write(config, {
+      op: 'delete_account',
+      actionId: 'del-4-x',
+      anchor,
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toContain('outside the base DN');
+    expect(await exists(groupsOu, 'di.voss')).toBe(true);
+  });
+
+  it('treats an account already gone as deleted', async () => {
+    const anchor = await anchorFor('del-5', 'ed.roe');
+    await admin.del(`CN=ed.roe,${testOu}`);
+    const result = await adTargetConnector.write(config, {
+      op: 'delete_account',
+      actionId: 'del-5-x',
+      anchor,
+    });
+    expect(result).toMatchObject({ ok: true, message: 'account already deleted' });
   });
 });
 

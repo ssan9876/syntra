@@ -507,6 +507,36 @@ async function patchUser(
   return { ok: true, message: what };
 }
 
+/**
+ * `DELETE /users/{id}`, only for a user Graph reports disabled.
+ *
+ * Read first: the planner proposed this against an account it saw disabled,
+ * and a user somebody has since re-enabled is not a leaver's dead account.
+ * A user already gone (404 on either request) is the state asked for.
+ */
+async function deleteUser(connection: EntraConnection, anchor: string): Promise<WriteResult> {
+  const path = `/users/${encodeURIComponent(anchor)}`;
+  const current = await graphRequest(connection, {
+    method: 'GET',
+    path,
+    query: { $select: 'id,accountEnabled' },
+  });
+  if (current.status === 404) return { ok: true, message: 'account already deleted' };
+  if (current.status >= 400) return failed(current);
+  const enabled = (current.body as { accountEnabled?: unknown } | null)?.accountEnabled;
+  if (enabled !== false) {
+    return {
+      ok: false,
+      message: `Not deleted: account ${anchor} is enabled in Entra ID. Disable it first.`,
+      failure: 'rejected',
+    };
+  }
+  const response = await graphRequest(connection, { method: 'DELETE', path });
+  if (response.status === 404) return { ok: true, message: 'account already deleted' };
+  if (response.status >= 400) return failed(response);
+  return { ok: true, message: 'account deleted' };
+}
+
 export interface EntraTargetConnector extends TargetConnector<Config> {
   /**
    * The state of one account after a write: identity, managed fields,
@@ -853,10 +883,12 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
             if (!revoked.ok) return revoked;
           }
           // Then disable. There is no container to move to and nothing is
-          // deleted -- the matrix says `deleteAccount: never`, and this is
-          // the code that makes it true.
+          // deleted: that is `delete_account`, a separate rung.
           return patchUser(connection, op.anchor, { accountEnabled: false }, 'account archived: managed memberships removed and account disabled');
         }
+
+        case 'delete_account':
+          return deleteUser(connection, op.anchor);
 
         case 'rename_account': {
           const named = principalName(connection, op.correlationKey);

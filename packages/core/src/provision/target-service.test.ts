@@ -164,6 +164,67 @@ describe('updateTarget', () => {
     expect(revocation.field).toBe('ladder.entitlementRevocationDelayDays');
   });
 
+  it('gives a new Active Directory target a 30-day delete, and a SCIM target none', async () => {
+    const { id } = await create();
+    const scim = await createTarget(tenantId, provider, null, {
+      type: 'scim2',
+      name: 'Acme SCIM',
+      config: { baseUrl: 'https://scim.acme.test/scim/v2' },
+      bindPassword: 'token',
+    });
+    const rows = await withTenant(tenantId, (tx) =>
+      tx.targetSystem.findMany({ where: { id: { in: [id, scim.id] } } }),
+    );
+    expect(rows.find((r) => r.id === id)!.deleteAfterDays).toBe(30);
+    expect(rows.find((r) => r.id === scim.id)!.deleteAfterDays).toBeNull();
+    expect(rows.find((r) => r.id === id)!.deleteAccountThresholdPercent).toBe(2);
+  });
+
+  it('refuses a delete that falls before the disable or the archive', async () => {
+    const { id } = await create();
+    const refusal = async (ladder: NonNullable<Parameters<typeof updateTarget>[4]['ladder']>) =>
+      updateTarget(tenantId, provider, null, id, { ladder }).then(
+        () => {
+          throw new Error('expected the update to be refused');
+        },
+        (cause: unknown) => cause as LadderConfigurationError,
+      );
+    const beforeDisable = await refusal({ disableGraceDays: 14, deleteAfterDays: 7 });
+    expect(beforeDisable).toBeInstanceOf(LadderConfigurationError);
+    expect(beforeDisable.code).toBe('ladder-delete-before-disable');
+    expect(beforeDisable.field).toBe('ladder.deleteAfterDays');
+    const beforeArchive = await refusal({ disableGraceDays: 7, archiveAfterDays: 60, deleteAfterDays: 30 });
+    expect(beforeArchive.code).toBe('ladder-delete-before-archive');
+    // The stored 30 is read off the row when the update does not mention it.
+    const inherited = await refusal({ disableGraceDays: 7, archiveAfterDays: 60 });
+    expect(inherited.code).toBe('ladder-delete-before-archive');
+  });
+
+  it('accepts a delete equal to the archive, and clears it with null', async () => {
+    const { id } = await create();
+    await updateTarget(tenantId, provider, null, id, {
+      ladder: { disableGraceDays: 7, archiveAfterDays: 60, deleteAfterDays: 60 },
+      thresholds: { deleteAccountThresholdPercent: 5 },
+    });
+    let row = await withTenant(tenantId, (tx) => tx.targetSystem.findUniqueOrThrow({ where: { id } }));
+    expect([row.deleteAfterDays, row.deleteAccountThresholdPercent]).toEqual([60, 5]);
+    await updateTarget(tenantId, provider, null, id, { ladder: { deleteAfterDays: null } });
+    row = await withTenant(tenantId, (tx) => tx.targetSystem.findUniqueOrThrow({ where: { id } }));
+    expect(row.deleteAfterDays).toBeNull();
+  });
+
+  it('refuses a delete on a target whose connector cannot delete', async () => {
+    const scim = await createTarget(tenantId, provider, null, {
+      type: 'scim2',
+      name: 'Acme SCIM',
+      config: { baseUrl: 'https://scim.acme.test/scim/v2' },
+      bindPassword: 'token',
+    });
+    await expect(
+      updateTarget(tenantId, provider, null, scim.id, { ladder: { deleteAfterDays: 30 } }),
+    ).rejects.toMatchObject({ code: 'ladder-delete-unsupported', field: 'ladder.deleteAfterDays' });
+  });
+
   it('accepts a valid ladder and audits it', async () => {
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
@@ -171,6 +232,7 @@ describe('updateTarget', () => {
         entitlementRevocationDelayDays: 0,
         disableGraceDays: 7,
         archiveAfterDays: 90,
+        deleteAfterDays: 120,
       },
     });
     const row = await withTenant(tenantId, (tx) =>
@@ -584,7 +646,7 @@ describe('updateTarget, beyond the brief', () => {
   it('leaves the ladder alone when the update does not mention it', async () => {
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
-      ladder: { disableGraceDays: 7, archiveAfterDays: 90 },
+      ladder: { disableGraceDays: 7, archiveAfterDays: 90, deleteAfterDays: null },
     });
     await updateTarget(tenantId, provider, null, id, { name: 'Acme AD 2' });
     const row = await withTenant(tenantId, (tx) =>
@@ -600,7 +662,7 @@ describe('updateTarget, beyond the brief', () => {
     // unset.
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
-      ladder: { disableGraceDays: 7, archiveAfterDays: 90 },
+      ladder: { disableGraceDays: 7, archiveAfterDays: 90, deleteAfterDays: null },
     });
     await updateTarget(tenantId, provider, null, id, {
       ladder: { archiveAfterDays: null },
@@ -1212,7 +1274,7 @@ describe('the gaps the mutation pass found', () => {
     // back as a 500 with a constraint name in it.
     const { id } = await create();
     await updateTarget(tenantId, provider, null, id, {
-      ladder: { disableGraceDays: 7, archiveAfterDays: 90 },
+      ladder: { disableGraceDays: 7, archiveAfterDays: 90, deleteAfterDays: null },
     });
     await expect(
       updateTarget(tenantId, provider, null, id, {

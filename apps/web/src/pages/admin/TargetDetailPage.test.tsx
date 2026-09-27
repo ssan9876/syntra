@@ -1279,3 +1279,72 @@ describe('TargetDetailPage: units that still use a DN typed by hand', () => {
     expect(box.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe('TargetDetailPage: Delete accounts after N days inactive', () => {
+  const mockTarget = (overrides: Record<string, unknown>) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'PATCH') return Promise.resolve(new Response(null, { status: 204 }) as never);
+      if (String(input).includes('/org-unit-mirror')) {
+        return Promise.resolve(
+          json({ mirrorOrgUnits: false, placesAccountsInContainers: true, baseDn: '', rootDn: '', rootProblem: null, units: [] }),
+        );
+      }
+      return Promise.resolve(json(target(overrides)));
+    });
+
+  const patchBody = (fetchMock: ReturnType<typeof mockTarget>) => {
+    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+    return JSON.parse(String(patch[1]!.body)) as { ladder: Record<string, unknown> };
+  };
+
+  it('shows the stored days on Active Directory and saves a change', async () => {
+    const fetchMock = mockTarget({ type: 'activeDirectory', deleteAfterDays: 30 });
+    renderExisting();
+    const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    expect(field).toHaveValue('30');
+    await userEvent.clear(field);
+    await userEvent.type(field, '45');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    expect(patchBody(fetchMock).ladder).toMatchObject({ deleteAfterDays: 45 });
+  });
+
+  it('saves an empty box as never', async () => {
+    const fetchMock = mockTarget({ type: 'entraId', config: { tenantId: 'x', clientId: 'y' }, deleteAfterDays: 30 });
+    renderExisting();
+    const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    await userEvent.clear(field);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    expect(patchBody(fetchMock).ladder).toMatchObject({ deleteAfterDays: null });
+  });
+
+  it('refuses days before the disable grace without saving', async () => {
+    const fetchMock = mockTarget({ type: 'activeDirectory', disableGraceDays: 14, deleteAfterDays: 30 });
+    renderExisting();
+    const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    await userEvent.clear(field);
+    await userEvent.type(field, '7');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // On the field and in the summary above the form.
+    expect((await screen.findAllByText(/at least 14, the disable grace days/)).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('Delete accounts after N days inactive')).toHaveAttribute('aria-invalid', 'true');
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('is not offered on a SCIM target and is not sent', async () => {
+    const fetchMock = mockTarget({ type: 'scim2', config: { baseUrl: 'https://scim.acme.test' } });
+    renderExisting();
+    await screen.findByDisplayValue('Samba AD');
+    expect(screen.queryByLabelText('Delete accounts after N days inactive')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+    );
+    expect(patchBody(fetchMock).ladder).not.toHaveProperty('deleteAfterDays');
+  });
+});
