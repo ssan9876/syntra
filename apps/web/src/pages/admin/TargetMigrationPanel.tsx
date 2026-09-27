@@ -58,7 +58,7 @@ export function TargetMigrationPanel({
       toast({ tone: 'success', title: 'Adapter migration applied' });
       onApplied();
     } catch (cause) {
-      setProblem(cause instanceof Error ? cause.message : 'The migration could not be applied.');
+      setProblem(cause instanceof Error ? cause.message : 'Migration not applied.');
       setConfirming(false);
     } finally {
       setBusy(false);

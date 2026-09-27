@@ -59,9 +59,9 @@ export interface Access {
 }
 
 export const ORIGINS: Record<string, string> = {
-  rule: 'A business rule',
-  request: 'An approved request',
-  discovered: 'Found at the target, not granted here',
+  rule: 'Business rule',
+  request: 'Approved request',
+  discovered: 'Found at the target',
   manual: 'Granted by hand',
 };
 
@@ -96,37 +96,32 @@ const ACCOUNT_STATUS: Record<
   active: {
     tone: 'active',
     label: 'active',
-    title: 'The account exists at the target and is enabled.',
+    title: 'Exists at the target and enabled.',
   },
   disabled: {
     tone: 'inactive',
     label: 'disabled',
-    title:
-      'Disabled on purpose — a step on this target’s deprovisioning ladder.',
+    title: 'Disabled by this target’s deprovisioning ladder.',
   },
   archived: {
     tone: 'inactive',
     label: 'archived',
-    title:
-      'Moved to the archive container with its managed entitlements stripped. Provision never deletes.',
+    title: 'Moved to the archive container. Managed entitlements removed.',
   },
   pending: {
     tone: 'warning',
-    label: 'pending — nothing at the target yet',
-    title:
-      'A reserved login. The row holds the correlation key so two runs cannot generate the same one; no account has been created at the target.',
+    label: 'pending — not created yet',
+    title: 'Login reserved. No account at the target yet.',
   },
   missing_at_target: {
     tone: 'danger',
     label: 'missing at the target',
-    title:
-      'Syntra records this account and the target no longer returns its anchor. Recreating it is never automatic: it usually vanished because somebody deleted it deliberately.',
+    title: 'Not found at the target. Not recreated automatically.',
   },
   conflict: {
     tone: 'danger',
     label: 'conflict',
-    title:
-      'The target refused the last write to this account. Nothing further is proposed for this person here until it is resolved.',
+    title: 'The target refused the last write. Nothing more is proposed here until it is fixed.',
   },
 };
 
@@ -134,7 +129,7 @@ export const accountStatus = (status: string) =>
   ACCOUNT_STATUS[status] ?? {
     tone: 'neutral' as const,
     label: status,
-    title: 'A status this screen does not have a reading for.',
+    title: 'Unknown status.',
   };
 
 /**
@@ -206,7 +201,7 @@ export function HeldByNow({ holding }: { holding: Holding }) {
   if (holding.attributionStale || holding.ruleName !== null) {
     return (
       <div className="space-y-1.5">
-        <span title="No rule on this target asks for this entitlement for this person today. Reconciliation proposes revoking a rule-granted holding nothing desires.">
+        <span title="No rule asks for this today. The next run proposes revoking it.">
           <Status tone="warning">nothing asks for this now</Status>
         </span>
         <span className="block text-sm text-muted">
@@ -216,8 +211,8 @@ export function HeldByNow({ holding }: { holding: Holding }) {
               leaver, or a transfer. Worth naming, and still not a rule asking
               for this person to hold this. */}
           {holding.ruleName === null
-            ? 'A rule granted this and no rule keeps it in place.'
-            : `${holding.ruleName} still names it, but no active contract of this person matches it.`}
+            ? 'Granted by a rule. No rule keeps it now.'
+            : `${holding.ruleName} names it, but no active contract matches.`}
         </span>
       </div>
     );
@@ -244,14 +239,14 @@ export function RecordedAtGrant({ holding }: { holding: Holding }) {
   return (
     <div className="space-y-1.5">
       {holding.grantedByRuleName === null ? (
-        <span className="text-ink">a rule that has since been deleted</span>
+        <span className="text-ink">deleted rule</span>
       ) : (
         <span className="text-ink">{holding.grantedByRuleName}</span>
       )}
       {holding.attributionStale && (
         <span
           className="block text-sm text-warning"
-          title="Deleted, disabled, or edited to stop naming this entitlement. The recorded rule is not why this person holds this now."
+          title="Rule deleted, disabled or changed. Not why this is held now."
         >
           no longer asks for this
         </span>
@@ -349,7 +344,7 @@ export function HoldingsTable({ holdings }: { holdings: Holding[] }) {
         </div>
       )}
       {shown.length === 0 ? (
-        <div className="p-4 text-muted">No entitlement of this account matches.</div>
+        <div className="p-4 text-muted">No entitlements match.</div>
       ) : (
         <Table>
           <thead>

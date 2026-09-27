@@ -68,7 +68,7 @@ describe('SecurityAlertsTab', () => {
       emailCategories: ['data_exports', 'write_stops'],
       alertDays: [60, 7],
     });
-    expect(await screen.findByText('Security notification policy saved.')).toBeVisible();
+    expect(await screen.findByText('Policy saved.')).toBeVisible();
   });
 
   it('refuses thresholds it cannot send', async () => {

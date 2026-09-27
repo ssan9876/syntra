@@ -82,7 +82,7 @@ describe('RequestQueueTab', () => {
   it('renders blocked in the danger tone', async () => {
     renderPage();
     expect(
-      await screen.findByText(/nobody can approve this/i),
+      await screen.findByText(/no approver/i),
     ).toBeInTheDocument();
   });
 });

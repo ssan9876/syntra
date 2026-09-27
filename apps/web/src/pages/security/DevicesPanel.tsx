@@ -110,7 +110,7 @@ export function DevicesPanel() {
       toast({ title: 'Device signed out' });
       await load();
     } catch {
-      setError('That device could not be signed out.');
+      setError('Device not signed out. Try again.');
     } finally {
       setBusy(false);
     }
@@ -119,8 +119,8 @@ export function DevicesPanel() {
   if (signedOut) {
     return (
       <Panel title="Where you are signed in" bodyClassName="p-4">
-        <Alert tone="success" title="You have been signed out">
-          This device is signed out. Sign in again to carry on.
+        <Alert tone="success" title="Signed out">
+          Sign in again to continue.
         </Alert>
       </Panel>
     );
@@ -133,9 +133,7 @@ export function DevicesPanel() {
       {devices === null && !error && <SkeletonRows rows={2} />}
 
       {devices !== null && devices.length === 0 && (
-        <Empty title="Nothing to show yet">
-          Sessions appear here as you sign in from a browser.
-        </Empty>
+        <Empty title="No sessions yet" />
       )}
 
       {devices !== null && devices.length > 0 && (

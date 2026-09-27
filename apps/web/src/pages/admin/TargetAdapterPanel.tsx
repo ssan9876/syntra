@@ -122,7 +122,7 @@ export function TargetAdapterPanel({ targetId }: { targetId: string }) {
       setVersion(null);
       reload();
     } catch (cause) {
-      setProblem(problemOf(cause, 'The adapter change could not be saved.'));
+      setProblem(problemOf(cause, 'Adapter change not saved.'));
     } finally {
       setBusy(null);
     }

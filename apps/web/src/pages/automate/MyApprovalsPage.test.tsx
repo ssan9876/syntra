@@ -74,7 +74,7 @@ describe('MyApprovalsPage', () => {
     await screen.findByText('Q3 audit');
     await userEvent.click(screen.getByRole('button', { name: /refuse/i }));
     expect(sent).toEqual([]);
-    expect(screen.getByText(/say why/i)).toBeInTheDocument();
+    expect(screen.getByText(/add a comment to refuse/i)).toBeInTheDocument();
   });
 
   it('sends the shortened duration when the approver shortens it', async () => {

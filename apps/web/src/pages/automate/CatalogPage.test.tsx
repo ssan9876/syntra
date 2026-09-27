@@ -150,7 +150,7 @@ describe('CatalogPage', () => {
     mockCatalog([]);
     renderPage();
     expect(
-      await screen.findByText(/nothing to ask for yet/i),
+      await screen.findByText(/nothing to request yet/i),
     ).toBeInTheDocument();
   });
 
@@ -172,10 +172,10 @@ describe('CatalogPage', () => {
     await screen.findByText('Reading room');
 
     await userEvent.type(screen.getByLabelText('Search'), 'zzz');
-    expect(await screen.findByText('Nothing matches that search')).toBeInTheDocument();
-    expect(screen.queryByText(/nothing to ask for yet/i)).toBeNull();
+    expect(await screen.findByText('No matches')).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to request yet/i)).toBeNull();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Clear the search' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     expect(await screen.findByText('Reading room')).toBeInTheDocument();
   });
 });

@@ -28,16 +28,13 @@ export function MyRequestsPage() {
             {data && (data.requests ?? []).length === 0 && (
               <div className="p-6">
                 <Empty
-                  title="You have not asked for anything yet"
+                  title="No requests yet"
                   action={
                     <Link to="/catalog" className={buttonClasses('primary')}>
                       Browse the catalog
                     </Link>
                   }
-                >
-                  Anything you request appears here with where it is and who it
-                  is with.
-                </Empty>
+                />
               </div>
             )}
             {data && (data.requests ?? []).length > 0 && (

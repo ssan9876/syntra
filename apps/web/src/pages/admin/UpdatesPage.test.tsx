@@ -199,8 +199,8 @@ describe('UpdatesPage', () => {
     );
     render(<UpdatesPage />);
 
-    expect(await screen.findByText(/The update was undone/)).toBeInTheDocument();
-    expect(screen.getByText(/schema and data both/)).toBeInTheDocument();
+    expect(await screen.findByText(/Update rolled back/)).toBeInTheDocument();
+    expect(screen.getByText(/Changes made during the update are lost/)).toBeInTheDocument();
   });
 
   /**

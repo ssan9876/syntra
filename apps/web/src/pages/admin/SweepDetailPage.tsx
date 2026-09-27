@@ -67,7 +67,7 @@ export function SweepDetailPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong applying this sweep.',
+          : 'Sweep not applied. Try again.',
       );
     } finally {
       setBusy(false);
@@ -97,14 +97,14 @@ export function SweepDetailPage() {
             // Leads with why, and the numbers behind it.
             <Alert
               tone={data.status === 'blocked' ? 'danger' : 'warning'}
-              title="This sweep stopped"
+              title="Sweep stopped"
             >
               {data.blockedReason}
             </Alert>
           )}
 
           <div className="mt-6">
-            <Panel title="What it found">
+            <Panel title="Findings">
               <dl className="grid gap-x-4 gap-y-1 p-4 sm:grid-cols-[max-content_1fr]">
                 <dt className="text-muted">Grants past end date</dt>
                 <dd className="tabular-nums text-ink">{data.expireCount}</dd>
@@ -121,7 +121,7 @@ export function SweepDetailPage() {
           {data.exceptions.length > 0 && (
             <div className="mt-6">
               <Panel
-                title="People it could not understand"
+                title="People not processed"
               >
                 <ul className="divide-y divide-border-subtle">
                   {data.exceptions.map((exception) => (
@@ -141,7 +141,7 @@ export function SweepDetailPage() {
               actions={
                 data.status === 'previewed' ? (
                   <Button variant="primary" loading={busy} onClick={apply}>
-                    Apply the ticked rows
+                    Apply selected
                   </Button>
                 ) : undefined
               }

@@ -108,7 +108,7 @@ describe('TenantDeletionTab', () => {
     expect(execute).toBeDisabled();
     await userEvent.type(screen.getByLabelText('Type DELETE to confirm'), 'DELETE');
     await userEvent.click(execute);
-    expect(await screen.findByText('The tenant has been erased')).toBeVisible();
+    expect(await screen.findByText('Tenant erased')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Download receipt' })).toBeVisible();
   });
 });

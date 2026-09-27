@@ -41,7 +41,7 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
       return;
     }
     if (!Number.isInteger(parsedDuration) || parsedDuration < 1 || parsedDuration > 1440) {
-      setProblem('Duration must be a whole number from 1 to 1,440 minutes.');
+      setProblem('Duration must be 1 to 1,440 minutes.');
       return;
     }
     setBusy(true);
@@ -61,7 +61,7 @@ export function TargetMaintenancePanel({ target, onChanged }: { target: Target; 
       toast({ tone: 'success', title: 'Maintenance window saved' });
       onChanged();
     } catch (cause) {
-      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'The maintenance window could not be saved.');
+      setProblem(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Maintenance window not saved.');
     } finally {
       setBusy(false);
     }

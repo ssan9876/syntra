@@ -65,7 +65,7 @@ export function RequestDetailPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong.',
+          : 'The request was not withdrawn. Try again.',
       );
     } finally {
       setBusy(false);
@@ -103,8 +103,7 @@ export function RequestDetailPage() {
                 )}
                 {data.status === 'awaiting_fulfilment' && (
                   <Alert tone="info">
-                    This has been approved and is waiting to be applied to the
-                    system it belongs to. Nothing more is needed from you.
+                    Approved. Waiting to be applied. Nothing more to do.
                   </Alert>
                 )}
                 {data.justification && (
@@ -127,7 +126,7 @@ export function RequestDetailPage() {
                       <p className="text-sm text-muted">
                         With:{' '}
                         {step.approvers.map((a) => a.personId).join(', ') ||
-                          'nobody yet'}
+                          'no approver yet'}
                       </p>
                       {step.decisions.map((decision, index) => (
                         <p key={index} className="mt-1 text-sm text-muted">
@@ -145,7 +144,7 @@ export function RequestDetailPage() {
             </div>
 
             <div className="mt-6">
-              <Panel title="Messages sent about this">
+              <Panel title="Notifications">
                 <ul className="divide-y divide-border-subtle">
                   {data.notifications.map((notification, index) => (
                     <li key={index} className="px-4 py-2 text-sm text-muted">

@@ -185,7 +185,7 @@ export function PersonImportRunDetailPage() {
         {(appliable || confirmable) && (
           <div className="mt-3">
             <Button onClick={() => apply(confirmable)} disabled={busy}>
-              {confirmable ? 'Apply — I have read the numbers' : 'Apply'}
+              {confirmable ? 'Apply anyway' : 'Apply'}
             </Button>
           </div>
         )}

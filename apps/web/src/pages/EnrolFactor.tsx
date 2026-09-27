@@ -69,7 +69,7 @@ export function EnrolFactor() {
         }),
       );
     } catch {
-      setError('That did not work. Sign in again to start over.');
+      setError('Setup did not start. Sign in again.');
     } finally {
       setBusy(false);
     }
@@ -151,9 +151,9 @@ export function EnrolFactor() {
       if (isRateLimited(cause)) {
         setError(t('common.rate_limited'));
       } else if (cause instanceof ApiError && cause.problem.status === 401) {
-        setError('This step expired. Sign in again to start over.');
+        setError('This step expired. Sign in again.');
       } else {
-        setError('That code did not match. Check your app and try the next one.');
+        setError('Wrong code. Try the next one your app shows.');
       }
     } finally {
       setBusy(false);

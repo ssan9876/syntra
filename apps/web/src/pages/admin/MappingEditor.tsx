@@ -105,7 +105,7 @@ export function MappingEditor({
           <section key={objectType} aria-label={TYPE_LABEL[objectType]}>
             <h4 className="font-medium text-ink">{TYPE_LABEL[objectType]}</h4>
             {indexed.length === 0 ? (
-              <p className="mt-2 text-sm text-muted">Not synced — nothing mapped</p>
+              <p className="mt-2 text-sm text-muted">No mappings — not synced</p>
             ) : (
               <div className="mt-3"><Table tight>
                 <thead>

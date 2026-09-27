@@ -384,7 +384,7 @@ describe('OnboardPersonPage', () => {
     await user.type(screen.getByLabelText('Family name'), 'Okafor');
 
     expect(
-      await screen.findByText(/would not be placed/i, undefined, { timeout: 3000 }),
+      await screen.findByText(/Account has no container/i, undefined, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add someone/i })).toBeDisabled();
   });
@@ -412,7 +412,7 @@ describe('OnboardPersonPage', () => {
         timeout: 3000,
       }),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/would not be placed/i)).toBeNull();
+    expect(screen.queryByText(/Account has no container/i)).toBeNull();
     expect(screen.getByRole('button', { name: /add someone/i })).not.toBeDisabled();
   });
 

@@ -202,7 +202,7 @@ export function OrgUnitDetailPage() {
         <Panel title="Users in this unit">
           {data.users.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nobody is in this unit" />
+              <Empty title="No users in this unit" />
             </div>
           ) : (
             <Table>
@@ -246,7 +246,7 @@ export function OrgUnitDetailPage() {
         <Panel title="Child units">
           {data.children.length === 0 ? (
             <div className="p-6">
-              <Empty title="Nothing beneath this unit" />
+              <Empty title="No child units" />
             </div>
           ) : (
             <Table>
@@ -289,7 +289,7 @@ export function OrgUnitDetailPage() {
                   active={data.status === 'active'}
                   basePath={`/api/admin/org-units/${data.id}`}
                   label="org unit"
-                  consequences="Users stay. It grants nothing, scoped roles included."
+                  consequences="Users stay. Roles scoped to this unit stop granting."
                   onChanged={reload}
                 />
               ) : (
@@ -313,7 +313,7 @@ export function OrgUnitDetailPage() {
                   path={`/api/admin/org-units/${data.id}`}
                   label="org unit"
                   confirmWord={data.name}
-                  warning="Must be empty; inactive users count. Cannot be undone."
+                  warning="Move every user out first, inactive ones too. Cannot be undone."
                   // Back to the list, not back to this screen: staying would
                   // leave the reader looking at a record that no longer exists
                   // and a page whose every control now answers 404.

@@ -211,7 +211,7 @@ export function ProductEditorPage() {
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : 'Something went wrong saving this.',
+          : 'Product not saved.',
       );
     } finally {
       setBusy(false);

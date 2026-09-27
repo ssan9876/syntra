@@ -77,7 +77,7 @@ export function CredentialPickup() {
       } else {
         // Anything else (a rate limit, the network) has NOT spent the link,
         // so the button stays and says to try again.
-        setProblem('That did not work. Try again in a minute.');
+        setProblem('Password not shown. Try again in a minute.');
       }
     } finally {
       setBusy(false);

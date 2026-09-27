@@ -67,7 +67,7 @@ const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function message(error: unknown): string {
   if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
-  return error instanceof Error ? error.message : 'The request failed.';
+  return error instanceof Error ? error.message : 'Request failed.';
 }
 
 function when(iso: string | null) {
@@ -104,15 +104,15 @@ export function TenantDeletionTab() {
   if (receipt) {
     return <Panel title="Tenant deleted">
       <div className="space-y-4 p-4">
-        <Alert tone="success" title="The tenant has been erased">
-          Keep the receipt — it is the proof of deletion.
+        <Alert tone="success" title="Tenant erased">
+          Keep the receipt as proof of deletion.
         </Alert>
         <Button onClick={() => download(`syntra-deletion-receipt-${String(receipt.tenantId)}.json`, receipt)}>Download receipt</Button>
       </div>
     </Panel>;
   }
   if (loading && !data) return <SkeletonRows rows={3} cols={2} />;
-  if (error || !data) return <Alert tone="danger">{error ?? 'Offboarding could not be loaded.'}</Alert>;
+  if (error || !data) return <Alert tone="danger">{error ?? 'Could not load offboarding.'}</Alert>;
 
   const { request, viewerUserId, policy } = data;
   const open = request !== null && OPEN.has(request.status);
@@ -140,7 +140,7 @@ export function TenantDeletionTab() {
   });
   const act = (verb: 'approve' | 'cancel') => run(verb, async () => {
     await api(`/api/admin/tenant/deletion/requests/${request!.id}/${verb}`, { method: 'POST' });
-    setNotice({ tone: 'success', text: verb === 'approve' ? 'Approved. Execution opens after the cooling-off period.' : 'Deletion request cancelled.' });
+    setNotice({ tone: 'success', text: verb === 'approve' ? 'Deletion approved. It can run after the cooling-off period.' : 'Deletion request cancelled.' });
     reload();
   });
   const execute = () => run('execute', async () => {

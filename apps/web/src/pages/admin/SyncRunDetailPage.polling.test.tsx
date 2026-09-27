@@ -77,7 +77,7 @@ describe('a run that has not finished', () => {
     mockFetch(['queued']);
     renderPage();
 
-    expect(await screen.findByText(/has not started yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/not started yet/i)).toBeInTheDocument();
   });
 
   it('distinguishes reading the directory from waiting for a worker', async () => {
@@ -85,13 +85,13 @@ describe('a run that has not finished', () => {
     renderPage();
 
     expect(await screen.findByText(/Reading the directory/i)).toBeInTheDocument();
-    expect(screen.queryByText(/has not started yet/i)).toBeNull();
+    expect(screen.queryByText(/not started yet/i)).toBeNull();
   });
 
   it('follows the run rather than leaving the reader to refresh', async () => {
     const fetches = mockFetch(['queued']);
     renderPage();
-    await screen.findByText(/has not started yet/i);
+    await screen.findByText(/not started yet/i);
 
     const before = fetches.count;
     // Inside `act`: advancing the timer fires the poll, whose resolution sets

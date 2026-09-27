@@ -134,7 +134,7 @@ describe('ProvisionRunsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Run now' }));
 
     expect(
-      await screen.findByText(/A run has been queued/),
+      await screen.findByText(/Run queued/),
     ).toBeVisible();
   });
 

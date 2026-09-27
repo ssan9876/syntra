@@ -74,7 +74,7 @@ describe('Login', () => {
     // The API deliberately cannot distinguish wrong password from unknown
     // user; the interface must not invent a distinction either.
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      /login and password do not match an account/i,
+      /wrong login or password/i,
     );
   });
 

@@ -180,7 +180,7 @@ describe('SyncRunDetailPage', () => {
     renderPage();
 
     expect(
-      await screen.findByText(/blocked and will not apply/i),
+      await screen.findByText(/this run cannot be applied/i),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('checkbox', { name: /read these numbers/i }),

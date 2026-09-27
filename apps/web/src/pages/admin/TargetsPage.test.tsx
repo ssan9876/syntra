@@ -56,7 +56,7 @@ describe('TargetsPage', () => {
     mockFetch([]);
     renderPage();
 
-    expect(await screen.findByText('No target systems yet')).toBeVisible();
+    expect(await screen.findByText('No targets yet')).toBeVisible();
     expect(
       screen.getByRole('link', { name: 'Connect a target' }),
     ).toBeVisible();
@@ -128,7 +128,7 @@ describe('TargetsPage', () => {
     mockFetch([target({ lastRunAt: null })]);
     renderPage();
 
-    expect(await screen.findByText('No run has ever completed')).toBeVisible();
+    expect(await screen.findByText('No completed run yet')).toBeVisible();
   });
 
   it('keeps the last-run timestamp visible on every screen size', async () => {
