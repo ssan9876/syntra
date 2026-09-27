@@ -52,6 +52,7 @@ import type {
   SyntraUserFacts,
   TargetObject,
 } from './types.js';
+import { assertTargetDomainsVerified, verifiedEmailDomains } from '../tenant/email-domains.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -919,6 +920,9 @@ export async function previewProvisionRun(
         grants,
         placements,
         orgUnitContainers,
+        // In the same transaction as the persons: the domains an address may
+        // be written in are decided by the state this plan is computed from.
+        verifiedEmailDomains: await verifiedEmailDomains(tx),
         previousPersons: previous?.personsWithActiveContract ?? null,
         hasEverApplied: prepared.target.lastAppliedRunAt !== null,
       };
@@ -1077,6 +1081,12 @@ export async function previewProvisionRun(
     // from the same config the connector itself was built from.
     const correlationKeyPolicy = correlationKeyPolicyFor(prepared.target.type, config);
 
+    // An Entra ID target completes every userPrincipalName with one domain
+    // from its config. Unverified, EVERY create would be an address outside
+    // the organisation's domains, so the run fails as a whole and says why,
+    // rather than marking each person unprocessable for the same reason.
+    assertTargetDomainsVerified(prepared.target.type, config, snapshot.verifiedEmailDomains);
+
     for (const person of snapshot.persons) {
       const contracts: ContractFacts[] = person.contracts.map((c) => ({
         id: c.id,
@@ -1128,6 +1138,7 @@ export async function previewProvisionRun(
         existingCorrelationKey: knownByPerson.get(person.id)?.correlationKey ?? null,
         takenCorrelationKeys: takenKeys,
         correlationKeyPolicy,
+        verifiedEmailDomains: snapshot.verifiedEmailDomains,
         containerOverride: placementByPerson.get(person.id) ?? null,
         // Null for a person with no unit, and for a unit not materialised on
         // THIS target: there is no DN to place them at, and inventing one is

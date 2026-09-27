@@ -11,6 +11,7 @@ import {
 } from './condition.js';
 import { activeOn, personDisplayName, resolveMappingContract } from './desired.js';
 import { generateCorrelationKey } from './names.js';
+import { addressedDomain, domainIsCovered, isAddressAttribute, verifiedEmailDomains } from '../tenant/email-domains.js';
 import { renderContainer, renderTemplate, type TemplateContext } from './templates.js';
 import {
   accountProfileSchema,
@@ -874,11 +875,17 @@ export async function previewAccountProfile(
     };
 
     const problems: string[] = [];
+    const verifiedDomains = await verifiedEmailDomains(tx);
     const attributes: Record<string, string> = {};
     for (const [name, template] of Object.entries(profile.attributeTemplates)) {
       const rendered = renderTemplate(template, context);
-      if (rendered.ok) attributes[name] = rendered.value;
-      else {
+      if (rendered.ok) {
+        attributes[name] = rendered.value;
+        const domain = isAddressAttribute(name) ? addressedDomain(rendered.value) : null;
+        if (domain !== null && !domainIsCovered(domain, verifiedDomains)) {
+          problems.push(`"${name}" is an address in ${domain}, which is not a verified email domain for this organisation`);
+        }
+      } else {
         problems.push(
           `the template for "${name}" references ${rendered.missing.join(', ')}, which resolves to nothing for this person`,
         );
@@ -967,6 +974,7 @@ export async function previewAccountProfile(
       maxLength: keyPolicy.maxLength,
       charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
+      verifiedDomains,
     });
     const unique = generateCorrelationKey({
       template: profile.correlationKeyTemplate,
@@ -975,12 +983,15 @@ export async function previewAccountProfile(
       maxLength: keyPolicy.maxLength,
       charset: keyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
+      verifiedDomains,
     });
 
     if (!unique.ok) {
       problems.push(
         unique.reason === 'exhausted'
           ? `no unique account name could be generated within ${profile.maxUniquenessAttempts} attempts`
+          : unique.reason === 'domain_unverified'
+            ? `the account name template renders an address in ${unique.domain}, which is not a verified email domain for this organisation`
           : unique.reason === 'malformed'
             ? `the account name template ${unique.message}`
             : `the account name template references ${unique.missing.join(', ')}, which resolves to nothing for this person`,
@@ -1004,8 +1015,13 @@ export async function previewAccountProfile(
         },
         unique.correlationKey,
       );
-      if ('upn' in named) userPrincipalName = named.upn;
-      else problems.push(named.message);
+      if ('upn' in named) {
+        userPrincipalName = named.upn;
+        const domain = named.upn.slice(named.upn.lastIndexOf('@') + 1);
+        if (!domainIsCovered(domain, verifiedDomains)) {
+          problems.push(`the userPrincipalName domain ${domain} is not a verified email domain for this organisation`);
+        }
+      } else problems.push(named.message);
     }
 
     return {

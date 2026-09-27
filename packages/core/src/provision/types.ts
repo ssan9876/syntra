@@ -98,7 +98,9 @@ export type UnprocessableKind =
   | 'container_missing'
   | 'name_generation_exhausted'
   | 'target_read_incomplete'
-  | 'account_conflict';
+  | 'account_conflict'
+  /** An address this target would be given is outside every verified domain. */
+  | 'email_domain_unverified';
 
 export interface DesiredAccount {
   required: boolean;

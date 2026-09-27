@@ -59,6 +59,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `DataExport` | user: `requestedByUserId` | retain | The record of who took which copy. An access bundle about the person that still holds a file has the file erased (see the erasure procedure). |
 | `DelegatedTaskRun` | user: `subjectUserId`, `runByUserId` | pseudonymize | The submitted form values are cleared. |
 | `DriftFinding` | account: `accountId` | pseudonymize | The detail (target attribute values) is cleared. |
+| `EmailDomain` | user: `createdById` | retain | An organisation's own domain and who added it. Configuration, not data about a person; the administrator reference is kept as evidence of who claimed the domain, like the audit event it mirrors. |
 | `EmailOtpCredential` | user: `userId` | delete | Credential material. |
 | `GovernFinding` | person: `ownerPersonId` | retain | Identifiers only. |
 | `GroupMembership` | user: `userId` | retain | Identifiers only. Once the account is pseudonymised, the membership says only that an erased account was a member. |
@@ -2265,6 +2266,20 @@ No personal data. Columns: `id`, `tenantId`, `name`, `description`, `actionKey`,
 #### `DirectorySource`
 
 No personal data. Columns: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `schedule`, `autoApply`, `deactivationThresholdPercent`, `enabled`, `writebackEnabled`, `writebackPassword`, `writebackDisable`, `writebackDelete`, `lastRunAt`, `createdAt`, `updatedAt`.
+
+#### `EmailDomain`
+
+Linked to a data subject by user: `createdById`. Erasure: **retain** -- An organisation's own domain and who added it. Configuration, not data about a person; the administrator reference is kept as evidence of who claimed the domain, like the audit event it mirrors.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `verifiedAt` | operational | retained |  |
+| `lastCheckedAt` | operational | retained |  |
+| `lastCheckError` | operational | retained |  |
+| `createdById` | identity | retained |  |
+| `createdAt` | operational | retained |  |
+
+Not personal data: `id`, `tenantId`, `domain`, `verificationToken`.
 
 #### `Entitlement`
 

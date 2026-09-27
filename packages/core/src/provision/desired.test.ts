@@ -12,6 +12,9 @@ import {
 } from './desired.js';
 import type { ContractFacts, PersonFacts, ProfileFacts, RuleFacts } from './types.js';
 
+/** Every domain an address in this file is written in. */
+const TEST_DOMAINS: readonly string[] = ['acme.test', 'contoso.com', 'very-long-domain.example', 'x.com', 'x.test', 'y.com'];
+
 const NOW = new Date('2026-06-15T00:00:00Z');
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
@@ -103,6 +106,7 @@ const evaluate = (
     existingCorrelationKey: null,
     takenCorrelationKeys: new Set<string>(),
     correlationKeyPolicy: SAM_KEY_POLICY,
+    verifiedEmailDomains: TEST_DOMAINS,
     containerOverride: null,
     orgUnitContainer: null,
     renameEnabled: false,
@@ -666,6 +670,7 @@ describe('desiredState — persons Provision cannot process', () => {
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
       correlationKeyPolicy: SAM_KEY_POLICY,
+      verifiedEmailDomains: TEST_DOMAINS,
       containerOverride: null,
       orgUnitContainer: null,
       renameEnabled: false,
@@ -787,6 +792,7 @@ describe('desiredState — persons Provision cannot process', () => {
       existingCorrelationKey: null,
       takenCorrelationKeys: new Set(),
       correlationKeyPolicy: SAM_KEY_POLICY,
+      verifiedEmailDomains: TEST_DOMAINS,
       containerOverride: null,
       orgUnitContainer: null,
       renameEnabled: false,
@@ -1060,6 +1066,7 @@ describe('desiredState — the target’s key policy', () => {
     const result = evaluate([contract()], [financeRule], {
       profile: emailProfile,
       correlationKeyPolicy: SAM_KEY_POLICY,
+      verifiedEmailDomains: TEST_DOMAINS,
     });
     expect(result.account?.correlationKey).toBe('annaacme.test');
   });
@@ -1071,6 +1078,46 @@ describe('desiredState — the target’s key policy', () => {
     });
     expect(result.unprocessable?.kind).toBe('template_unresolvable');
     expect(result.unprocessable?.message).toContain('more than one @');
+  });
+
+  it('makes a person unprocessable when the key is an address in an unverified domain', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: emailProfile,
+      correlationKeyPolicy: EMAIL_KEY_POLICY,
+      verifiedEmailDomains: ['contoso.com'],
+    });
+    expect(result.account).toBeNull();
+    expect(result.unprocessable).toEqual({
+      kind: 'email_domain_unverified',
+      message: expect.stringContaining('acme.test, which is not a verified email domain'),
+    });
+  });
+
+  it('accepts a key in a verified domain', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: emailProfile,
+      correlationKeyPolicy: EMAIL_KEY_POLICY,
+      verifiedEmailDomains: ['acme.test'],
+    });
+    expect(result.account?.correlationKey).toBe('anna@acme.test');
+  });
+
+  it('makes a person unprocessable when an address attribute is in an unverified domain', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: { ...profile, attributeTemplates: { ...profile.attributeTemplates, mail: '%person.givenName%@elsewhere.example' } },
+      verifiedEmailDomains: ['acme.test'],
+    });
+    expect(result.unprocessable?.kind).toBe('email_domain_unverified');
+    expect(result.unprocessable?.message).toContain('"mail"');
+    expect(result.unprocessable?.message).toContain('elsewhere.example');
+  });
+
+  it('does not read a non-address attribute as an address', () => {
+    const result = evaluate([contract()], [financeRule], {
+      profile: { ...profile, attributeTemplates: { ...profile.attributeTemplates, description: 'ask@elsewhere.example' } },
+      verifiedEmailDomains: ['acme.test'],
+    });
+    expect(result.unprocessable).toBeNull();
   });
 });
 

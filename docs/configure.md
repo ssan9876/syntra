@@ -557,6 +557,43 @@ but the SAML entity ID, the SSO endpoints and the WebAuthn relying party are
 built from the primary domain, so single sign-on and security keys want the
 public name there.
 
+## Email domains
+
+Syntra only writes addresses in domains the organisation has **verified**.
+That covers a business email typed into the console or the API (people,
+onboarding, CSV import), an account name or address attribute (`mail`,
+`email`, `userPrincipalName`, `proxyAddresses` and the like) that an account
+profile generates, and the domain an Entra ID target completes
+userPrincipalNames with. A verified domain also covers its subdomains:
+verifying `contoso.com` allows `eu.contoso.com`.
+
+To verify one, open **Settings, Domains**, add the domain, and publish the
+record it shows as a TXT record at the domain's apex:
+
+```
+contoso.com.  3600  IN  TXT  "syntra-domain-verification=<token>"
+```
+
+Then press **Verify**. Once verified, a domain stays verified, and the record
+can be removed. The token is per tenant, so one tenant publishing its record
+proves nothing for another. The API is `GET/POST /api/admin/email-domains`,
+`POST /api/admin/email-domains/:id/verify` and
+`DELETE /api/admin/email-domains/:id`, all needing `tenant.manage`.
+
+What happens to an address outside every verified domain:
+
+| Where it comes from | What Syntra does |
+|---|---|
+| Typed in (person create or edit, onboarding) | Refused with `422 email-domain-not-verified`, naming the field |
+| CSV import | That row is reported and skipped; the rest of the file imports |
+| An account profile template with a literal domain, e.g. `%person.givenName%@contoso.com` | The profile save is refused |
+| An Entra ID target's `userPrincipalDomain` (or a domain `tenantId`) | The target save is refused when the domain changes, and every run fails with the reason until the domain is verified |
+| An address a person source brings in (LDAP, the HR feed, inbound SCIM) | Stored as the source says, but provisioning makes that person unprocessable (`email_domain_unverified`) on any target that would write it |
+
+**Before upgrading an instance that already provisions**, add and verify the
+domains its targets and profiles use. Until then its runs fail or mark people
+unprocessable, which raises incidents.
+
 ## Connecting a directory source
 
 `infra/docker-compose.yml` already runs an OpenLDAP container for
@@ -913,7 +950,7 @@ as unverified. It does tell a refused credential (401) from missing consent
 |---|---|---|
 | `tenantId` | required | The directory id (a GUID, which Microsoft recommends) or a verified domain. |
 | `clientId` | required | The application (client) id. |
-| `userPrincipalDomain` | — | The domain new users sign in with, e.g. `contoso.com`: lowercase, no `@`, scheme or path. **Required when `tenantId` is the GUID** — see below. Console: *User principal name domain*. |
+| `userPrincipalDomain` | — | The domain new users sign in with, e.g. `contoso.com`: lowercase, no `@`, scheme or path, and a [verified email domain](#email-domains). **Required when `tenantId` is the GUID** — see below. Console: *User principal name domain*. |
 | client secret | vault | The target's one credential. |
 | `graphBaseUrl` | `https://graph.microsoft.com/v1.0` | Page links are pinned to this origin. |
 | `tokenUrl` | `https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token` | |

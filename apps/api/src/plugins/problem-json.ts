@@ -1,6 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
-import { SnapshotNotReadableError, UnknownReferenceError } from '@syntra/core';
+import {
+  EmailDomainError,
+  EmailDomainNotVerifiedError,
+  SnapshotNotReadableError,
+  UnknownReferenceError,
+} from '@syntra/core';
 
 const BASE = 'https://syntra.dev/problems/';
 
@@ -84,6 +89,35 @@ export function registerProblemJson(
         status: 404,
         detail: `no such ${error.kind}`,
         errors: [{ path: error.field, message: `no such ${error.kind}` }],
+      });
+    }
+
+    /**
+     * An address -- or the domain one would be built from -- outside every
+     * domain this tenant has verified. 422, with the field, because the
+     * request was well-formed and the fix is either the value or verifying
+     * the domain under Settings.
+     */
+    if (error instanceof EmailDomainNotVerifiedError) {
+      const message = `${error.domain} is not a verified email domain for this organisation`;
+      return reply.status(422).type('application/problem+json').send({
+        type: `${BASE}email-domain-not-verified`,
+        title: 'Email domain not verified',
+        status: 422,
+        detail: `${message}. Add and verify it under Settings, Domains.`,
+        domain: error.domain,
+        errors: [{ path: error.field, message }],
+      });
+    }
+
+    if (error instanceof EmailDomainError) {
+      const status = error.code === 'not-found' ? 404 : error.code === 'duplicate-domain' ? 409 : 400;
+      return reply.status(status).type('application/problem+json').send({
+        type: `${BASE}${error.code}`,
+        title: status === 404 ? 'Not Found' : 'Domain refused',
+        status,
+        detail: error.message,
+        ...(status === 404 ? {} : { errors: [{ path: 'domain', message: error.message }] }),
       });
     }
 
@@ -173,11 +207,16 @@ export function registerProblemJson(
 
     // Anything else may carry connection strings or stack detail. Log it
     // server-side; tell the client nothing beyond the status.
-    request.log.error({ err: error }, 'unhandled error');
+    // The route in the message and the request id in the reply, so the error
+    // somebody sees on screen can be found in the log by that id.
+    const route = request.routeOptions?.url ?? request.url;
+    request.log.error({ err: error, route }, `unhandled error in ${request.method} ${route}`);
     return reply.status(500).type('application/problem+json').send({
       type: `${BASE}internal-error`,
       title: 'Internal Server Error',
       status: 500,
+      detail: `Something went wrong on the server. The log has the cause under request id ${request.id}.`,
+      requestId: request.id,
     });
   });
 

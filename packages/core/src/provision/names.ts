@@ -8,6 +8,7 @@ import {
   templateReferences,
   type TemplateContext,
 } from './templates.js';
+import { domainIsCovered } from '../tenant/email-domains.js';
 
 /**
  * Re-exported rather than redefined: the connector layer owns what a target
@@ -108,6 +109,13 @@ export interface NameGenerationInput {
    */
   charset: CorrelationKeyCharset;
   maxAttempts: number;
+  /**
+   * The tenant's verified email domains (`verifiedEmailDomains`). A key that
+   * renders with an `@` must be in one of them or a subdomain of one.
+   * Required for the reason `charset` is: a caller that forgot it would
+   * generate addresses in any domain a template or a person record names.
+   */
+  verifiedDomains: readonly string[];
 }
 
 export type NameGenerationResult =
@@ -120,7 +128,9 @@ export type NameGenerationResult =
    * no room under the cap. Reported with the reason in words, rather than
    * repaired: dropping one `@` of two picks an address nobody wrote.
    */
-  | { ok: false; reason: 'malformed'; message: string };
+  | { ok: false; reason: 'malformed'; message: string }
+  /** The key is an address in a domain the tenant has not verified. */
+  | { ok: false; reason: 'domain_unverified'; domain: string };
 
 /**
  * Lowercased, ASCII-folded, apostrophes and spaces and anything else stripped.
@@ -249,6 +259,9 @@ export function generateCorrelationKey(
   if (!split.ok) return { ok: false, reason: 'malformed', message: split.message };
   const base = split.local;
   const domain = split.domain;
+  if (domain !== '' && !domainIsCovered(domain.slice(1), input.verifiedDomains)) {
+    return { ok: false, reason: 'domain_unverified', domain: domain.slice(1) };
+  }
   if (base === '') {
     // The template resolved, but every character folded away — a name written
     // entirely in a script with no ASCII equivalent. Report it the same way as

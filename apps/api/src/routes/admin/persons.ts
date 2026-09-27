@@ -19,6 +19,10 @@ import {
   deactivatePerson,
   explainPersonAccess,
   importPersons,
+  assertVerifiedEmailAddress,
+  domainIsCovered,
+  emailDomainOf,
+  verifiedEmailDomains,
   linkUserToPerson,
   unlinkUser,
   listContracts,
@@ -270,6 +274,7 @@ export async function registerAdminPersonRoutes(
           }
         }
 
+        await assertVerifiedEmailAddress(tx, body.businessEmail, 'businessEmail');
         const created = await createPerson(tx, body);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
@@ -482,7 +487,24 @@ export async function registerAdminPersonRoutes(
         ),
       );
 
-      const importable = rows.filter((row) => !claimedBy.has(row.externalId));
+      // A business email outside every verified domain is refused per row,
+      // like a claimed row: the rest of the file still imports.
+      const verified = await request.db((tx) => verifiedEmailDomains(tx));
+      const unverifiedDomain = (row: (typeof rows)[number]) => {
+        if (!row.businessEmail) return null;
+        const domain = emailDomainOf(row.businessEmail) ?? row.businessEmail.slice(row.businessEmail.lastIndexOf('@') + 1);
+        return domainIsCovered(domain, verified) ? null : domain;
+      };
+      const importable = rows.filter((row) => !claimedBy.has(row.externalId) && unverifiedDomain(row) === null);
+      for (const [index, row] of rows.entries()) {
+        const domain = claimedBy.has(row.externalId) ? null : unverifiedDomain(row);
+        if (domain !== null) {
+          errors.push({
+            line: index + 2,
+            message: `${row.externalId}: ${domain} is not a verified email domain for this organisation`,
+          });
+        }
+      }
       for (const [index, row] of rows.entries()) {
         const owner = claimedBy.get(row.externalId);
         if (owner === undefined) continue;
@@ -601,6 +623,7 @@ export async function registerAdminPersonRoutes(
         // Looked up in this tenant first: the foreign key alone accepts another
         // tenant's org unit. See tenant-reference.ts in core.
         await assertReferenceInTenant(tx, 'orgUnit', body.orgUnitId, 'orgUnitId');
+        await assertVerifiedEmailAddress(tx, body.businessEmail, 'businessEmail');
         const updated = await tx.person.update({
           where: { id },
           data: {

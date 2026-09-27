@@ -21,6 +21,7 @@ const generate = (
     template?: string;
     maxLength?: number;
     charset?: CorrelationKeyCharset;
+    verifiedDomains?: readonly string[];
   } = {},
 ) =>
   generateCorrelationKey({
@@ -32,6 +33,7 @@ const generate = (
     // passes unchanged under the rule it was written against.
     charset: over.charset ?? 'sam',
     maxAttempts: over.maxAttempts ?? 20,
+    verifiedDomains: over.verifiedDomains ?? ['acme.test', 'contoso.com', 'very-long-domain.example', 'x.com', 'x.test', 'y.com'],
   });
 
 const key = (result: unknown): string => (result as { correlationKey: string }).correlationKey;
@@ -510,5 +512,35 @@ describe('generateCorrelationKey — the email rule', () => {
   it('keeps an @-less key to 64 characters', () => {
     const result = generate(context('A', 'b'.repeat(80)), [], { charset: 'email', maxLength: 254 });
     expect(key(result)).toHaveLength(64);
+  });
+
+  it('refuses an address in a domain the tenant has not verified', () => {
+    expect(
+      generate(withEmail('Jane_Doe@deeznutz.org'), [], {
+        template: '%person.businessEmail%',
+        charset: 'email',
+        maxLength: 254,
+        verifiedDomains: ['contoso.com'],
+      }),
+    ).toEqual({ ok: false, reason: 'domain_unverified', domain: 'deeznutz.org' });
+  });
+
+  it('accepts an address in a subdomain of a verified domain', () => {
+    expect(
+      key(
+        generate(withEmail('anna@eu.contoso.com'), [], {
+          template: '%person.businessEmail%',
+          charset: 'email',
+          maxLength: 254,
+          verifiedDomains: ['contoso.com'],
+        }),
+      ),
+    ).toBe('anna@eu.contoso.com');
+  });
+
+  it('does not check a key with no domain', () => {
+    expect(
+      key(generate(context('Anna', 'Novak'), [], { charset: 'email', maxLength: 254, verifiedDomains: [] })),
+    ).toBe('anna.novak');
   });
 });

@@ -67,6 +67,7 @@ export const KINDS = [
   'deletionRequest',
   'webhook',
   'webhookDelivery',
+  'emailDomain',
   'snapshot',
   'evidencePack',
   'finding',
@@ -327,6 +328,11 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   // below with A's context, and it must not dial `example.test` to prove it.
   const webhook = await tx.webhookEndpoint.create({
     data: { tenantId, name: `${tag} hook`, url: `https://${tag}.example.test/hook`, enabled: false },
+  });
+  // Verified already, so probing its verify route with A's own id returns it
+  // unchanged instead of asking DNS about `example.test`.
+  const emailDomain = await tx.emailDomain.create({
+    data: { tenantId, domain: `${tag}.example.test`, verificationToken: token(), verifiedAt: now },
   });
   const webhookDelivery = await tx.webhookDelivery.create({
     data: {
@@ -614,6 +620,7 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   });
 
   return {
+    emailDomain: emailDomain.id,
     privilegedChange: privilegedChange.id,
     breakGlassUser: breakGlassUser.id,
     breakGlassActivation: activation.id,

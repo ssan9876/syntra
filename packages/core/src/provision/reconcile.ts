@@ -158,6 +158,7 @@ export function unprocessableScope(kind: UnprocessableKind): UnprocessableScope 
     case 'name_generation_exhausted':
     case 'target_read_incomplete':
     case 'account_conflict':
+    case 'email_domain_unverified':
       return 'all';
     default: {
       // Exhaustiveness: a kind added to the union without a decision here is a

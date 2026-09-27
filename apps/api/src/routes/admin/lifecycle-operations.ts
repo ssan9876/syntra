@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { Prisma, type TenantClient } from '@syntra/db';
 import { z } from 'zod';
 import {
+  assertVerifiedEmailAddress,
   getLifecycleOperation,
   retryLifecycleOperation,
   assertRetryAfterVerification,
@@ -829,6 +830,7 @@ export async function registerAdminLifecycleOperationRoutes(
     },
     async (request, reply) => {
       const body = onboardingRequest.parse(request.body);
+      await request.db((tx) => assertVerifiedEmailAddress(tx, body.person.businessEmail, 'person.businessEmail'));
       const existed = await request.db((tx) =>
         tx.lifecycleOperation.findUnique({
           where: {

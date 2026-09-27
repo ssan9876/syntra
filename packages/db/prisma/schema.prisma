@@ -221,6 +221,7 @@ model Tenant {
   targetAccounts            TargetAccount[]
   credentialPickups         CredentialPickup[]
   incidentStates            IncidentState[]
+  emailDomains              EmailDomain[]
   accountEntitlements       AccountEntitlement[]
   provisionRuns             ProvisionRun[]
   personProvisionReceipts   PersonProvisionReceipt[]
@@ -5412,4 +5413,29 @@ model IncidentState {
   updatedAt         DateTime  @updatedAt
 
   @@unique([tenantId, kind])
+}
+
+/// A domain this tenant has proved it controls, and so may put in an address.
+///
+/// Every address Syntra writes -- a person's business email, an account name
+/// or `mail` a profile generates, an Entra userPrincipalName -- must be in a
+/// verified domain or a subdomain of one. Proof is a DNS TXT record at the
+/// domain's apex holding `syntra-domain-verification=<verificationToken>`,
+/// which only whoever runs the zone can publish. A row with no `verifiedAt`
+/// is a claim, not a permission.
+model EmailDomain {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Lowercase, ASCII (punycode), no trailing dot.
+  domain            String
+  verificationToken String
+  verifiedAt        DateTime?
+  lastCheckedAt     DateTime?
+  /// Why the last check did not verify, in words; null once it has.
+  lastCheckError    String?
+  createdById       String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+
+  @@unique([tenantId, domain])
 }

@@ -15,6 +15,7 @@ import {
   type Config,
   type Scheduler,
   type Transport,
+  type TxtLookup,
 } from '@syntra/core';
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerWebApp } from './plugins/web-app.js';
@@ -53,6 +54,7 @@ import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminPrivacyRoutes } from './routes/admin/privacy.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
+import { registerAdminEmailDomainRoutes } from './routes/admin/email-domains.js';
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
@@ -120,6 +122,11 @@ export interface AppOptions {
    * a collector so they assert on what the REAL application logger emits.
    */
   logStream?: LogStream;
+  /**
+   * How an email domain's verification record is looked up. Defaults to DNS;
+   * the tests pass a fake so none of them depends on a real zone.
+   */
+  txtLookup?: TxtLookup;
 }
 
 /**
@@ -413,6 +420,10 @@ export async function buildApp(
     outboundAllowPrivate: config.outboundAllowPrivate,
   });
   await app.register(registerAdminRoleRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminEmailDomainRoutes, {
+    prefix: '/api/admin',
+    ...(options.txtLookup ? { txtLookup: options.txtLookup } : {}),
+  });
   await app.register(registerAdminIncidentRoutes, {
     prefix: '/api/admin',
     ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),

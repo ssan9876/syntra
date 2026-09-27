@@ -4,6 +4,7 @@ import { correlationKeyPolicyFor } from '@syntra/connectors';
 import { conditionSchema } from './condition.js';
 import { desiredState } from './desired.js';
 import type { ContractFacts, GrantFacts, PersonFacts, RuleFacts } from './types.js';
+import { verifiedEmailDomains } from '../tenant/email-domains.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -327,6 +328,7 @@ async function projectOne(
     // by not writing it anywhere.
     takenCorrelationKeys: new Set<string>(),
     correlationKeyPolicy: correlationKeyPolicyFor(target.type, target.config),
+    verifiedEmailDomains: await verifiedEmailDomains(tx),
     containerOverride: placement?.container ?? null,
     orgUnitContainer: container,
     renameEnabled: target.renameEnabled,

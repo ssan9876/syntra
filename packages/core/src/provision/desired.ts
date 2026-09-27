@@ -1,6 +1,7 @@
 import { evaluateCondition, type ConditionFacts } from './condition.js';
 import type { CorrelationKeyPolicy } from '@syntra/connectors';
 import { generateCorrelationKey } from './names.js';
+import { addressedDomain, domainIsCovered, isAddressAttribute } from '../tenant/email-domains.js';
 import { renderContainer, renderTemplate, type TemplateContext } from './templates.js';
 import type {
   Attribution,
@@ -46,6 +47,13 @@ export interface DesiredStateInput {
    * before this field existed.
    */
   correlationKeyPolicy: CorrelationKeyPolicy;
+  /**
+   * The tenant's verified email domains. Every address this target would be
+   * given -- a generated key with an `@`, a `mail` or `userPrincipalName`
+   * attribute -- must fall inside one, or the person is unprocessable here.
+   * Required: forgetting to load it would write addresses in any domain.
+   */
+  verifiedEmailDomains: readonly string[];
   /**
    * A container somebody pinned this person's account to by hand, or null.
    *
@@ -610,6 +618,18 @@ export function desiredState(input: DesiredStateInput): DesiredState {
         },
       };
     }
+    if (isAddressAttribute(name)) {
+      const domain = addressedDomain(rendered.value);
+      if (domain !== null && !domainIsCovered(domain, input.verifiedEmailDomains)) {
+        return {
+          ...empty,
+          unprocessable: {
+            kind: 'email_domain_unverified',
+            message: `the account profile gives "${name}" an address in ${domain}, which is not a verified email domain for this organisation`,
+          },
+        };
+      }
+    }
     attributes[name] = [rendered.value];
   }
 
@@ -703,6 +723,7 @@ export function desiredState(input: DesiredStateInput): DesiredState {
       maxLength: input.correlationKeyPolicy.maxLength,
       charset: input.correlationKeyPolicy.charset,
       maxAttempts: profile.maxUniquenessAttempts,
+      verifiedDomains: input.verifiedEmailDomains,
     });
 
     if (!generated.ok) {
@@ -721,6 +742,11 @@ export function desiredState(input: DesiredStateInput): DesiredState {
                   kind: 'name_generation_exhausted',
                   message: `no unique account name could be generated for ${fullName(person)} within ${generated.attempts} attempts`,
                 }
+              : generated.reason === 'domain_unverified'
+                ? {
+                    kind: 'email_domain_unverified',
+                    message: `the account name template renders an address in ${generated.domain}, which is not a verified email domain for this organisation`,
+                  }
               : generated.reason === 'malformed'
                 ? {
                     // The template resolved; what it resolved to is not a key

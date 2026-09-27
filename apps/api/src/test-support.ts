@@ -1,6 +1,6 @@
 import { prisma } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
-import { loadConfig, memoryTransport, type Scheduler } from '@syntra/core';
+import { loadConfig, memoryTransport, type Scheduler, type TxtLookup } from '@syntra/core';
 import { buildApp } from './app.js';
 
 export const TEST_HOST = 'acme.syntra.test';
@@ -109,6 +109,11 @@ export async function buildTestApp(
      * what ships.
      */
     env?: Record<string, string>;
+    /**
+     * The email-domain TXT lookup. Defaults to one that finds nothing, so no
+     * test asks real DNS about a domain.
+     */
+    txtLookup?: TxtLookup;
   } = {},
 ) {
   await resetDatabase();
@@ -140,6 +145,7 @@ export async function buildTestApp(
   const app = await buildApp(config, {
     logger: false,
     transport: mail,
+    txtLookup: options.txtLookup ?? (async () => []),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   // `config` too, so a test about running several replicas can build a second

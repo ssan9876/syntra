@@ -2,6 +2,7 @@ import { validateContainerDn } from './org-unit-container-service.js';
 import { baseDnOf, targetPlacesAccountsInContainers } from './org-unit-mirror.js';
 import { withTenant, type TenantClient } from '@syntra/db';
 import {
+  correlationKeyPolicyFor,
   targetConnectorFor,
   targetConfigSchemaFor,
   forgetAccessTokens,
@@ -26,6 +27,14 @@ import { conditionSchema, type Condition } from './condition.js';
 import { applyTargetSchedule, removeTargetSchedule } from './jobs.js';
 import type { GuardThresholds } from './guard.js';
 import type { LadderSettings } from './types.js';
+import {
+  EmailDomainNotVerifiedError,
+  assertTargetDomainsVerified,
+  entraUpnDomain,
+  isAddressAttribute,
+  unverifiedTemplateDomains,
+  verifiedEmailDomains,
+} from '../tenant/email-domains.js';
 
 const secretNameFor = (targetId: string) => `target/${targetId}/bind`;
 
@@ -381,6 +390,7 @@ export async function createTarget(
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
     await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
+    assertTargetDomainsVerified(scalars.type, config, await verifiedEmailDomains(tx));
     const target = await tx.targetSystem.create({
       data: {
         tenantId: bound,
@@ -532,6 +542,14 @@ export async function updateTarget(
     const before = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!before) throw new TargetNotFoundError(targetId);
     await assertPairedSourceExists(tx, scalars.pairedDirectorySourceId);
+    // Only a config that CHANGES the address domain is refused here: a target
+    // saved before domains were verified can still have its schedule edited,
+    // and its runs say why they fail until the domain is verified.
+    if (config !== undefined) {
+      const type = scalars.type ?? before.type;
+      const changed = type !== before.type || entraUpnDomain(config) !== entraUpnDomain(before.config);
+      if (changed) assertTargetDomainsVerified(type, config, await verifiedEmailDomains(tx));
+    }
 
     const ladder = {
       entitlementRevocationDelayDays:
@@ -1120,6 +1138,30 @@ export function sensitiveProfileMappings(attributeTemplates: Record<string, stri
     }));
 }
 
+/**
+ * Refuses a profile that writes a literal domain nobody verified: the
+ * `contoso.com` of `%person.givenName%@contoso.com` in an address attribute,
+ * or in the account name of a target whose names are addresses. A domain that
+ * comes from a placeholder is checked when it renders, per person.
+ */
+async function assertProfileDomainsVerified(
+  tx: TenantClient,
+  target: { type: string; config: unknown },
+  profile: { correlationKeyTemplate: string; attributeTemplates: Record<string, string> },
+): Promise<void> {
+  const verified = await verifiedEmailDomains(tx);
+  const templates: Array<[string, string]> = Object.entries(profile.attributeTemplates)
+    .filter(([name]) => isAddressAttribute(name))
+    .map(([name, template]) => [`attributeTemplates.${name}`, template]);
+  if (correlationKeyPolicyFor(target.type, target.config).charset === 'email') {
+    templates.unshift(['correlationKeyTemplate', profile.correlationKeyTemplate]);
+  }
+  for (const [field, template] of templates) {
+    const [domain] = unverifiedTemplateDomains(template, verified);
+    if (domain !== undefined) throw new EmailDomainNotVerifiedError(field, domain);
+  }
+}
+
 export async function upsertAccountProfile(
   tenantId: string,
   actorUserId: string | null,
@@ -1135,6 +1177,7 @@ export async function upsertAccountProfile(
     // than a foreign-key violation two statements later.
     const target = await tx.targetSystem.findUnique({ where: { id: targetId } });
     if (!target) throw new TargetNotFoundError(targetId);
+    await assertProfileDomainsVerified(tx, target, profile);
 
     // One statement rather than find-then-branch. `targetSystemId` is
     // `@unique` — the Task 1 deviation — so it is a valid unique selector, and
