@@ -291,6 +291,13 @@ export function PersonDetailPage() {
                   name="businessEmail"
                   onChange={(x) => set('businessEmail', x)}
                   error={errs.businessEmail}
+                  warning={
+                    data.users.length > 0 &&
+                    (v.businessEmail ?? '') !== '' &&
+                    (v.businessEmail ?? '') !== (data.businessEmail ?? '')
+                      ? `Also changes the email of ${data.users.map((u) => u.login).join(', ')}.`
+                      : undefined
+                  }
                 />
                 <Select
                   label="Org unit"

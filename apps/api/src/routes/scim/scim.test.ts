@@ -368,6 +368,60 @@ describe('creating users', () => {
 
     expect(created.json().active).toBe(false);
   });
+
+  it('rejects a user whose address another person already has, and creates nobody', async () => {
+    // Grace already signs in, so the matcher does not link Ada's push to her,
+    // and a new person on Grace's address is refused.
+    await withTenant(ctx.tenantId, async (tx) => {
+      const grace = await createPerson(tx, {
+        givenName: 'Grace',
+        familyName: 'Hopper',
+        businessEmail: 'ada@acme.test',
+      });
+      await createUser(tx, {
+        login: 'ghopper',
+        email: 'ada@acme.test',
+        displayName: 'Grace Hopper',
+        personId: grace.id,
+      });
+    });
+
+    const res = await createAda();
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().scimType).toBe('uniqueness');
+    expect(res.json().detail).toBe('Grace Hopper already has ada@acme.test.');
+    const counts = await withTenant(ctx.tenantId, async (tx) => ({
+      persons: await tx.person.count(),
+      ada: await tx.user.count({ where: { login: 'ada' } }),
+    }));
+    expect(counts).toEqual({ persons: 1, ada: 0 });
+  });
+});
+
+describe("a linked account's email", () => {
+  it("is the person's business email, whatever a PUT or PATCH sends", async () => {
+    const created = await createAda();
+    const id = created.json().id as string;
+    expect(created.json().emails[0].value).toBe('ada@acme.test');
+
+    const put = await scim('PUT', `/Users/${id}`, token, {
+      schemas: [SCIM_USER_SCHEMA],
+      userName: 'ada',
+      name: { givenName: 'Ada', familyName: 'Lovelace' },
+      emails: [{ value: 'ada.l@acme.test', primary: true }],
+    });
+    expect(put.statusCode).toBe(200);
+
+    const patched = await scim('PATCH', `/Users/${id}`, token, {
+      schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+      Operations: [{ op: 'replace', path: 'emails[type eq "work"].value', value: 'ada.l@acme.test' }],
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const row = await withTenant(ctx.tenantId, (tx) => tx.user.findUniqueOrThrow({ where: { id } }));
+    expect(row.email).toBe('ada@acme.test');
+  });
 });
 
 describe('replacing users', () => {

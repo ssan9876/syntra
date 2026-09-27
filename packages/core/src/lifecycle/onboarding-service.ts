@@ -3,6 +3,7 @@ import type { Scheduler } from '../jobs/scheduler.js';
 import { createUser, type CreateUserInput } from '../directory/user-service.js';
 import { createContract, type CreateContractInput } from '../identity/contract-service.js';
 import { createPerson, linkUserToPerson, type CreatePersonInput } from '../identity/person-service.js';
+import { assertPersonEmailFree } from '../identity/person-email.js';
 import { enqueueOutbox, usersWithPermission } from '../automate/notify.js';
 import { PERMISSIONS } from '../rbac/permissions.js';
 import { assertReferenceInTenant, UnknownReferenceError } from '../tenant-reference.js';
@@ -65,6 +66,16 @@ export async function onboardPerson(input: OnboardPersonInput) {
     await assertReferenceInTenant(tx, 'orgUnit', input.person.orgUnitId, 'person.orgUnitId');
     await assertReferenceInTenant(tx, 'person', input.contract.managerPersonId, 'contract.managerPersonId');
     await assertReferenceInTenant(tx, 'orgUnit', input.login?.orgUnitId, 'login.orgUnitId');
+    // Not on a replay whose person is already saved: that person holds it.
+    const replay = await tx.lifecycleOperation.findUnique({
+      where: {
+        tenantId_idempotencyKey: { tenantId: input.tenantId, idempotencyKey: input.idempotencyKey },
+      },
+      select: { personId: true },
+    });
+    if (!replay?.personId) {
+      await assertPersonEmailFree(tx, input.person.businessEmail, { field: 'person.businessEmail' });
+    }
     const targetIds = [...new Set(input.targetIds ?? [])];
     if (targetIds.length > 0) {
       const found = await tx.targetSystem.count({ where: { id: { in: targetIds } } });
@@ -103,7 +114,12 @@ export async function onboardPerson(input: OnboardPersonInput) {
         const contract = await createContract(tx, person.id, input.contract);
         let userId: string | undefined;
         if (input.login) {
-          const user = await createUser(tx, input.login);
+          // The login carries the person's business email when they have one.
+          const user = await createUser(tx, {
+            ...input.login,
+            ...(person.businessEmail ? { email: person.businessEmail } : {}),
+            personId: person.id,
+          });
           await linkUserToPerson(tx, user.id, person.id);
           userId = user.id;
         }

@@ -32,6 +32,7 @@ describe('parsePersonCsv', () => {
       },
     });
     expect(rows[0]!.contract.endDate).toBeUndefined();
+    expect(rows[0]!.line).toBe(2);
   });
 
   it('reports the line number of a bad date instead of throwing', () => {
@@ -122,7 +123,7 @@ describe('importPersons', () => {
       `${HEADER}\nE1,Jo,Doe,jo@acme.test,1,true,2026-01-01,,Nurse,Care`,
     );
     const result = await withTenant(tenantId, (tx) => importPersons(tx, rows));
-    expect(result).toEqual({ created: 1, updated: 0 });
+    expect(result).toEqual({ created: 1, updated: 0, errors: [] });
 
     const persons = await withTenant(tenantId, (tx) => tx.person.findMany());
     const contracts = await withTenant(tenantId, (tx) =>
@@ -139,7 +140,7 @@ describe('importPersons', () => {
       importPersons(tx, parse(csv)),
     );
 
-    expect(second).toEqual({ created: 0, updated: 1 });
+    expect(second).toEqual({ created: 0, updated: 1, errors: [] });
     expect(
       await withTenant(tenantId, (tx) => tx.person.count()),
     ).toBe(1);
@@ -223,6 +224,68 @@ describe('importPersons', () => {
         `E2,Sam,Roe,sam@acme.test,1,true,2026-01-01,,Trainer,Learning`,
     );
     const result = await withTenant(tenantId, (tx) => importPersons(tx, rows));
-    expect(result).toEqual({ created: 2, updated: 0 });
+    expect(result).toEqual({ created: 2, updated: 0, errors: [] });
+  });
+
+  it('skips a row whose business email another person has, in any case', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.person.create({
+        data: { tenantId, givenName: 'Sam', familyName: 'Roe', businessEmail: 'sam@acme.test' },
+      }),
+    );
+    const rows = parse(
+      `${HEADER}
+E1,Jo,Doe,SAM@acme.test,1,true,2026-01-01,,Nurse,Care
+` +
+        `E2,Al,Poe,al@acme.test,1,true,2026-01-01,,Trainer,Learning`,
+    );
+
+    const result = await withTenant(tenantId, (tx) => importPersons(tx, rows));
+
+    expect(result).toEqual({
+      created: 1,
+      updated: 0,
+      errors: [{ line: 2, message: 'E1: Sam Roe already has SAM@acme.test' }],
+    });
+    expect(await withTenant(tenantId, (tx) => tx.person.count())).toBe(2);
+  });
+
+  it('skips the second of two rows in one file sharing an address', async () => {
+    const rows = parse(
+      `${HEADER}
+E1,Jo,Doe,jo@acme.test,1,true,2026-01-01,,Nurse,Care
+` +
+        `E2,Joe,Dough,Jo@Acme.test,1,true,2026-01-01,,Trainer,Learning`,
+    );
+
+    const result = await withTenant(tenantId, (tx) => importPersons(tx, rows));
+
+    expect(result).toEqual({
+      created: 1,
+      updated: 0,
+      errors: [{ line: 3, message: 'E2: Jo Doe already has Jo@Acme.test' }],
+    });
+  });
+
+  it("carries a changed address onto the person's linked login", async () => {
+    await withTenant(tenantId, (tx) =>
+      importPersons(tx, parse(`${HEADER}
+E1,Jo,Doe,jo@acme.test,1,true,2026-01-01,,Nurse,Care`)),
+    );
+    const userId = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.findFirstOrThrow({ where: { externalId: 'E1' } });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'jdoe', email: 'jo@acme.test', displayName: 'Jo Doe', personId: person.id },
+      });
+      return user.id;
+    });
+
+    await withTenant(tenantId, (tx) =>
+      importPersons(tx, parse(`${HEADER}
+E1,Jo,Doe,joanne@acme.test,1,true,2026-01-01,,Nurse,Care`)),
+    );
+
+    const user = await withTenant(tenantId, (tx) => tx.user.findUniqueOrThrow({ where: { id: userId } }));
+    expect(user.email).toBe('joanne@acme.test');
   });
 });

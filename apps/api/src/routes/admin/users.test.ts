@@ -1305,9 +1305,49 @@ describe('linking a new account to a person', () => {
     });
 
     // Auto-linking would silently create the second account the warning below
-    // exists for, without the warning.
+    // exists for, without the warning. Unlinked, the address is refused:
+    // mokafor carries it as Maya's login.
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toMatch(/email already in use/i);
+  });
+
+  it("creates a linked account with the person's business email, whatever was typed", async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'm@acme.test',
+      displayName: 'Maya Okafor',
+      personId,
+    });
+
     expect(res.statusCode).toBe(201);
-    expect(await personOf(cookie, res.json().id)).toBeNull();
+    expect(res.json().email).toBe('maya@acme.test');
+  });
+
+  it("lets a person's second account share the address", async () => {
+    await seedAdmin(BOTH);
+    const cookie = await authCookie('admin');
+    const personId = await newPerson(cookie, { businessEmail: 'maya@acme.test' });
+    await post('/api/admin/users', cookie, {
+      login: 'mokafor',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor',
+      personId,
+    });
+
+    const res = await post('/api/admin/users', cookie, {
+      login: 'mokafor-admin',
+      email: 'maya@acme.test',
+      displayName: 'Maya Okafor (admin)',
+      personId,
+      allowSecondAccount: true,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().email).toBe('maya@acme.test');
   });
 
   it('warns before giving one person a second account, and is confirmable', async () => {
@@ -1581,16 +1621,18 @@ describe('GET /api/admin/users/:id/person-candidates', () => {
       displayName: 'M',
       personId: person.json().id,
     });
-    // Same work address, so confident by rule — but she already signs in, so
-    // the create path demoted it rather than making a second account silently.
-    const second = await post('/api/admin/users', cookie, {
-      login: 'second',
-      email: 'maya@acme.test',
-      displayName: 'M',
-    });
+    // Same work address, so confident by rule — but she already signs in.
+    // Seeded directly: `first` carries maya@acme.test as her login, so the
+    // create route now refuses a second unlinked account on it. An install
+    // can still hold one from before.
+    const second = await withTenant(ctx.tenantId, (tx) =>
+      tx.user.create({
+        data: { tenantId: ctx.tenantId, login: 'second', email: 'maya@acme.test', displayName: 'M' },
+      }),
+    );
 
     const res = await get(
-      `/api/admin/users/${second.json().id}/person-candidates`,
+      `/api/admin/users/${second.id}/person-candidates`,
       cookie,
     );
 

@@ -44,6 +44,7 @@ import {
   updatePersonSource,
   listDuplicateReviews,
   resolveDuplicateReview,
+  DuplicateResolutionRefusedError,
   DuplicateReviewNotFoundError,
   listPersonSourceLinks,
   unlinkPersonSourceIdentity,
@@ -217,6 +218,9 @@ export async function registerAdminPersonSourceRoutes(
       } catch (cause) {
         if (cause instanceof DuplicateReviewNotFoundError) {
           throw new ProblemError(404, 'not-found', 'Open duplicate review not found', cause.message);
+        }
+        if (cause instanceof DuplicateResolutionRefusedError) {
+          throw new ProblemError(409, 'email-in-use', 'Email already in use', cause.message);
         }
         throw cause;
       }

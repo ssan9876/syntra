@@ -20,6 +20,8 @@ import {
   explainPersonAccess,
   importPersons,
   assertVerifiedEmailAddress,
+  assertPersonEmailFree,
+  followPersonEmail,
   domainIsCovered,
   emailDomainOf,
   verifiedEmailDomains,
@@ -213,30 +215,21 @@ export async function registerAdminPersonRoutes(
       const body = createPersonRequest.parse(request.body);
 
       const person = await request.db(async (tx) => {
+        // A refusal, not a warning: `allowDuplicate` does not reach it. The
+        // business email is unique per tenant across every status.
+        await assertPersonEmailFree(tx, body.businessEmail);
+
         if (!body.allowDuplicate) {
-          // Active people only, and both rules at once. A leaver's record is
-          // not a reason to refuse their replacement, and a namesake who left
-          // last year is exactly the kind of false alarm that teaches people
-          // to click through a warning without reading it.
+          // Active people only. A leaver's record is not a reason to refuse
+          // their replacement, and a namesake who left last year is exactly
+          // the kind of false alarm that teaches people to click through a
+          // warning without reading it. The email is not asked here: the
+          // check above already refused a shared one.
           const candidates = await tx.person.findMany({
             where: {
               status: 'active',
-              OR: [
-                {
-                  givenName: { equals: body.givenName.trim(), mode: 'insensitive' },
-                  familyName: { equals: body.familyName.trim(), mode: 'insensitive' },
-                },
-                ...(body.businessEmail
-                  ? [
-                      {
-                        businessEmail: {
-                          equals: body.businessEmail,
-                          mode: 'insensitive' as const,
-                        },
-                      },
-                    ]
-                  : []),
-              ],
+              givenName: { equals: body.givenName.trim(), mode: 'insensitive' },
+              familyName: { equals: body.familyName.trim(), mode: 'insensitive' },
             },
             select: {
               id: true,
@@ -521,6 +514,7 @@ export async function registerAdminPersonRoutes(
 
       const result = await request.db(async (tx) => {
         const imported = await importPersons(tx, importable);
+        errors.push(...imported.errors);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'person.import',
@@ -528,9 +522,9 @@ export async function registerAdminPersonRoutes(
           targetId: null,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { ...imported, rejected: errors.length },
+          payload: { created: imported.created, updated: imported.updated, rejected: errors.length },
         });
-        return imported;
+        return { created: imported.created, updated: imported.updated };
       });
 
       // Partial success is reported, never hidden: the caller sees both what
@@ -624,6 +618,9 @@ export async function registerAdminPersonRoutes(
         // tenant's org unit. See tenant-reference.ts in core.
         await assertReferenceInTenant(tx, 'orgUnit', body.orgUnitId, 'orgUnitId');
         await assertVerifiedEmailAddress(tx, body.businessEmail, 'businessEmail');
+        if (body.businessEmail) {
+          await assertPersonEmailFree(tx, body.businessEmail, { exceptPersonId: id });
+        }
         const updated = await tx.person.update({
           where: { id },
           data: {
@@ -638,6 +635,9 @@ export async function registerAdminPersonRoutes(
             ...(body.orgUnitId === undefined ? {} : { orgUnitId: body.orgUnitId }),
           },
         });
+        // The person's logins carry their business email. Refused, with the
+        // person update rolled back, when another login already has it.
+        const accountsFollowed = await followPersonEmail(tx, id);
         await recordEvent(tx, {
           actorUserId: request.session.userId,
           action: 'person.update',
@@ -648,6 +648,7 @@ export async function registerAdminPersonRoutes(
           payload: {
             from: { givenName: existing.givenName, familyName: existing.familyName },
             to: { givenName: updated.givenName, familyName: updated.familyName },
+            ...(accountsFollowed === 0 ? {} : { accountsFollowed }),
             ...(body.privacyCaseId === undefined ? {} : { privacyCaseId: body.privacyCaseId }),
           },
         });

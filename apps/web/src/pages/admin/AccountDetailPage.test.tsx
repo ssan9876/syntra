@@ -206,6 +206,38 @@ describe('AccountDetailPage', () => {
       expect(body.displayName).toBe('Jo Doe');
     });
 
+    it("shows a linked account's email as the person's, not editable, and does not send it", async () => {
+      const linked = {
+        ...ACCOUNT,
+        email: 'jo.doe@acme.test',
+        person: { id: 'p1', givenName: 'Jo', familyName: 'Doe', businessEmail: 'jo.doe@acme.test' },
+      };
+      const patched = vi.fn((_url: string, _init?: RequestInit) => json(linked));
+      mockApi(linked, { '/details': patched });
+      renderPage();
+
+      await screen.findByRole('heading', { name: 'J Doe' });
+      await userEvent.click(screen.getByRole('button', { name: /edit/i }));
+      const email = screen.getByLabelText('Email');
+      expect(email).toBeDisabled();
+      expect(email).toHaveValue('jo.doe@acme.test');
+      expect(screen.getByText('Business email of Jo Doe. Change it on Jo Doe.')).toBeVisible();
+
+      await userEvent.click(screen.getByRole('button', { name: /save/i }));
+      await waitFor(() => expect(patched).toHaveBeenCalled());
+      const body = JSON.parse(String(patched.mock.calls[0]![1]!.body));
+      expect(body).not.toHaveProperty('email');
+    });
+
+    it('keeps the email editable for a linked account whose person has none', async () => {
+      mockApi({ ...ACCOUNT, person: { id: 'p1', givenName: 'Jo', familyName: 'Doe', businessEmail: null } });
+      renderPage();
+
+      await screen.findByRole('heading', { name: 'J Doe' });
+      await userEvent.click(screen.getByRole('button', { name: /edit/i }));
+      expect(screen.getByLabelText('Email')).toBeEnabled();
+    });
+
     /**
      * A directory owns the login, name and email of an account it syncs, and
      * rewrites them on every run. Offering the form would be offering a change

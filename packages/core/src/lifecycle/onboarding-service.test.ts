@@ -83,4 +83,55 @@ describe('durable onboarding', () => {
       status: 'failed',
     });
   });
+
+  it("gives the login the person's business email", async () => {
+    await onboardPerson({
+      tenantId,
+      idempotencyKey: 'HR-1044',
+      person: { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya.okafor@acme.test' },
+      contract: { sequence: 1, isPrimary: true, startDate: new Date('2026-10-01') },
+      login: { login: 'maya.okafor', email: 'maya@acme.test', displayName: 'Maya Okafor' },
+      scheduler: scheduler(),
+    });
+
+    const user = await withTenant(tenantId, (tx) => tx.user.findFirstOrThrow());
+    expect(user.email).toBe('maya.okafor@acme.test');
+    expect(user.personId).not.toBeNull();
+  });
+
+  it('refuses a business email another person has before recording anything', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.person.create({
+        data: { tenantId, givenName: 'Sam', familyName: 'Roe', businessEmail: 'sam@acme.test' },
+      }),
+    );
+
+    await expect(
+      onboardPerson({
+        tenantId,
+        idempotencyKey: 'HR-1045',
+        person: { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'SAM@acme.test' },
+        contract: { sequence: 1, isPrimary: true, startDate: new Date('2026-10-01') },
+        scheduler: scheduler(),
+      }),
+    ).rejects.toThrow('Sam Roe already has SAM@acme.test.');
+
+    expect(await withTenant(tenantId, (tx) => tx.person.count())).toBe(1);
+    expect(await withTenant(tenantId, (tx) => tx.lifecycleOperation.count())).toBe(0);
+  });
+
+  it('replays an onboarding whose person already holds the address', async () => {
+    const request = {
+      tenantId,
+      idempotencyKey: 'HR-1046',
+      person: { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya.okafor@acme.test' },
+      contract: { sequence: 1, isPrimary: true, startDate: new Date('2026-10-01') },
+      scheduler: scheduler(),
+    };
+
+    const first = await onboardPerson(request);
+    const replayed = await onboardPerson(request);
+
+    expect(replayed.person.id).toBe(first.person.id);
+  });
 });

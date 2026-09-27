@@ -606,7 +606,7 @@ describe('duplicate people', () => {
     expect(res.json().candidates[0]).toMatchObject({ givenName: 'Maya' });
   });
 
-  it('warns on a shared work email under a different name', async () => {
+  it('refuses a shared work email under a different name, even when confirmed', async () => {
     await seedAdmin(BOTH);
     const cookie = await adminCookie();
     await post('/api/admin/persons', cookie, {
@@ -619,9 +619,15 @@ describe('duplicate people', () => {
       givenName: 'Different',
       familyName: 'Name',
       businessEmail: 'M@acme.test',
+      allowDuplicate: true,
     });
 
     expect(res.statusCode).toBe(409);
+    expect(res.json().type).toBe('https://syntra.dev/problems/email-in-use');
+    expect(res.json().detail).toBe('Maya Okafor already has M@acme.test.');
+    expect(res.json().errors).toEqual([
+      { path: 'businessEmail', message: 'Maya Okafor already has M@acme.test.' },
+    ]);
   });
 
   it('creates anyway when confirmed', async () => {
@@ -677,6 +683,122 @@ describe('duplicate people', () => {
     });
 
     expect(res.statusCode).toBe(201);
+  });
+});
+
+/**
+ * One business email per person, and the person's logins use it.
+ */
+describe('business email', () => {
+  const CAN: Permission[] = [
+    ...BOTH,
+    PERMISSIONS.DIRECTORY_READ,
+    PERMISSIONS.DIRECTORY_WRITE,
+  ];
+
+  it('refuses an update to an address another person has, case-insensitively', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' });
+    const sam = (await post('/api/admin/persons', cookie, { givenName: 'Sam', familyName: 'Roe', businessEmail: 'sam@acme.test' })).json().id;
+
+    const res = await patch(`/api/admin/persons/${sam}`, cookie, { businessEmail: 'MAYA@acme.test' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toBe('https://syntra.dev/problems/email-in-use');
+    expect(res.json().errors[0].path).toBe('businessEmail');
+    expect(res.json().detail).toBe('Maya Okafor already has MAYA@acme.test.');
+    expect((await get(`/api/admin/persons/${sam}`, cookie)).json().businessEmail).toBe('sam@acme.test');
+  });
+
+  it('lets a person keep their own address in another case', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const maya = (await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' })).json().id;
+
+    const res = await patch(`/api/admin/persons/${maya}`, cookie, { businessEmail: 'Maya@acme.test' });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("gives a linked login the person's address and carries a change onto it", async () => {
+    const admin = await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const maya = (await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' })).json().id;
+
+    expect((await post(`/api/admin/persons/${maya}/link-user`, cookie, { userId: admin.id })).statusCode).toBe(204);
+    expect((await get(`/api/admin/users/${admin.id}`, cookie)).json().email).toBe('maya@acme.test');
+
+    expect((await patch(`/api/admin/persons/${maya}`, cookie, { businessEmail: 'maya.okafor@acme.test' })).statusCode).toBe(200);
+    expect((await get(`/api/admin/users/${admin.id}`, cookie)).json().email).toBe('maya.okafor@acme.test');
+  });
+
+  it('refuses a link when another login already has the address', async () => {
+    await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const maya = (await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' })).json().id;
+    const { shared, mine } = await withTenant(ctx.tenantId, async (tx) => ({
+      shared: await createUser(tx, { login: 'shared', email: 'maya@acme.test', displayName: 'Shared' }),
+      mine: await createUser(tx, { login: 'mokafor', email: 'mo@acme.test', displayName: 'Maya' }),
+    }));
+
+    const res = await post(`/api/admin/persons/${maya}/link-user`, cookie, { userId: mine.id });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().type).toBe('https://syntra.dev/problems/email-in-use');
+    expect(res.json().holder).toMatchObject({ kind: 'user', id: shared.id, name: 'shared' });
+    expect((await get(`/api/admin/users/${mine.id}`, cookie)).json().personId).toBeNull();
+  });
+
+  it('refuses an address change that would collide with another login, and changes nothing', async () => {
+    const admin = await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const maya = (await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' })).json().id;
+    await post(`/api/admin/persons/${maya}/link-user`, cookie, { userId: admin.id });
+    await withTenant(ctx.tenantId, (tx) =>
+      createUser(tx, { login: 'shared', email: 'team@acme.test', displayName: 'Shared' }),
+    );
+
+    const res = await patch(`/api/admin/persons/${maya}`, cookie, { businessEmail: 'team@acme.test' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().detail).toBe('Account shared already has team@acme.test.');
+    expect((await get(`/api/admin/persons/${maya}`, cookie)).json().businessEmail).toBe('maya@acme.test');
+  });
+
+  it('refuses an email edit on a linked login and says where to change it', async () => {
+    const admin = await seedAdmin(CAN);
+    const cookie = await adminCookie();
+    const maya = (await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' })).json().id;
+    await post(`/api/admin/persons/${maya}/link-user`, cookie, { userId: admin.id });
+
+    const refused = await patch(`/api/admin/users/${admin.id}/details`, cookie, { email: 'other@acme.test' });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().type).toBe('https://syntra.dev/problems/email-set-by-person');
+    expect(refused.json().detail).toBe('admin uses the business email of Maya Okafor. Change it on Maya Okafor.');
+    expect(refused.json().errors[0].path).toBe('email');
+
+    const same = await patch(`/api/admin/users/${admin.id}/details`, cookie, { email: 'MAYA@acme.test', displayName: 'Maya O' });
+    expect(same.statusCode).toBe(200);
+    expect(same.json().email).toBe('maya@acme.test');
+  });
+
+  it('skips a CSV row whose address another person has, and imports the rest', async () => {
+    await seedAdmin(BOTH);
+    const cookie = await adminCookie();
+    await post('/api/admin/persons', cookie, { givenName: 'Maya', familyName: 'Okafor', businessEmail: 'maya@acme.test' });
+
+    const res = await post('/api/admin/persons/import', cookie, {
+      csv:
+        `${HEADER}\nE1,Jo,Doe,Maya@acme.test,1,true,2026-01-01,,Nurse,Care\n` +
+        `E2,Sam,Roe,sam@acme.test,1,true,2026-01-01,,Trainer,Care`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().created).toBe(1);
+    expect(res.json().errors).toEqual([
+      { line: 2, message: 'E1: Maya Okafor already has Maya@acme.test' },
+    ]);
   });
 });
 

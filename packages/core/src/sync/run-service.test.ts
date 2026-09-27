@@ -684,6 +684,60 @@ describe('applyChange membership failure paths', () => {
     expect(events[0]!.outcome).toBe('failure');
   });
 
+  it("does not propose the directory's email for a login linked to a person", async () => {
+    const first = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, first.id);
+    await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Jane', familyName: 'Doe', businessEmail: 'jane.doe@acme.test' },
+      });
+      await tx.user.updateMany({
+        where: { login: 'jdoe' },
+        data: { personId: person.id, email: 'jane.doe@acme.test' },
+      });
+    });
+
+    const second = await previewRun(tenantId, provider, sourceId);
+    const changes = await withTenant(tenantId, (tx) =>
+      tx.syncChange.findMany({ where: { runId: second.id } }),
+    );
+    expect(changes).toEqual([]);
+  });
+
+  it("keeps a linked login's email when applying an update that carries one", async () => {
+    const run = await previewRun(tenantId, provider, sourceId);
+    await applyRun(tenantId, run.id);
+
+    const user = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Jane', familyName: 'Doe', businessEmail: 'jane.doe@acme.test' },
+      });
+      const target = await tx.user.findFirstOrThrow({ where: { login: 'jdoe' } });
+      await tx.user.update({
+        where: { id: target.id },
+        data: { personId: person.id, email: 'jane.doe@acme.test' },
+      });
+      const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });
+      const change = await tx.syncChange.create({
+        data: {
+          tenantId,
+          runId: newRun.id,
+          changeType: 'update_user',
+          targetType: 'User',
+          targetId: target.id,
+          sourceAnchor: target.sourceAnchor,
+          after: { email: 'jdoe@ldap.acme.test', displayName: 'Jane D' },
+          status: 'proposed',
+        },
+      });
+      await applyChange(tx, change, sourceId, newRun.id);
+      return tx.user.findUniqueOrThrow({ where: { id: target.id } });
+    });
+
+    expect(user.email).toBe('jane.doe@acme.test');
+    expect(user.displayName).toBe('Jane D');
+  });
+
   it('audits outcome failure for an unrecognized change type', async () => {
     const { updated, events } = await withTenant(tenantId, async (tx) => {
       const newRun = await tx.syncRun.create({ data: { tenantId, sourceId } });

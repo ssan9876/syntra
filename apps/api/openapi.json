@@ -16750,7 +16750,7 @@
           "HR sources"
         ],
         "summary": "Resolve a duplicate-person review",
-        "description": "Keep the records separate, skip the incoming source record, or link it to the existing person. No resolution merges or deletes a person.\n\nRequires `sync.manage`.",
+        "description": "Skip the incoming source record, or link it to the existing person. No resolution merges or deletes a person. `keep_separate` is refused with `email-in-use`: two people cannot share a business email.\n\nRequires `sync.manage`.",
         "x-syntra-permission": [
           "sync.manage"
         ],
@@ -18259,7 +18259,7 @@
           "Persons"
         ],
         "summary": "Create a person",
-        "description": "Requires `identity.write`.",
+        "description": "A `businessEmail` another person already has, in any case, is refused with `email-in-use` (409), whatever `allowDuplicate` says.\n\nRequires `identity.write`.",
         "x-syntra-permission": [
           "identity.write"
         ],
@@ -18414,7 +18414,7 @@
           "Persons"
         ],
         "summary": "Update a person",
-        "description": "For a source-owned person, fields the source maps are refused, because the next import would revert them.\n\nRequires `directory.write`.",
+        "description": "For a source-owned person, fields the source maps are refused, because the next import would revert them. A `businessEmail` another person has is refused with `email-in-use`; a new one is carried onto the person's linked accounts.\n\nRequires `directory.write`.",
         "x-syntra-permission": [
           "directory.write"
         ],
@@ -19073,7 +19073,7 @@
           "Persons"
         ],
         "summary": "Link a user account to a person",
-        "description": "Requires `identity.write`.",
+        "description": "The account's email becomes the person's `businessEmail` when they have one. Refused with `email-in-use` when another unlinked active local account already has that address.\n\nRequires `identity.write`.",
         "x-syntra-permission": [
           "identity.write"
         ],
@@ -20019,7 +20019,7 @@
           "Persons"
         ],
         "summary": "Import persons from CSV",
-        "description": "The CSV travels as a string in the JSON body. A file with no usable rows is refused with a `csv-invalid` problem listing the row errors; rows naming a person owned by an HR source are refused rather than applied.\n\nRequires `identity.write`.",
+        "description": "The CSV travels as a string in the JSON body. A file with no usable rows is refused with a `csv-invalid` problem listing the row errors; rows naming a person owned by an HR source, and rows whose business email another person has, are refused rather than applied.\n\nRequires `identity.write`.",
         "x-syntra-permission": [
           "identity.write"
         ],
@@ -30483,7 +30483,7 @@
           "Users"
         ],
         "summary": "Create a user account",
-        "description": "Creating a second account for a person who already signs in is refused unless `allowSecondAccount` is set.\n\nRequires `directory.write`.",
+        "description": "Creating a second account for a person who already signs in is refused unless `allowSecondAccount` is set. An account linked to a person takes the person's `businessEmail` as its email when they have one.\n\nRequires `directory.write`.",
         "x-syntra-permission": [
           "directory.write"
         ],
@@ -30886,7 +30886,7 @@
           "Users"
         ],
         "summary": "Edit an account's name, email and organizational unit",
-        "description": "Refused for an account a directory source owns, whose next sync would overwrite the change.\n\nRequires `directory.write`.",
+        "description": "Refused for an account a directory source owns, whose next sync would overwrite the change. A linked account's email is its person's business email: a different one is refused with `email-set-by-person`.\n\nRequires `directory.write`.",
         "x-syntra-permission": [
           "directory.write"
         ],

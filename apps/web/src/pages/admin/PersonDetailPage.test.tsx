@@ -279,6 +279,53 @@ describe('PersonDetailPage', () => {
     expect(patched[0]!['businessEmail']).toBeNull();
   });
 
+  it('says a new business email also changes the linked accounts', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/persons/p1': () => json(person),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.queryByText(/also changes the email of/i)).toBeNull();
+    const email = screen.getByLabelText('Business email');
+    await user.clear(email);
+    await user.type(email, 'joanne@acme.test');
+    expect(screen.getByText('Also changes the email of jdoe.')).toBeInTheDocument();
+  });
+
+  it('shows who already has the address when the save is refused', async () => {
+    const user = userEvent.setup();
+    mockRoutes({
+      '/api/admin/persons/p1': (init) =>
+        init?.method === 'PATCH'
+          ? (new Response(
+              JSON.stringify({
+                type: 'https://syntra.dev/problems/email-in-use',
+                title: 'Email already in use',
+                status: 409,
+                detail: 'Sam Roe already has sam@acme.test.',
+                errors: [{ path: 'businessEmail', message: 'Sam Roe already has sam@acme.test.' }],
+              }),
+              { status: 409, headers: { 'content-type': 'application/problem+json' } },
+            ) as never)
+          : json(person),
+      '/api/admin/users?pageSize=200': () => json({ users: [] }),
+    });
+
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    const email = screen.getByLabelText('Business email');
+    await user.clear(email);
+    await user.type(email, 'sam@acme.test');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect((await screen.findAllByText('Sam Roe already has sam@acme.test.')).length).toBeGreaterThan(0);
+  });
+
   /**
    * Only while there is something to break. On a person with no source
    * reference there is nothing an import matches on yet, and a warning about

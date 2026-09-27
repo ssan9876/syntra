@@ -48,6 +48,7 @@ export * from './keys/key-change.js';
 export * from './keys/jobs.js';
 export * from './identity/person-service.js';
 export * from './identity/person-deletion.js';
+export * from './identity/person-email.js';
 export * from './identity/person-match.js';
 export * from './identity/population-drop.js';
 export * from './identity/contract-service.js';
