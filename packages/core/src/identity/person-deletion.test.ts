@@ -50,7 +50,7 @@ async function giveThePersonHistory() {
         requestTypes: ['access'],
         reason: 'Subject asked for a copy',
         receivedAt: now,
-        dueAt: now,
+        dueAt: new Date(now.getTime() + 30 * 86_400_000),
         verificationMethod: 'known_channel',
         verificationAttestation: 'Called back on file number',
         verifiedByUserId: actorId,
