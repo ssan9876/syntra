@@ -2262,6 +2262,9 @@ accounts are also left out of the list of accounts with no person behind them
 (*Accounts with no person*, reached from **Users**;
 `GET /api/admin/users/unlinked`), which is a backlog of
 logins waiting to be matched to people; an integration's login is not one.
+For the same reason a Govern snapshot does not report a service account as a
+coverage gap (`subject_unresolvable`); its roles, groups and applications are
+still holdings, reviewed under the account itself.
 
 **An integration's login that was given a person by mistake** is unlinked
 first: **Unlink** beside the person on the account's page, or

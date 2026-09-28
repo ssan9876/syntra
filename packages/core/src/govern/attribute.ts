@@ -37,6 +37,24 @@ export interface RuleFact {
    * difference between `revocation_requires_change` and a revocation order.
    */
   ruleEnabled: boolean;
+  /**
+   * The rule requires the ACCOUNT, not an entitlement. For an account,
+   * `ruleEnabled` is true only when the rule is enabled AND matches the person
+   * today: that is when Provision would create the account again.
+   */
+  grantsAccount?: boolean;
+}
+
+/**
+ * Provision's recorded create of a target account: `TargetAccount.createdActionId`,
+ * applied. It says how the account arrived, not why it should stay, so it is
+ * never live. The collector supplies it only when no enabled rule requires the
+ * account today; a rule that does is a `RuleFact` instead.
+ */
+export interface ProvisionCreateFact {
+  actionId: string;
+  runId: string;
+  appliedAt: string | null;
 }
 
 /** Automate's `AccessGrant` + `AccessRequest` + `ApprovalDecision`. */
@@ -105,6 +123,11 @@ export interface ManualFact {
   administratorName: string | null;
   recordedAt: string;
   reason: string | null;
+  /**
+   * The audit event that records an administrator creating this holding in
+   * Syntra: a login, a group membership. Absent for a Provision `manual` origin.
+   */
+  auditEvent?: { id: string; sequence: number; action: string };
 }
 
 export interface AttributionInput {
@@ -116,6 +139,8 @@ export interface AttributionInput {
   directorySources: readonly DirectorySourceFact[];
   discovered: readonly DiscoveredFact[];
   manual: readonly ManualFact[];
+  /** Optional so a caller with nothing to say about accounts can leave it out. */
+  provisionCreates?: readonly ProvisionCreateFact[];
 }
 
 export const EMPTY_ATTRIBUTION_INPUT: AttributionInput = {
@@ -127,6 +152,7 @@ export const EMPTY_ATTRIBUTION_INPUT: AttributionInput = {
   directorySources: [],
   discovered: [],
   manual: [],
+  provisionCreates: [],
 };
 export function attributionsFor(
   input: AttributionInput,
@@ -146,6 +172,29 @@ export function attributionsFor(
         department: rule.department,
         jobTitle: rule.jobTitle,
         ruleEnabled: rule.ruleEnabled,
+        ...(rule.grantsAccount === true ? { grantsAccount: true } : {}),
+      },
+      resolvedAt,
+    });
+  }
+
+  for (const create of input.provisionCreates ?? []) {
+    // `business_rule` because only a rule or a grant makes Provision create an
+    // account, and the plan does not record which. `ruleEnabled: false`: it
+    // explains the arrival, never a reason to keep it.
+    drafts.push({
+      kind: 'business_rule',
+      refType: 'ProvisionAction',
+      refId: create.actionId,
+      detail: {
+        ruleId: null,
+        ruleName: null,
+        ruleEnabled: false,
+        grantsAccount: true,
+        provisionActionId: create.actionId,
+        runId: create.runId,
+        appliedAt: create.appliedAt,
+        note: 'Created by Provision. No enabled rule requires it today.',
       },
       resolvedAt,
     });
@@ -272,12 +321,15 @@ export function attributionsFor(
   for (const entry of input.manual) {
     drafts.push({
       kind: 'manual',
-      refType: 'AccountEntitlement',
-      refId: null,
+      refType: entry.auditEvent === undefined ? 'AccountEntitlement' : 'AuditEvent',
+      refId: entry.auditEvent?.id ?? null,
       detail: {
         administratorName: entry.administratorName,
         recordedAt: entry.recordedAt,
         reason: entry.reason,
+        ...(entry.auditEvent === undefined
+          ? {}
+          : { auditAction: entry.auditEvent.action, auditSequence: entry.auditEvent.sequence }),
       },
       resolvedAt,
     });
@@ -309,7 +361,9 @@ export function attributionsFor(
  *
  * `manual` does NOT make a holding unattributable. Somebody in Syntra recorded
  * that the grant exists and who they are, which is a weaker record than a rule
- * or a request and is not nothing.
+ * or a request and is not nothing. That includes a login or a membership an
+ * administrator created in the console, where an audit event names them; a
+ * login or membership with no such event stays unattributable.
  */
 const UNEXPLAINING_KINDS: ReadonlySet<AttributionKind> = new Set<AttributionKind>([
   'discovered',
@@ -342,6 +396,13 @@ export function hasLiveRuleAttribution(drafts: readonly AttributionDraft[]): boo
   );
 }
 
+/** The audit actions a `manual` attribution names, as the words a summary uses. */
+const MANUAL_ACTS: Readonly<Record<string, string>> = {
+  'user.create': 'created the login',
+  'scim.user_created': 'created the login through SCIM',
+  'group.addMember': 'added the membership',
+};
+
 /** One sentence a manager can act on, for the reviewer's item and the report. */
 export function summariseAttributions(drafts: readonly AttributionDraft[]): string {
   if (drafts.length === 0 || drafts.every((d) => d.kind === 'unattributable')) {
@@ -352,7 +413,13 @@ export function summariseAttributions(drafts: readonly AttributionDraft[]): stri
   for (const draft of drafts) {
     switch (draft.kind) {
       case 'business_rule':
-        parts.push(`the business rule "${String(draft.detail['ruleName'])}" matched their contract`);
+        if (draft.refType === 'ProvisionAction') {
+          parts.push('Provision created the account, and no enabled rule requires it today');
+        } else if (draft.detail['grantsAccount'] === true) {
+          parts.push(`the business rule "${String(draft.detail['ruleName'])}" requires their account`);
+        } else {
+          parts.push(`the business rule "${String(draft.detail['ruleName'])}" matched their contract`);
+        }
         break;
       case 'request':
       case 'delegated_admin':
@@ -382,9 +449,21 @@ export function summariseAttributions(drafts: readonly AttributionDraft[]): stri
       case 'discovered':
         parts.push('it was already present at the target when Syntra first looked');
         break;
-      case 'manual':
-        parts.push('an administrator recorded in Syntra that this grant exists');
+      case 'manual': {
+        const action = draft.detail['auditAction'];
+        if (typeof action === 'string') {
+          const who =
+            typeof draft.detail['administratorName'] === 'string'
+              ? draft.detail['administratorName']
+              : 'an administrator no longer recorded';
+          parts.push(
+            `${who} ${MANUAL_ACTS[action] ?? 'made this change'} in Syntra (audit event ${String(draft.detail['auditSequence'])})`,
+          );
+        } else {
+          parts.push('an administrator recorded in Syntra that this grant exists');
+        }
         break;
+      }
       case 'unattributable':
         break;
     }

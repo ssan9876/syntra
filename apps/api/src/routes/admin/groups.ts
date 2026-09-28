@@ -187,7 +187,9 @@ export async function registerAdminGroupRoutes(
           targetId: id,
           outcome: 'success',
           sourceIp: request.ip,
-          payload: { group: group.name, login: user.login },
+          // `userId` so Govern can credit the membership to this event even
+          // after the login is renamed.
+          payload: { group: group.name, login: user.login, userId },
         });
       });
 

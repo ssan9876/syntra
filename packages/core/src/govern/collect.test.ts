@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { resolveApplicationIdsForUser } from '../access/resolve.js';
+import { recordEvent } from '../audit/audit-service.js';
 import { collectTenant, foldIdentifier, resolveApplicationPaths } from './collect.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
@@ -307,6 +308,23 @@ describe('collectTenant', () => {
     expect(collected.unattributedAccountKeys).toHaveLength(1);
   });
 
+  it('raises no gap for a service account, and still raises one for an unlinked human login', async () => {
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const svc = await tx.user.create({
+        data: { tenantId, login: 'svc-claude', email: 'svc@a.test', displayName: 'Claude integration', kind: 'service' },
+      });
+      const human = await tx.user.create({
+        data: { tenantId, login: 'John_Doe', email: 'john@a.test', displayName: 'John Doe' },
+      });
+      return { svcId: svc.id, humanId: human.id };
+    });
+
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    const unresolvable = collected.gaps.filter((g) => g.kind === 'subject_unresolvable').map((g) => g.accountRef);
+    expect(unresolvable).toEqual([seeded.humanId]);
+    expect(collected.unattributedAccountKeys).toEqual([`account:syntra:${seeded.humanId}`]);
+  });
+
   it('copies a ProvisionException onto a person_unprocessable gap so pruning the run cannot close it', async () => {
     const seeded = await withTenant(tenantId, async (tx) => {
       const person = await tx.person.create({ data: { tenantId, givenName: 'A', familyName: 'B' } });
@@ -410,6 +428,16 @@ describe('an account with no person behind it', () => {
     expect(mine.every((h) => h.subject.kind === 'account')).toBe(true);
   });
 
+  it('still contributes the holdings of a SERVICE account, which raises no gap', async () => {
+    const seeded = await seedUnlinkedUserHoldingEverything();
+    await withTenant(tenantId, (tx) => tx.user.update({ where: { id: seeded.userId }, data: { kind: 'service' } }));
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    expect(
+      collected.holdings.filter((h) => h.subject.kind === 'account' && h.subject.accountRef === seeded.userId),
+    ).toHaveLength(3);
+    expect(collected.gaps.some((g) => g.accountRef === seeded.userId)).toBe(false);
+  });
+
   it('still records the gap, because the account is ALSO unresolvable', async () => {
     // The holding and the gap are two different facts and both are true. The
     // gap says "Govern cannot name who holds this"; the holdings say what they
@@ -421,5 +449,133 @@ describe('an account with no person behind it', () => {
         (g) => g.kind === 'subject_unresolvable' && g.accountRef === seeded.userId,
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * What Syntra itself made, credited: an account a rule requires, an account
+ * Provision recorded creating, and a login, membership or role an
+ * administrator created in the console. Each read unattributable on a real
+ * tenant. Nothing is credited without the rule or the record.
+ */
+describe('the access Syntra made', () => {
+  const ALL_STAFF = { field: 'person.status', op: 'equals', value: 'active' };
+
+  const seedAccount = (options: { ruleCondition?: object; personStatus?: string; recordedCreate?: boolean }) =>
+    withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({
+        data: { tenantId, givenName: 'Anna', familyName: 'Novak', status: options.personStatus ?? 'active' },
+      });
+      const contract = await tx.contract.create({
+        data: { tenantId, personId: person.id, sequence: 1, isPrimary: true, startDate: day('2020-01-01') },
+      });
+      const target = await tx.targetSystem.create({
+        data: { tenantId, name: 'Acme AD', secretName: 's/ad', config: { tlsMode: 'ldaps' }, lastRunAt: NOW, lastAppliedRunAt: NOW },
+      });
+      const rule = options.ruleCondition === undefined
+        ? null
+        : await tx.businessRule.create({
+            data: { tenantId, targetSystemId: target.id, name: 'All Staff', condition: options.ruleCondition, grantsAccount: true },
+          });
+      let createdActionId: string | null = null;
+      if (options.recordedCreate === true) {
+        const run = await tx.provisionRun.create({ data: { tenantId, targetSystemId: target.id, status: 'applied' } });
+        const action = await tx.provisionAction.create({
+          data: { tenantId, runId: run.id, actionType: 'create_account', personId: person.id, status: 'applied', appliedAt: NOW },
+        });
+        createdActionId = action.id;
+      }
+      await tx.targetAccount.create({
+        data: {
+          tenantId, targetSystemId: target.id, personId: person.id, anchor: 'guid-anna',
+          correlationKey: 'anna.novak', status: 'active', lastReconciledAt: NOW, createdActionId,
+        },
+      });
+      return { ruleId: rule?.id ?? null, contractId: contract.id, createdActionId };
+    });
+
+  const accountHolding = async () =>
+    (await collectTenant(tenantId, { asOf: NOW })).holdings.find((h) => h.resourceKind === 'targetAccount')!;
+
+  it('credits an account to the account-granting rule that matches the person', async () => {
+    const seeded = await seedAccount({ ruleCondition: ALL_STAFF, recordedCreate: true });
+    const account = await accountHolding();
+    expect(account.attribution.rules).toEqual([
+      expect.objectContaining({
+        ruleId: seeded.ruleId, ruleName: 'All Staff', contractId: seeded.contractId, ruleEnabled: true, grantsAccount: true,
+      }),
+    ]);
+    // The rule is the reason; the create would only repeat how it arrived.
+    expect(account.attribution.provisionCreates).toEqual([]);
+  });
+
+  it('does not credit a rule that no longer matches the person, and leaves the account unexplained', async () => {
+    await seedAccount({ ruleCondition: ALL_STAFF, personStatus: 'inactive' });
+    const account = await accountHolding();
+    expect(account.attribution.rules).toEqual([]);
+    expect(account.attribution.provisionCreates).toEqual([]);
+  });
+
+  it('credits the recorded Provision create when no rule requires the account today', async () => {
+    const seeded = await seedAccount({ recordedCreate: true });
+    const account = await accountHolding();
+    expect(account.attribution.rules).toEqual([]);
+    expect(account.attribution.provisionCreates).toEqual([
+      expect.objectContaining({ actionId: seeded.createdActionId }),
+    ]);
+  });
+
+  it('credits a login, a membership and a role an administrator made, naming them', async () => {
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const admin = await tx.user.create({
+        data: { tenantId, login: 'seth', email: 'seth@a.test', displayName: 'Seth Sander' },
+      });
+      const person = await tx.person.create({ data: { tenantId, givenName: 'Anna', familyName: 'Novak' } });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'anna', email: 'anna@a.test', displayName: 'Anna Novak', personId: person.id },
+      });
+      const group = await tx.group.create({ data: { tenantId, name: 'Finance' } });
+      await tx.groupMembership.create({ data: { tenantId, groupId: group.id, userId: user.id } });
+      const role = await tx.role.create({ data: { tenantId, name: 'Auditor', permissions: ['audit.read'] } });
+      await tx.roleAssignment.create({ data: { tenantId, roleId: role.id, userId: user.id } });
+      const base = { actorUserId: admin.id, outcome: 'success' as const, sourceIp: null };
+      await recordEvent(tx, { ...base, action: 'user.create', targetType: 'User', targetId: user.id, payload: { login: 'anna' } });
+      // The pre-`userId` payload shape, naming the member by login.
+      await recordEvent(tx, { ...base, action: 'group.addMember', targetType: 'Group', targetId: group.id, payload: { group: 'Finance', login: 'ANNA' } });
+      await recordEvent(tx, { ...base, action: 'rbac.role_assigned', targetType: 'User', targetId: user.id, payload: { roleId: role.id } });
+      return { personId: person.id };
+    });
+
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    const mine = collected.holdings.filter(
+      (h) => h.subject.kind === 'person' && h.subject.personId === seeded.personId,
+    );
+    const login = mine.find((h) => h.resourceKind === 'syntraUser')!;
+    const membership = mine.find((h) => h.resourceKind === 'syntraGroup')!;
+    const role = mine.find((h) => h.resourceKind === 'syntraRole')!;
+
+    expect(login.attribution.manual).toEqual([
+      expect.objectContaining({ administratorName: 'Seth Sander', auditEvent: expect.objectContaining({ action: 'user.create' }) }),
+    ]);
+    expect(membership.attribution.manual).toEqual([
+      expect.objectContaining({ administratorName: 'Seth Sander', auditEvent: expect.objectContaining({ action: 'group.addMember' }) }),
+    ]);
+    expect(role.attribution.directAssignments[0]!.administratorName).toBe('Seth Sander');
+  });
+
+  it('leaves a login and a membership nobody recorded making without a manual attribution', async () => {
+    const personId = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId, givenName: 'Anna', familyName: 'Novak' } });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'anna', email: 'anna@a.test', displayName: 'Anna Novak', personId: person.id },
+      });
+      const group = await tx.group.create({ data: { tenantId, name: 'Finance' } });
+      await tx.groupMembership.create({ data: { tenantId, groupId: group.id, userId: user.id } });
+      return person.id;
+    });
+
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    const mine = collected.holdings.filter((h) => h.subject.kind === 'person' && h.subject.personId === personId);
+    expect(mine.map((h) => h.attribution.manual)).toEqual([[], []]);
   });
 });

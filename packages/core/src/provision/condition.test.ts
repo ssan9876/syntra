@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONDITION_FIELDS,
+  accountGrantingRules,
   conditionSchema,
   evaluateCondition,
   type Condition,
@@ -627,5 +628,34 @@ describe('evaluateCondition — the cases that decide which way a doubt falls', 
         facts({ 'contract.jobTitle': null }),
       ),
     ).toBe(false);
+  });
+});
+
+describe('accountGrantingRules — shared by desiredState and Govern', () => {
+  const contract = {
+    id: 'c1', department: 'Finance', jobTitle: null, costCentre: null, employer: null, location: null, fte: 1,
+  };
+  const allStaff = {
+    id: 'r1', enabled: true, grantsAccount: true,
+    condition: { field: 'person.status', op: 'equals', value: 'active' } as Condition,
+  };
+
+  it('returns each matching account rule with the contract that satisfied it', () => {
+    expect(accountGrantingRules([allStaff], { status: 'active' }, [contract])).toEqual([
+      { rule: allStaff, contract },
+    ]);
+  });
+
+  it('skips a disabled rule, an entitlement-only rule and a rule that does not match', () => {
+    const rules = [
+      { ...allStaff, id: 'off', enabled: false },
+      { ...allStaff, id: 'entitlements', grantsAccount: false },
+    ];
+    expect(accountGrantingRules(rules, { status: 'active' }, [contract])).toEqual([]);
+    expect(accountGrantingRules([allStaff], { status: 'inactive' }, [contract])).toEqual([]);
+  });
+
+  it('matches nobody without a contract in the window', () => {
+    expect(accountGrantingRules([allStaff], { status: 'active' }, [])).toEqual([]);
   });
 });

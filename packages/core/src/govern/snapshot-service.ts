@@ -7,6 +7,7 @@ import {
 } from './attribute.js';
 import { collectTenant, type CollectedTenant } from './collect.js';
 import { diffSnapshots, type DiffHolding, type DiffRegion } from './diff.js';
+import { GAIN_EXPLAINING_ACTIONS, explainingSequence, gainExplanations } from './gain-explain.js';
 import {
   classifySources,
   gapsForSources,
@@ -192,7 +193,7 @@ export async function buildSnapshot(
       const row = await tx.accessSnapshot.findFirst({
         where: { status: 'complete', id: { not: snapshotId } },
         orderBy: { asOf: 'desc' },
-        select: { id: true },
+        select: { id: true, asOf: true },
       });
       if (row === null) return null;
       const holdings = await tx.holding.findMany({
@@ -208,7 +209,7 @@ export async function buildSnapshot(
         where: { snapshotId: row.id },
         select: { systemId: true, resourceId: true, personId: true },
       });
-      return { id: row.id, holdings, gaps };
+      return { id: row.id, asOf: row.asOf, holdings, gaps };
     });
 
     // ---- classification of privilege ---------------------------------------
@@ -477,42 +478,65 @@ export async function buildSnapshot(
       // distinct explaining event rather than one `update` per gain. A bulk
       // provisioning run produces thousands of gains that share a handful of
       // sequences, which is exactly the shape the grouping is for.
+      //
+      // WHICH EVENTS. Those since the previous snapshot (with two days of
+      // slack), matched by `gain-explain.ts`: a login created, an account
+      // Provision created, a role assigned to a login, a membership added,
+      // a grant fulfilled. A gain none of them names stays unexplained.
       const bySubject = await withTenant(tenantId, async (tx) => {
-        const since = previous === null ? new Date(0) : collected.asOf;
+        const since = previous.asOf < collected.asOf ? previous.asOf : collected.asOf;
         const candidates = await tx.auditEvent.findMany({
           where: {
             occurredAt: { gte: new Date(since.getTime() - 86_400_000 * 2) },
-            action: {
-              in: [
-                'provision.apply.grant_entitlement',
-                'automate.grant.fulfilled',
-                'access.assignment.create',
-                'directory.group.add_member',
-                'rbac.role.assign',
-              ],
-            },
+            action: { in: [...GAIN_EXPLAINING_ACTIONS] },
+            outcome: 'success',
           },
-          select: { sequence: true, targetId: true, payload: true },
+          select: { sequence: true, action: true, targetId: true, payload: true },
         });
-        const map = new Map<string, number>();
-        for (const event of candidates) {
-          const payload = event.payload as Record<string, unknown>;
-          const person = typeof payload['personId'] === 'string' ? payload['personId'] : null;
-          const resource =
-            typeof payload['resourceId'] === 'string'
-              ? payload['resourceId']
-              : typeof payload['entitlementId'] === 'string'
-                ? payload['entitlementId']
-                : null;
-          if (person !== null && resource !== null) map.set(`${person}|${resource}`, event.sequence);
-        }
-        return map;
+        if (candidates.length === 0) return new Map<string, number>();
+
+        const actionIds = candidates
+          .filter((e) => e.action === 'provision.action.result' && e.targetId !== null)
+          .map((e) => e.targetId!);
+        const [users, groups, actions] = await Promise.all([
+          tx.user.findMany({ select: { id: true, personId: true, login: true } }),
+          tx.group.findMany({ select: { id: true, sourceId: true } }),
+          actionIds.length === 0
+            ? Promise.resolve([])
+            : tx.provisionAction.findMany({
+                where: { id: { in: actionIds }, actionType: { in: ['create_account', 'grant_entitlement'] } },
+                select: { id: true, actionType: true, personId: true, accountId: true, entitlementId: true },
+              }),
+        ]);
+        const accountIds = actions.map((a) => a.accountId).filter((x): x is string => x !== null);
+        const accounts =
+          accountIds.length === 0
+            ? []
+            : await tx.targetAccount.findMany({
+                where: { id: { in: accountIds } },
+                select: { id: true, personId: true, targetSystemId: true, anchor: true, correlationKey: true },
+              });
+
+        return gainExplanations(candidates, {
+          users: new Map(users.map((u) => [u.id, { personId: u.personId, login: u.login }])),
+          groupSystemIds: new Map(groups.map((g) => [g.id, g.sourceId ?? SYNTRA_SYSTEM_ID])),
+          provisionActions: new Map(actions.map((a) => [a.id, a])),
+          accounts: new Map(
+            accounts.map((a) => [
+              a.id,
+              { personId: a.personId, targetSystemId: a.targetSystemId, resourceId: a.anchor ?? a.correlationKey },
+            ]),
+          ),
+        });
       });
 
       if (bySubject.size > 0) {
         let gainCursor: string | null = null;
         for (;;) {
-          const page: { id: string; personId: string | null; resourceId: string }[] =
+          const page: {
+            id: string; subjectKey: string; personId: string | null;
+            systemId: string; resourceKind: string; resourceId: string;
+          }[] =
             await withTenant(tenantId, (tx) =>
               tx.holdingEvent.findMany({
                 where: {
@@ -520,7 +544,10 @@ export async function buildSnapshot(
                   change: 'gained',
                   ...(gainCursor === null ? {} : { id: { gt: gainCursor } }),
                 },
-                select: { id: true, personId: true, resourceId: true },
+                select: {
+                  id: true, subjectKey: true, personId: true,
+                  systemId: true, resourceKind: true, resourceId: true,
+                },
                 orderBy: { id: 'asc' },
                 take: GAIN_LINK_BATCH,
               }),
@@ -530,8 +557,7 @@ export async function buildSnapshot(
 
           const idsBySequence = new Map<number, string[]>();
           for (const gain of page) {
-            if (gain.personId === null) continue;
-            const sequence = bySubject.get(`${gain.personId}|${gain.resourceId}`);
+            const sequence = explainingSequence(bySubject, gain);
             if (sequence === undefined) continue;
             idsBySequence.set(sequence, [...(idsBySequence.get(sequence) ?? []), gain.id]);
           }

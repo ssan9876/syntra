@@ -1,4 +1,4 @@
-import { evaluateCondition, type ConditionFacts } from './condition.js';
+import { accountGrantingRules, conditionFacts, evaluateCondition } from './condition.js';
 import type { CorrelationKeyPolicy } from '@syntra/connectors';
 import { generateCorrelationKey } from './names.js';
 import { addressedDomain, domainIsCovered, isAddressAttribute } from '../tenant/email-domains.js';
@@ -233,18 +233,6 @@ export function resolveMappingContract(
   return preferPrimary(activeOn(contracts, on));
 }
 
-function conditionFacts(person: PersonFacts, contract: ContractFacts): ConditionFacts {
-  return {
-    'contract.department': contract.department,
-    'contract.jobTitle': contract.jobTitle,
-    'contract.costCentre': contract.costCentre,
-    'contract.employer': contract.employer,
-    'contract.location': contract.location,
-    'contract.fte': contract.fte,
-    'person.status': person.status,
-  };
-}
-
 function templateContext(
   person: PersonFacts,
   contract: ContractFacts | null,
@@ -336,13 +324,7 @@ function accountGrantedBy(
   person: PersonFacts,
   contracts: ContractFacts[],
 ): boolean {
-  for (const rule of rules) {
-    if (!rule.enabled || !rule.grantsAccount) continue;
-    for (const contract of contracts) {
-      if (evaluateCondition(rule.condition, conditionFacts(person, contract))) return true;
-    }
-  }
-  return false;
+  return accountGrantingRules(rules, person, contracts).length > 0;
 }
 
 /**

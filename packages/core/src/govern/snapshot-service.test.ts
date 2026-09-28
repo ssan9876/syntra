@@ -925,3 +925,195 @@ describe('the gain / audit cross-reference', () => {
     expect(explained).toBe(people.length);
   });
 });
+
+/**
+ * The gains Syntra itself made: a login created, an account Provision created,
+ * a role assigned to a login. Each was an `unexplained_gain` on a real tenant,
+ * because the matcher read only payloads carrying `personId`.
+ */
+describe('gains Syntra made are explained; gains it did not make are not', () => {
+  const holding = (
+    personId: string,
+    systemId: string,
+    resourceKind: 'syntraUser' | 'syntraRole' | 'targetAccount',
+    resourceId: string,
+    asOf: Date,
+  ) => ({
+    subject: { kind: 'person' as const, personId },
+    systemKind: (systemId === 'syntra' ? 'syntraInternal' : 'targetSystem') as 'syntraInternal' | 'targetSystem',
+    systemId,
+    systemName: systemId,
+    resourceKind,
+    resourceId,
+    resourceName: resourceId,
+    state: 'held' as const,
+    observedAt: asOf,
+    observedVia: 'syntra',
+    attribution: {
+      rules: [], requests: [], directAssignments: [], groupInheritance: [],
+      orgUnitInheritance: [], directorySources: [], discovered: [], manual: [],
+    },
+  });
+
+  const later = new Date(NOW.getTime() + 3_600_000);
+
+  const seedPersonWithLogin = () =>
+    withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId, givenName: 'Maya', familyName: 'Okafor' } });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'maya', email: 'maya@acme.test', displayName: 'Maya Okafor', personId: person.id },
+      });
+      return { personId: person.id, userId: user.id };
+    });
+
+  const gainsOf = (snapshotId: string) =>
+    withTenant(tenantId, (tx) =>
+      tx.holdingEvent.findMany({ where: { toSnapshotId: snapshotId, change: 'gained' } }),
+    );
+
+  it('explains a new login by the user.create that made it', async () => {
+    const { personId, userId } = await seedPersonWithLogin();
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'user.create', targetType: 'User', targetId: userId,
+        outcome: 'success', sourceIp: null, payload: { login: 'maya', personId, kind: 'person' },
+      }),
+    );
+
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({ asOf: later, personIds: [personId], holdings: [holding(personId, 'syntra', 'syntraUser', userId, later)] }),
+    });
+
+    const [gain] = await gainsOf(built.snapshotId);
+    expect(gain!.explained).toBe(true);
+    expect(gain!.auditEventSequence).not.toBeNull();
+  });
+
+  it('explains an account by the Provision create that made it', async () => {
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId, givenName: 'Maya', familyName: 'Okafor' } });
+      const target = await tx.targetSystem.create({
+        data: { tenantId, name: 'Acme AD', secretName: 's/ad', config: { tlsMode: 'ldaps' } },
+      });
+      const run = await tx.provisionRun.create({ data: { tenantId, targetSystemId: target.id, status: 'applied' } });
+      const account = await tx.targetAccount.create({
+        data: { tenantId, targetSystemId: target.id, personId: person.id, anchor: 'guid-maya', correlationKey: 'maya.okafor', status: 'active' },
+      });
+      const action = await tx.provisionAction.create({
+        data: { tenantId, runId: run.id, actionType: 'create_account', personId: person.id, accountId: account.id, status: 'applied' },
+      });
+      return { personId: person.id, targetId: target.id, actionId: action.id };
+    });
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'provision.action.result', targetType: 'ProvisionAction', targetId: seeded.actionId,
+        outcome: 'success', sourceIp: null, payload: { actionType: 'create_account', status: 'applied', message: 'created' },
+      }),
+    );
+
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({
+          asOf: later,
+          personIds: [seeded.personId],
+          holdings: [holding(seeded.personId, seeded.targetId, 'targetAccount', 'guid-maya', later)],
+        }),
+    });
+
+    const [gain] = await gainsOf(built.snapshotId);
+    expect(gain!.explained).toBe(true);
+  });
+
+  it('explains a role assigned to a login, resolving the userId to its person', async () => {
+    const { personId, userId } = await seedPersonWithLogin();
+    const roleId = randomUUID();
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    await withTenant(tenantId, (tx) =>
+      recordEvent(tx, {
+        actorUserId: null, action: 'rbac.role_assigned', targetType: 'User', targetId: userId,
+        outcome: 'success', sourceIp: null, payload: { roleId },
+      }),
+    );
+
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({ asOf: later, personIds: [personId], holdings: [holding(personId, 'syntra', 'syntraRole', roleId, later)] }),
+    });
+
+    const [gain] = await gainsOf(built.snapshotId);
+    expect(gain!.explained).toBe(true);
+  });
+
+  it('still raises unexplained_gain for a role no event assigned, and ignores a refused assignment', async () => {
+    const { personId, userId } = await seedPersonWithLogin();
+    const assigned = randomUUID();
+    const held = randomUUID();
+    await buildSnapshot(tenantId, { now: NOW, collect: async () => emptyCollection() });
+    await withTenant(tenantId, async (tx) => {
+      await recordEvent(tx, {
+        actorUserId: null, action: 'rbac.role_assigned', targetType: 'User', targetId: userId,
+        outcome: 'success', sourceIp: null, payload: { roleId: assigned },
+      });
+      // Refused (owner-only): nothing was created.
+      await recordEvent(tx, {
+        actorUserId: null, action: 'rbac.role_assigned', targetType: 'User', targetId: userId,
+        outcome: 'failure', sourceIp: null, payload: { roleId: held, reason: 'owner_only' },
+      });
+    });
+
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () =>
+        emptyCollection({ asOf: later, personIds: [personId], holdings: [holding(personId, 'syntra', 'syntraRole', held, later)] }),
+    });
+
+    const [gain] = await gainsOf(built.snapshotId);
+    expect(gain!.explained).toBe(false);
+    const finding = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirst({ where: { kind: 'unexplained_gain', status: 'open' } }),
+    );
+    expect(finding?.subjectRefId).toBe(`person:${personId}|syntra|syntraRole|${held}`);
+  });
+
+  it('resolves an open unattributable_holding once the holding is attributed, through the normal reconcile', async () => {
+    const { personId, userId } = await seedPersonWithLogin();
+    await buildSnapshot(tenantId, {
+      now: NOW,
+      collect: async () =>
+        emptyCollection({ personIds: [personId], holdings: [holding(personId, 'syntra', 'syntraUser', userId, NOW)] }),
+    });
+    const open = await withTenant(tenantId, (tx) =>
+      tx.governFinding.findFirstOrThrow({ where: { kind: 'unattributable_holding' } }),
+    );
+    expect(open.status).toBe('open');
+
+    const attributed = {
+      ...holding(personId, 'syntra', 'syntraUser', userId, later),
+      attribution: {
+        ...holding(personId, 'syntra', 'syntraUser', userId, later).attribution,
+        manual: [
+          {
+            administratorName: 'Seth Sander',
+            recordedAt: NOW.toISOString(),
+            reason: null,
+            auditEvent: { id: randomUUID(), sequence: 1, action: 'user.create' },
+          },
+        ],
+      },
+    };
+    const built = await buildSnapshot(tenantId, {
+      now: later,
+      collect: async () => emptyCollection({ asOf: later, personIds: [personId], holdings: [attributed] }),
+    });
+
+    const after = await withTenant(tenantId, (tx) => tx.governFinding.findUniqueOrThrow({ where: { id: open.id } }));
+    expect(after.status).toBe('resolved');
+    expect(after.resolvedBySnapshotId).toBe(built.snapshotId);
+  });
+});
