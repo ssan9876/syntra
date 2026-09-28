@@ -1,3 +1,4 @@
+import { recordEvent } from '../audit/audit-service.js';
 import { Prisma, withTenant } from '@syntra/db';
 import type { Scheduler } from '../jobs/scheduler.js';
 import { createUser, type CreateUserInput } from '../directory/user-service.js';
@@ -122,6 +123,17 @@ export async function onboardPerson(input: OnboardPersonInput) {
           });
           await linkUserToPerson(tx, user.id, person.id);
           userId = user.id;
+          // The same event the console writes, so Govern can credit the
+          // login to whoever onboarded the person.
+          await recordEvent(tx, {
+            actorUserId: input.requestedByUserId ?? null,
+            action: 'user.create',
+            targetType: 'User',
+            targetId: user.id,
+            outcome: 'success',
+            sourceIp: null,
+            payload: { login: user.login, email: user.email, personId: person.id, kind: user.kind, via: 'onboarding' },
+          });
         }
         const evidence: Prisma.InputJsonValue = {
           personId: person.id,
