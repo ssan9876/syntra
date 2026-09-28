@@ -1,13 +1,51 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
-import { isPermission, type Permission } from './permissions.js';
+import {
+  PERMISSIONS,
+  OWNER_PERMISSIONS,
+  isPermission,
+  isRestrictedPermission,
+  type Permission,
+} from './permissions.js';
+
+/** Stable identities of the roles the product installs (`Role.systemKey`). Names can be edited; these cannot. */
+export const SYSTEM_ROLE_KEYS = {
+  OWNER: 'owner',
+  DATA_DELETION: 'data-deletion',
+} as const;
+export type SystemRoleKey = (typeof SYSTEM_ROLE_KEYS)[keyof typeof SYSTEM_ROLE_KEYS];
+
+export const OWNER_ROLE = {
+  name: 'Owner',
+  description: 'Full administrative access to this tenant.',
+} as const;
+
+/** The only role that may carry `person.purge`. Same values as migration `20261111000000_data_deletion_role`. */
+export const DATA_DELETION_ROLE = {
+  name: 'Data deletion',
+  description: 'Permanently delete people from Syntra.',
+  permissions: [PERMISSIONS.PERSON_PURGE] as Permission[],
+} as const;
+
+/** Refuses a restricted permission on any role but the Data deletion role. */
+function assertNoRestrictedPermissions(permissions: readonly string[], systemKey: string | null): void {
+  if (systemKey === SYSTEM_ROLE_KEYS.DATA_DELETION) return;
+  const restricted = permissions.filter(isRestrictedPermission);
+  if (restricted.length > 0) {
+    throw new RoleRefusedError(
+      'restricted-permission',
+      `${restricted.join(', ')} can only be in the ${DATA_DELETION_ROLE.name} role. Remove it and save again.`,
+    );
+  }
+}
 
 export async function createRole(
   tx: TenantClient,
   name: string,
   permissions: Permission[],
-  opts: { builtIn?: boolean; description?: string } = {},
+  opts: { builtIn?: boolean; description?: string; systemKey?: SystemRoleKey } = {},
 ) {
+  assertNoRestrictedPermissions(permissions, opts.systemKey ?? null);
   const tenantId = await currentTenant(tx);
   return tx.role.create({
     data: {
@@ -16,8 +54,54 @@ export async function createRole(
       permissions,
       builtIn: opts.builtIn ?? false,
       description: opts.description ?? null,
+      systemKey: opts.systemKey ?? null,
     },
   });
+}
+
+/**
+ * The two roles a new tenant starts with: Owner (everything but the restricted
+ * permissions) and Data deletion (only `person.purge`, held by nobody yet).
+ */
+export async function createBuiltInRoles(tx: TenantClient) {
+  const owner = await createRole(tx, OWNER_ROLE.name, OWNER_PERMISSIONS, {
+    builtIn: true,
+    description: OWNER_ROLE.description,
+    systemKey: SYSTEM_ROLE_KEYS.OWNER,
+  });
+  const dataDeletion = await createRole(tx, DATA_DELETION_ROLE.name, [...DATA_DELETION_ROLE.permissions], {
+    builtIn: true,
+    description: DATA_DELETION_ROLE.description,
+    systemKey: SYSTEM_ROLE_KEYS.DATA_DELETION,
+  });
+  return { owner, dataDeletion };
+}
+
+/** Whether the user holds the built-in Owner role tenant-wide. A scoped grant does not count. */
+export async function isOwner(tx: TenantClient, userId: string): Promise<boolean> {
+  const held = await tx.roleAssignment.findFirst({
+    where: { userId, scopeOrgUnitId: null, role: { systemKey: SYSTEM_ROLE_KEYS.OWNER } },
+    select: { id: true },
+  });
+  return held !== null;
+}
+
+/**
+ * Only an Owner may grant or remove the Data deletion role, for anybody,
+ * themselves included. Every other role passes.
+ */
+export async function assertMayChangeRoleHolders(
+  tx: TenantClient,
+  actorUserId: string,
+  roleId: string,
+): Promise<void> {
+  const role = await tx.role.findUnique({ where: { id: roleId }, select: { name: true, systemKey: true } });
+  if (role?.systemKey !== SYSTEM_ROLE_KEYS.DATA_DELETION) return;
+  if (await isOwner(tx, actorUserId)) return;
+  throw new RoleRefusedError(
+    'owner-only',
+    `Only an Owner can grant or remove the "${role.name}" role.`,
+  );
 }
 
 export async function listRoles(tx: TenantClient) {
@@ -306,6 +390,8 @@ export async function updateRole(
 ): Promise<void> {
   const role = await tx.role.findUniqueOrThrow({ where: { id: roleId } });
 
+  if (input.permissions !== undefined) assertRolePermissionChange(role, input.permissions);
+
   await tx.role.update({
     where: { id: role.id },
     data: {
@@ -316,6 +402,32 @@ export async function updateRole(
         : { permissions: assertPermissionNames(input.permissions) }),
     },
   });
+}
+
+/**
+ * The permission rules for an edit, before anything is written or held for
+ * approval: `person.purge` only on the Data deletion role, and that role's set
+ * never changes. The same set sent back (a name-only edit) passes.
+ */
+export function assertRolePermissionChange(
+  role: { name: string; systemKey: string | null; permissions: readonly string[] },
+  permissions: readonly string[],
+): Permission[] {
+  const next = assertPermissionNames(permissions);
+  if (role.systemKey === SYSTEM_ROLE_KEYS.DATA_DELETION) {
+    const same =
+      new Set(next).size === new Set(role.permissions).size &&
+      next.every((permission) => role.permissions.includes(permission));
+    if (!same) {
+      throw new RoleRefusedError(
+        'system-role-permissions',
+        `Permissions of the "${role.name}" role cannot be changed.`,
+      );
+    }
+    return next;
+  }
+  assertNoRestrictedPermissions(next, role.systemKey);
+  return next;
 }
 
 /**
@@ -340,7 +452,9 @@ export async function deleteRole(tx: TenantClient, roleId: string): Promise<void
   if (role.builtIn) {
     throw new RoleRefusedError(
       'built-in-role',
-      `"${role.name}" is a built-in role and cannot be deleted. Change its permissions instead.`,
+      role.systemKey === SYSTEM_ROLE_KEYS.DATA_DELETION
+        ? `"${role.name}" is a built-in role and cannot be deleted.`
+        : `"${role.name}" is a built-in role and cannot be deleted. Change its permissions instead.`,
     );
   }
   const holders = new Set(role.assignments.map((a) => a.userId)).size;

@@ -3,6 +3,7 @@ import { endSessions } from '../auth/end-sessions.js';
 import { currentTenant } from '../tenant-context.js';
 import { assertReferenceInTenant } from '../tenant-reference.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
+import { userHoldingEmail } from '../identity/person-email.js';
 
 export type UserStatus = 'active' | 'inactive';
 
@@ -13,6 +14,11 @@ export interface CreateUserInput {
   orgUnitId?: string | undefined;
   /** 'person' when omitted. See `User.kind`. */
   kind?: UserKind | undefined;
+  /**
+   * The person this login belongs to. Their other logins share the address
+   * and are not a collision; the caller passes the person's business email.
+   */
+  personId?: string | undefined;
 }
 
 export type UserKind = 'person' | 'service';
@@ -41,13 +47,7 @@ export async function createUser(tx: TenantClient, input: CreateUserInput) {
   // hired into their post could not be created with the mailbox they have been
   // given. The rule is "no second USABLE account on one address"; an inactive
   // account is a record, not a login.
-  const sharing = await tx.user.findFirst({
-    where: {
-      email: { equals: input.email, mode: 'insensitive' },
-      sourceId: null,
-      status: 'active',
-    },
-  });
+  const sharing = await userHoldingEmail(tx, input.email, { exceptPersonId: input.personId ?? null });
   if (sharing) {
     throw new Error(`email already in use: ${input.email}`);
   }
@@ -64,6 +64,7 @@ export async function createUser(tx: TenantClient, input: CreateUserInput) {
       displayName: input.displayName,
       orgUnitId: input.orgUnitId ?? null,
       kind: input.kind ?? 'person',
+      personId: input.personId ?? null,
     },
   });
 }

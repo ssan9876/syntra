@@ -34,7 +34,7 @@ export const personSourcesOpenApi = describeAdminRoutes('HR sources', {
   'POST /person-duplicate-reviews/:id/resolve': {
     summary: 'Resolve a duplicate-person review',
     description:
-      'Keep the records separate, skip the incoming source record, or link it to the existing person. No resolution merges or deletes a person.',
+      'Skip the incoming source record, or link it to the existing person. No resolution merges or deletes a person. `keep_separate` is refused with `email-in-use`: two people cannot share a business email.',
     body: resolveDuplicateReviewRequest,
     params: idParam,
   },

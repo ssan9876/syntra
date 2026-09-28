@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignApplication,
   assignRole,
@@ -83,7 +83,7 @@ beforeEach(async () => {
   await db(async (tx) => {
     const admin = await createUser(tx, { login: 'admin', email: 'admin@acme.test', displayName: 'Ada' });
     await setPasswordHash(tx, admin.id, PASSWORD_HASH);
-    await assignRole(tx, admin.id, (await createRole(tx, 'Owner', ALL_PERMISSIONS)).id);
+    await assignRole(tx, admin.id, (await createRole(tx, 'Owner', OWNER_PERMISSIONS)).id);
     adminId = admin.id;
 
     const reader = await createUser(tx, { login: 'reader', email: 'reader@acme.test', displayName: 'Rea' });
@@ -136,7 +136,7 @@ describe('who may delete an application', () => {
     const app = await fromCatalog('slack', { workspace: 'acme' });
     const token = await db(async (tx) => {
       const svc = await createUser(tx, { login: 'svc', email: 'svc@acme.test', displayName: 'Service' });
-      await assignRole(tx, svc.id, (await createRole(tx, 'Svc', ALL_PERMISSIONS)).id);
+      await assignRole(tx, svc.id, (await createRole(tx, 'Svc', OWNER_PERMISSIONS)).id);
       return (await issueApiToken(tx, { userId: svc.id, name: 't', scopes: [], expiresAt: null, createdBy: null }))
         .token;
     });

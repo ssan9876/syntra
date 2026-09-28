@@ -11,7 +11,7 @@ interface SimulatedTarget {
   account: 'create' | 'enable' | 'keep' | 'disable' | 'none';
   add: Named[]; retain: Named[]; remove: Named[];
   unverified: boolean; unprocessable: { kind: string; message: string } | null;
-  departure?: { disableAt: string; revokeEntitlementsAt: string; archiveAt: string | null };
+  departure?: { disableAt: string; revokeEntitlementsAt: string; archiveAt: string | null; deleteAt?: string | null };
   blockers: string[]; verificationCoverage: 'read-back' | 'manual';
 }
 interface PersonSimulation {
@@ -110,7 +110,7 @@ export function LifecycleSimulationPage() {
           : person.targets.map((target, index) => <tr key={`${person.personId}:${target.targetSystemId}`}>
             <td>{index === 0 ? <Link className="link" to={`/admin/people/${person.personId}`}>{person.personName}</Link> : null}</td>
             <td>{target.targetName}{target.unverified ? <> <StateBadge state="attention">Unverified</StateBadge></> : null}</td>
-            <td>{ACCOUNT_LABEL[target.account]}{target.departure ? <p className="text-muted">disable {new Date(target.departure.disableAt).toLocaleDateString()} · revoke {new Date(target.departure.revokeEntitlementsAt).toLocaleDateString()}{target.departure.archiveAt ? ` · archive ${new Date(target.departure.archiveAt).toLocaleDateString()}` : ''}</p> : null}</td>
+            <td>{ACCOUNT_LABEL[target.account]}{target.departure ? <p className="text-muted">disable {new Date(target.departure.disableAt).toLocaleDateString()} · revoke {new Date(target.departure.revokeEntitlementsAt).toLocaleDateString()}{target.departure.archiveAt ? ` · archive ${new Date(target.departure.archiveAt).toLocaleDateString()}` : ''}{target.departure.deleteAt ? ` · delete ${new Date(target.departure.deleteAt).toLocaleDateString()}` : ''}</p> : null}</td>
             <td>{target.add.map((item) => item.displayName).join(', ') || '—'}</td>
             <td>{target.remove.map((item) => item.displayName).join(', ') || '—'}</td>
             <td>{target.verificationCoverage}</td>

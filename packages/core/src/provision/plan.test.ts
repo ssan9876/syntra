@@ -10,6 +10,7 @@ const ladder: LadderSettings = {
   entitlementRevocationDelayDays: 0,
   disableGraceDays: 0,
   archiveAfterDays: null,
+  deleteAfterDays: null,
   reenableWithoutConfirmationDays: 7,
   renameEnabled: false,
 };
@@ -855,6 +856,8 @@ describe('ACTION_ORDER', () => {
     expect(index('grant_entitlement')).toBeLessThan(index('revoke_entitlement'));
     expect(index('revoke_entitlement')).toBeLessThan(index('disable_account'));
     expect(index('disable_account')).toBeLessThan(index('archive_account'));
+    expect(index('archive_account')).toBeLessThan(index('delete_account'));
+    expect(ACTION_ORDER[ACTION_ORDER.length - 1]).toBe('delete_account');
   });
 });
 
@@ -1921,6 +1924,179 @@ describe('planActions — the archive, closely', () => {
   });
 });
 
+describe('planActions — the delete, the last rung', () => {
+  // A leaver whose contract ended on 1 January, disabled on the 8th. NOW is
+  // 15 June: 165 days after departure.
+  const leaverState = (over: Partial<ActualState> = {}) =>
+    actual({
+      enabledAtTarget: false,
+      status: 'disabled',
+      disabledAt: day('2026-01-08'),
+      heldEntitlements: new Set(),
+      heldWithinRemit: new Set(),
+      ...over,
+    });
+  const deletable = (over: Partial<Parameters<typeof planActions>[0]> = {}) =>
+    plan({
+      desired: [
+        desired({
+          account: {
+            required: false,
+            attributes: {},
+            container: '',
+            enabledNow: false,
+            correlationKey: null,
+          },
+          entitlements: new Set(),
+          attribution: new Map(),
+        }),
+      ],
+      actual: new Map([['person-1', leaverState()]]),
+      contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-01-01') })]]]),
+      ladder: { ...ladder, disableGraceDays: 7, deleteAfterDays: 30 },
+      ...over,
+    });
+
+  it('deletes a disabled leaver once deleteAfterDays has passed', () => {
+    const actions = deletable();
+    expect(types(actions)).toEqual(['delete_account']);
+    expect(actions[0]).toMatchObject({
+      personId: 'person-1',
+      accountId: 'account-1',
+      before: { deleted: false },
+      after: { deleted: true },
+      requiresConfirmation: false,
+      message: 'deleted 30 days after departure on 2026-01-01',
+    });
+  });
+
+  it('deletes exactly on the day it falls due and not the day before', () => {
+    const endingOn = (iso: string) =>
+      deletable({ contractsByPerson: new Map([['person-1', [contract({ endDate: day(iso) })]]]) });
+    // 2026-05-16 + 30 days = 2026-06-15, NOW.
+    expect(types(endingOn('2026-05-16'))).toEqual(['delete_account']);
+    expect(types(endingOn('2026-05-17'))).toEqual([]);
+  });
+
+  it('never deletes when deleteAfterDays is null', () => {
+    expect(types(deletable({ ladder: { ...ladder, disableGraceDays: 7, deleteAfterDays: null } }))).toEqual([]);
+  });
+
+  it('does not delete an account that is still enabled at the target', () => {
+    // The disable is proposed on this run; the delete waits for a run that
+    // sees it disabled.
+    const actions = deletable({
+      actual: new Map([['person-1', leaverState({ enabledAtTarget: true, status: 'active', disabledAt: null })]]),
+    });
+    expect(types(actions)).toEqual(['disable_account']);
+  });
+
+  it('does not delete an account re-enabled by hand after Syntra disabled it', () => {
+    const actions = deletable({
+      actual: new Map([['person-1', leaverState({ enabledAtTarget: true })]]),
+    });
+    expect(types(actions)).not.toContain('delete_account');
+  });
+
+  it('never deletes a rehire, who needs the account again', () => {
+    const actions = deletable({
+      desired: [desired({ entitlements: new Set(), attribution: new Map() })],
+      contractsByPerson: new Map([
+        [
+          'person-1',
+          [
+            contract({ endDate: day('2026-01-01') }),
+            contract({ id: 'contract-2', sequence: 2, startDate: day('2026-06-01'), endDate: null }),
+          ],
+        ],
+      ]),
+    });
+    expect(types(actions)).not.toContain('delete_account');
+    expect(types(actions)).toContain('enable_account');
+  });
+
+  it('never deletes a mover, who has no departure date', () => {
+    const actions = deletable({ contractsByPerson: new Map([['person-1', [contract()]]]) });
+    expect(types(actions)).not.toContain('delete_account');
+  });
+
+  it('counts an administrative deactivation from departureOverride', () => {
+    // Open-ended contract: the departure is the day they were marked inactive.
+    const deactivatedOn = (iso: string) =>
+      deletable({
+        contractsByPerson: new Map([['person-1', [contract({ endDate: null })]]]),
+        departureOverrideByPerson: new Map([['person-1', day(iso)]]),
+      });
+    expect(types(deactivatedOn('2026-05-16'))).toEqual(['delete_account']);
+    expect(deactivatedOn('2026-05-16')[0]!.message).toBe('deleted 30 days after departure on 2026-05-16');
+    expect(types(deactivatedOn('2026-05-17'))).toEqual([]);
+  });
+
+  it('does not propose a delete for an account already deleted', () => {
+    const actions = deletable({
+      actual: new Map([
+        ['person-1', leaverState({ status: 'deleted', existsAtTarget: false, dn: null })],
+      ]),
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('does not delete a deleted account that is back at the target', () => {
+    const actions = deletable({
+      actual: new Map([['person-1', leaverState({ status: 'deleted' })]]),
+    });
+    expect(types(actions)).not.toContain('delete_account');
+  });
+
+  it('does not delete an account missing at the target', () => {
+    const actions = deletable({
+      actual: new Map([
+        ['person-1', leaverState({ status: 'missing_at_target', existsAtTarget: false, dn: null })],
+      ]),
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('deletes an archived account the read no longer returns', () => {
+    // An archive container outside the base DN: the connector finds it by
+    // anchor and checks it is disabled.
+    const actions = deletable({
+      actual: new Map([
+        ['person-1', leaverState({ status: 'archived', existsAtTarget: false, dn: null })],
+      ]),
+    });
+    expect(types(actions)).toEqual(['delete_account']);
+  });
+
+  it('does not delete an account with no anchor', () => {
+    const actions = deletable({
+      actual: new Map([['person-1', leaverState({ anchor: null })]]),
+    });
+    expect(types(actions)).not.toContain('delete_account');
+  });
+
+  it('archives then deletes when both fall due on one run', () => {
+    const actions = deletable({
+      ladder: { ...ladder, disableGraceDays: 7, archiveAfterDays: 30, deleteAfterDays: 30 },
+    });
+    expect(types(actions)).toEqual(['archive_account', 'delete_account']);
+  });
+
+  it('still deletes a leaver whose rule could not be resolved', () => {
+    const actions = deletable({
+      desired: [
+        desired({
+          account: null,
+          entitlements: new Set(),
+          attribution: new Map(),
+          unprocessable: { kind: 'unresolvable_rule', message: 'x' },
+        }),
+      ],
+    });
+    expect(types(actions)).toEqual(['delete_account']);
+  });
+});
+
 describe('planActions — the guards that hold when something upstream changes', () => {
   it('proposes nothing for a person the reconciliation produced no actual state for', () => {
     // `reconcile` omits a person whose account it could not diff safely at
@@ -2199,6 +2375,14 @@ describe('an administrative deactivation on the ladder', () => {
       ladder: { ...ladder, archiveAfterDays: 30 },
     });
     expect(actions.map((a) => a.actionType)).not.toContain('archive_account');
+  });
+
+  it('does not delete on the day of the deactivation, while the account is enabled', () => {
+    const actions = deactivated({
+      ladder: { ...ladder, deleteAfterDays: 0 },
+    });
+    expect(actions.map((a) => a.actionType)).toContain('disable_account');
+    expect(actions.map((a) => a.actionType)).not.toContain('delete_account');
   });
 });
 

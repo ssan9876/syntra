@@ -9,6 +9,7 @@ import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from '.
 import { evaluatePersonGuard } from './guard.js';
 import { personMappingsFor, personSourceWithCredential } from './source-service.js';
 import { normalizeIdentityReference } from './reference-data.js';
+import { assertPersonEmailFree, followPersonEmail } from '../identity/person-email.js';
 import {
   READ_CHECKPOINT_EVERY,
   RunCancelledSignal,
@@ -234,9 +235,11 @@ export async function previewImportRun(
           where: { active: true, kind: { in: ['department', 'location'] } },
           select: { kind: true, normalizedValue: true },
         }),
-        duplicateCandidates: incomingEmails.length === 0 ? [] : await tx.person.findMany({
-          where: { status: 'active', businessEmail: { in: incomingEmails, mode: 'insensitive' } },
-          select: { id: true, givenName: true, familyName: true, businessEmail: true, sourceId: true },
+        // Every status: an address is unique across all of them. Only the
+        // active holders are offered for duplicate review below.
+        emailHolders: incomingEmails.length === 0 ? [] : await tx.person.findMany({
+          where: { businessEmail: { in: incomingEmails, mode: 'insensitive' } },
+          select: { id: true, givenName: true, familyName: true, businessEmail: true, sourceId: true, status: true },
         }),
         managerIdByExternalId: new Map(
           existing.map((person) => [person.externalId, person.id] as const),
@@ -314,6 +317,49 @@ export async function previewImportRun(
         `Employee "${person.externalId}" has unknown manager IDs: ${unknown.join(', ')}`,
       );
       return false;
+    });
+
+    // One business email per person. A row whose address another person
+    // has is withheld: an update always, and a new person when the holder is
+    // inactive. A new person matching an ACTIVE holder goes to duplicate
+    // review instead, where it can be linked to them. Two rows sharing an
+    // address are both withheld, as with a repeated employee ID.
+    //
+    // Only an owned person's anchor is recorded: a withheld new row names
+    // nobody who could be absent.
+    const ownerIdByExternalId = new Map(snapshot.existing.map((p) => [p.externalId, p.id] as const));
+    const emailKey = (value: string | null | undefined) => value?.trim().toLowerCase() ?? '';
+    const holdersByEmail = new Map<string, typeof snapshot.emailHolders>();
+    for (const holder of snapshot.emailHolders) {
+      const key = emailKey(holder.businessEmail);
+      if (key !== '') holdersByEmail.set(key, [...(holdersByEmail.get(key) ?? []), holder]);
+    }
+    const rowsByEmail = new Map<string, number>();
+    for (const person of mapped) {
+      const key = emailKey(person.fields.businessEmail);
+      if (key !== '') rowsByEmail.set(key, (rowsByEmail.get(key) ?? 0) + 1);
+    }
+    mapped = mapped.filter((person) => {
+      const email = person.fields.businessEmail?.trim() ?? '';
+      const key = email.toLowerCase();
+      if (key === '') return true;
+      const ownId = ownerIdByExternalId.get(person.externalId);
+      const withhold = (reason: string) => {
+        mappingFailures += 1;
+        if (ownId !== undefined) failureAnchors.push(person.externalId);
+        failureReasons.add(reason);
+        return false;
+      };
+      if ((rowsByEmail.get(key) ?? 0) > 1) {
+        return withhold(`Business email "${email}" appears on more than one row. All its rows were withheld.`);
+      }
+      const others = (holdersByEmail.get(key) ?? []).filter((holder) => holder.id !== ownId);
+      if (others.length === 0) return true;
+      if (ownId === undefined && others.every((holder) => holder.status === 'active')) return true;
+      const holder = others[0]!;
+      return withhold(
+        `Employee "${person.externalId}": ${holder.givenName} ${holder.familyName} already has ${email}. Row withheld.`,
+      );
     });
 
     /**
@@ -420,8 +466,8 @@ export async function previewImportRun(
         data: { finishedAt: new Date() },
       });
       if (claimed.count === 0) throw new RunCancelledSignal(run.id);
-      const duplicateCandidatesByEmail = new Map<string, typeof snapshot.duplicateCandidates>();
-      for (const candidate of snapshot.duplicateCandidates) {
+      const duplicateCandidatesByEmail = new Map<string, typeof snapshot.emailHolders>();
+      for (const candidate of snapshot.emailHolders.filter((holder) => holder.status === 'active')) {
         const key = candidate.businessEmail?.trim().toLocaleLowerCase();
         if (key) duplicateCandidatesByEmail.set(key, [...(duplicateCandidatesByEmail.get(key) ?? []), candidate]);
       }
@@ -656,6 +702,9 @@ async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
 
   switch (change.changeType) {
     case 'create_person': {
+      if (typeof after.businessEmail === 'string') {
+        await assertPersonEmailFree(tx, after.businessEmail);
+      }
       const createdPerson = await tx.person.create({
         data: {
           tenantId,
@@ -684,7 +733,12 @@ async function applyOne(tx: TenantClient, sourceId: string, change: ChangeRow) {
 
     case 'update_person':
       if (change.targetId === null) throw new Error('update_person names no person');
+      if (typeof after.businessEmail === 'string') {
+        await assertPersonEmailFree(tx, after.businessEmail, { exceptPersonId: change.targetId });
+      }
       await tx.person.update({ where: { id: change.targetId }, data: after as never });
+      // The person's logins carry the new address.
+      await followPersonEmail(tx, change.targetId);
       return;
 
     case 'reactivate_person':

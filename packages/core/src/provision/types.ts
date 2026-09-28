@@ -191,6 +191,8 @@ export type AccountStatus =
   | 'active'
   | 'disabled'
   | 'archived'
+  /** Deleted at the target by `delete_account`. Never recreated for a leaver. */
+  | 'deleted'
   | 'missing_at_target'
   | 'conflict';
 
@@ -286,6 +288,8 @@ export interface LadderSettings {
   disableGraceDays: number;
   /** Null means never. */
   archiveAfterDays: number | null;
+  /** Null means never. Counted from the departure date, like the others. */
+  deleteAfterDays: number | null;
   reenableWithoutConfirmationDays: number;
   renameEnabled: boolean;
 }

@@ -61,6 +61,11 @@ export function diffObjects(
   correlations: Correlation[],
   absent: ExistingObject[],
   currentFields: Map<string, Record<string, string>>,
+  /**
+   * Fields the source does not write on a row, by row id: the email of a
+   * login linked to a person, which the person's business email sets.
+   */
+  lockedFields: Map<string, ReadonlySet<string>> = new Map(),
 ): ProposedChange[] {
   const changes: ProposedChange[] = [];
 
@@ -172,10 +177,12 @@ export function diffObjects(
     }
 
     const current = currentFields.get(existing.id) ?? {};
+    const locked = lockedFields.get(existing.id);
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};
 
     for (const [field, value] of Object.entries(object.fields)) {
+      if (locked?.has(field)) continue;
       if (current[field] !== value) {
         before[field] = current[field] ?? null;
         after[field] = value;

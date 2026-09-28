@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   assignRole,
   createRole,
   createUser,
@@ -110,7 +110,7 @@ beforeAll(async () => {
     const user = await createUser(tx, { login: 'prober', email: 'prober@acme.test', displayName: 'Prober' });
     await tx.user.update({ where: { id: user.id }, data: { personId: person.id } });
     await setPasswordHash(tx, user.id, hash);
-    const role = await createRole(tx, 'Everything', ALL_PERMISSIONS);
+    const role = await createRole(tx, 'Everything', OWNER_PERMISSIONS);
     await assignRole(tx, user.id, role.id);
     const issued = await issueApiToken(tx, { userId: user.id, name: 'probe', scopes: [], expiresAt: null, createdBy: user.id });
     return issued.token;
@@ -874,6 +874,7 @@ const JOB_PAYLOADS: ReadonlyMap<string, () => Record<string, unknown>> = new Map
   ['sync.run', () => ({ tenantId: A.tenantId, sourceId: B.ids.source, runId: B.ids.syncRun })],
   ['personSource.run', () => ({ tenantId: A.tenantId, sourceId: B.ids.personSource, runId: B.ids.personImportRun })],
   ['notify.webhook', () => ({ tenantId: A.tenantId })],
+  ['identity.person-purge', () => ({ tenantId: A.tenantId })],
   ['access.logout_deliver', () => ({ tenantId: A.tenantId })],
   ['keys.rotate', () => ({ tenantId: A.tenantId, kind: 'oidc' })],
   ['provision.run', () => ({ tenantId: A.tenantId, targetSystemId: B.ids.target })],

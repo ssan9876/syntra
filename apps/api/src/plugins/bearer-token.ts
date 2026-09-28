@@ -74,6 +74,8 @@ export const TOKEN_DENIED_ROUTES: readonly string[] = [
  */
 export const TOKEN_DENIED_OPERATIONS: readonly { method: string; url: string }[] = [
   { method: 'DELETE', url: '/api/admin/applications/:id' },
+  // Hard-deleting a person needs a fresh step-up, which a token cannot perform.
+  { method: 'DELETE', url: '/api/admin/persons/:id' },
 ];
 
 export function routeRefusesTokens(routePattern: string | undefined, method?: string): boolean {

@@ -46,11 +46,12 @@ describe('first', () => {
 });
 
 /**
- * Spec section 9: Provision never deletes. Not after any grace period, not
- * under any configuration, not on any code path.
+ * Spec section 9, amended: Provision deletes in exactly one place, the
+ * `delete_account` rung of the leaver ladder (`deleteAfterDays`, disabled
+ * accounts only, under its own guard threshold).
  *
- * This test exists so that adding a destructive member to the action union
- * fails a test rather than passing review. It is deliberately written as an
+ * This test exists so that adding another destructive member to the action
+ * union fails a test rather than passing review. It is deliberately written as an
  * exhaustive enumeration rather than a regex over the type, because a type is
  * erased at run time and cannot be asserted on -- so the enumeration is the
  * value the rest of the system iterates, and this is what pins it.
@@ -64,6 +65,7 @@ describe('the action-type union', () => {
     'enable_account',
     'disable_account',
     'archive_account',
+    'delete_account',
     'rename_account',
     'grant_entitlement',
     'revoke_entitlement',
@@ -71,19 +73,20 @@ describe('the action-type union', () => {
     'reactivate_syntra_user',
   ];
 
-  it('contains exactly the twelve action types the spec names', () => {
+  it('contains exactly the thirteen action types the spec names', () => {
     expect([...CONNECTOR_ACTION_TYPES, ...SYNTRA_ONLY_ACTION_TYPES].sort()).toEqual(
       [...EXPECTED].sort(),
     );
   });
 
-  it('contains no member whose name suggests destruction', () => {
-    // A member called delete_account, purge_account, remove_account or
-    // destroy_entitlement would pass every other test in this repository.
+  it('contains exactly one member whose name suggests destruction: delete_account', () => {
+    // A second one -- purge_account, remove_account, destroy_entitlement --
+    // would pass every other test in this repository.
     const forbidden = /delete|destroy|purge|erase|wipe|remove_account|drop/i;
-    for (const type of [...CONNECTOR_ACTION_TYPES, ...SYNTRA_ONLY_ACTION_TYPES]) {
-      expect(type).not.toMatch(forbidden);
-    }
+    const destructive = [...CONNECTOR_ACTION_TYPES, ...SYNTRA_ONLY_ACTION_TYPES].filter((type) =>
+      forbidden.test(type),
+    );
+    expect(destructive).toEqual(['delete_account']);
   });
 
   it('routes exactly two action types away from any connector', () => {
@@ -109,6 +112,7 @@ describe('the action-type union', () => {
       'enable_account',
       'disable_account',
       'archive_account',
+      'delete_account',
       'rename_account',
       'grant_entitlement',
       'revoke_entitlement',

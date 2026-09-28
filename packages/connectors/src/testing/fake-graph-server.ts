@@ -92,6 +92,8 @@ export interface FakeGraphServer {
   tokenUrl: string;
   users: Map<string, FakeGraphUser>;
   groups: Map<string, FakeGraphGroup>;
+  /** Users removed by `DELETE /users/{id}`: Graph's deleted items, kept 30 days. */
+  deletedUsers: Map<string, FakeGraphUser>;
   requests: FakeGraphRequest[];
   /** Every token the server has issued, in order. */
   tokensIssued: string[];
@@ -171,6 +173,7 @@ export async function startFakeGraphServer(
 ): Promise<FakeGraphServer> {
   const users = new Map<string, FakeGraphUser>((options.users ?? []).map((u) => [u.id, u]));
   const groups = new Map<string, FakeGraphGroup>((options.groups ?? []).map((g) => [g.id, g]));
+  const deletedUsers = new Map<string, FakeGraphUser>();
   const pageSize = options.pageSize ?? 100;
   const requests: FakeGraphRequest[] = [];
   const tokensIssued: string[] = [];
@@ -366,9 +369,14 @@ export async function startFakeGraphServer(
       const user = users.get(id);
       if (segments.length === 2) {
         if (method === 'DELETE') {
-          // Logged by the caller; refused here so a test that asserts "no
-          // DELETE was issued" has the request in the log AND nothing gone.
-          return { status: 403, body: graphError('Authorization_RequestDenied', 'This fake does not delete.') };
+          // Moved to deleted items with its memberships dropped, as Graph does.
+          if (!user) {
+            return { status: 404, body: graphError('Request_ResourceNotFound', `Resource '${id}' does not exist.`) };
+          }
+          users.delete(id);
+          deletedUsers.set(id, user);
+          for (const group of groups.values()) group.members = group.members.filter((m) => m !== id);
+          return { status: 204 };
         }
         if (method === 'GET') {
           const hidden = consumeRead();
@@ -582,6 +590,7 @@ export async function startFakeGraphServer(
     tokenUrl: `${origin}/${options.tenantId}/oauth2/v2.0/token`,
     users,
     groups,
+    deletedUsers,
     requests,
     tokensIssued,
     throttleNext: (n, retryAfterSeconds, match) =>

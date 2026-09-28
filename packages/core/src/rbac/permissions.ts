@@ -127,6 +127,13 @@ export const PERMISSIONS = {
    * single permission does. Erasure still needs a SECOND holder to approve.
    */
   PRIVACY_MANAGE: 'privacy.manage',
+  /**
+   * Deleting a person outright, with everything that references them.
+   *
+   * RESTRICTED: held only through the built-in Data deletion role, which only
+   * an Owner may assign. Owner itself does not hold it.
+   */
+  PERSON_PURGE: 'person.purge',
   /*
    * There is deliberately no `govern.review`. Review authority comes from
    * resolution, as approval authority does in Automate. A tenant-wide "may
@@ -137,6 +144,21 @@ export const PERMISSIONS = {
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
 export const ALL_PERMISSIONS: Permission[] = Object.values(PERMISSIONS);
+
+/**
+ * Permissions no role may carry except the one built-in role made for it.
+ * Never granted by "everything": Owner, presets and backfills leave them out.
+ */
+export const RESTRICTED_PERMISSIONS: readonly Permission[] = [PERMISSIONS.PERSON_PURGE];
+
+export function isRestrictedPermission(value: string): boolean {
+  return (RESTRICTED_PERMISSIONS as readonly string[]).includes(value);
+}
+
+/** What the Owner role is created with: the catalogue minus the restricted permissions. */
+export const OWNER_PERMISSIONS: Permission[] = ALL_PERMISSIONS.filter(
+  (permission) => !isRestrictedPermission(permission),
+);
 
 export function isPermission(value: string): value is Permission {
   return (ALL_PERMISSIONS as string[]).includes(value);

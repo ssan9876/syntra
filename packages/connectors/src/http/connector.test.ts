@@ -625,6 +625,16 @@ describe('write', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('refuses delete_account without a request', async () => {
+    const result = await httpTargetConnector.write(config(), {
+      op: 'delete_account',
+      actionId: 'act-1',
+      anchor: 'u1',
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(calls).toHaveLength(0);
+  });
+
   it('stops an archive when an entitlement will not come off', async () => {
     const document = simple({
       entitlement: {

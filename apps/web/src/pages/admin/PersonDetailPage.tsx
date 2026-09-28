@@ -24,6 +24,7 @@ import { useCan } from '../../session/SessionProvider.js';
 import { PersonLifecycleSummary } from './PersonLifecycleSummary.js';
 import { lifecycleVerdict } from './lifecycle-verdict.js';
 import { usePersonReceipts } from './use-person-receipts.js';
+import { PersonDangerZone } from './PersonDangerZone.js';
 
 interface Contract {
   id: string;
@@ -290,6 +291,13 @@ export function PersonDetailPage() {
                   name="businessEmail"
                   onChange={(x) => set('businessEmail', x)}
                   error={errs.businessEmail}
+                  warning={
+                    data.users.length > 0 &&
+                    (v.businessEmail ?? '') !== '' &&
+                    (v.businessEmail ?? '') !== (data.businessEmail ?? '')
+                      ? `Also changes the email of ${data.users.map((u) => u.login).join(', ')}.`
+                      : undefined
+                  }
                 />
                 <Select
                   label="Org unit"
@@ -695,6 +703,9 @@ export function PersonDetailPage() {
             </Link>
           </div>
         </Panel>
+
+        {/* Renders nothing unless the reader holds person.purge and the person is inactive. */}
+        <PersonDangerZone person={data} />
 
         <Link
           to="/admin/users?tab=people"

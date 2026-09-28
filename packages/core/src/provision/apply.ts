@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { withTenant } from '@syntra/db';
+import { withTenant, type TenantClient } from '@syntra/db';
 import {
   targetConnectorFor,
   targetConnectorForRelease,
@@ -415,6 +415,10 @@ function toWriteOperation(
             // closest thing to destructive in the ladder.
             entitlementDns: context.managed.map((m) => m.dn),
           };
+    case 'delete_account':
+      return context.anchor === null
+        ? null
+        : { op: 'delete_account', actionId: action.id, anchor: context.anchor };
     case 'rename_account': {
       const correlationKey = text(after.correlationKey);
       if (context.anchor === null || correlationKey === '') return null;
@@ -437,7 +441,7 @@ function toWriteOperation(
           };
     default:
       // Includes the two Syntra-directory actions, which call no connector at
-      // all, and anything unrecognised. There is no delete to fall through to.
+      // all, and anything unrecognised.
       return null;
   }
 }
@@ -1584,6 +1588,46 @@ interface FinishMeta {
   forcedChange?: boolean;
 }
 
+/**
+ * A `delete_account` that landed, or found the object already gone.
+ *
+ * The anchor is kept, so an object restored at the target is still
+ * recognised as this account (reconcile reports it). Every held holding is
+ * revoked: the object that held them no longer exists.
+ */
+async function markAccountDeleted(
+  tx: TenantClient,
+  accountId: string,
+  now: Date,
+  actorUserId: string | null,
+  message: string,
+): Promise<void> {
+  const account = await tx.targetAccount.update({
+    where: { id: accountId },
+    data: { status: 'deleted', statusReason: null, lastReconciledAt: now },
+    select: { id: true, targetSystemId: true, personId: true, correlationKey: true, anchor: true },
+  });
+  await tx.accountEntitlement.updateMany({
+    where: { accountId, state: 'held' },
+    data: { state: 'revoked', revokedAt: now },
+  });
+  await recordEvent(tx, {
+    actorUserId,
+    action: 'provision.account.deleted',
+    targetType: 'TargetAccount',
+    targetId: accountId,
+    outcome: 'success',
+    sourceIp: null,
+    payload: {
+      targetSystemId: account.targetSystemId,
+      personId: account.personId,
+      correlationKey: account.correlationKey,
+      anchor: account.anchor,
+      message,
+    },
+  });
+}
+
 async function finish(
   tenantId: string,
   actionId: string,
@@ -1666,7 +1710,13 @@ async function finish(
             data: { status: 'active', disabledAt: null },
           });
           break;
-        case 'disable_account':
+        case 'disable_account': {
+          // A `deleted` account back at the target keeps its status: the
+          // drift finding stays open and `plan.ts` never deletes it twice.
+          const held = await tx.targetAccount.findUnique({
+            where: { id: meta.accountId },
+            select: { status: true },
+          });
           await tx.targetAccount.update({
             where: { id: meta.accountId },
             // The DATE, always, and not only the status. `plan.ts` refuses to
@@ -1674,9 +1724,13 @@ async function finish(
             // `reenableWithoutConfirmationDays` window, and an account recorded
             // disabled with no date cannot be shown to be inside it — so every
             // re-enable of it, forever, needs a tick nobody can explain.
-            data: { status: 'disabled', disabledAt: now },
+            data: {
+              ...(held?.status === 'deleted' ? {} : { status: 'disabled' }),
+              disabledAt: now,
+            },
           });
           break;
+        }
         case 'archive_account':
           await tx.targetAccount.update({
             where: { id: meta.accountId },
@@ -1697,6 +1751,9 @@ async function finish(
               data: { state: 'revoked', revokedAt: now },
             });
           }
+          break;
+        case 'delete_account':
+          await markAccountDeleted(tx, meta.accountId, now, meta.actorUserId ?? null, message);
           break;
         case 'rename_account': {
           const correlationKey = text(asRecord(action.after).correlationKey);
@@ -1939,6 +1996,10 @@ async function finish(
  * because an earlier docstring said "plain state comparison for everything
  * else", which was not true and would have been read as a guarantee by the
  * next person to add a non-idempotent operation.
+ *
+ * `delete_account` is compared: an anchor the read no longer returns, for an
+ * account the read covers, is a delete that landed. Otherwise it goes back to
+ * `proposed` like the rest.
  */
 export async function resolveInFlightActions(
   tenantId: string,
@@ -2002,6 +2063,8 @@ export async function resolveInFlightActions(
     });
   }
 
+  const anchorsAtTarget = new Set(objects.map((o) => o.anchor));
+
   let resolved = 0;
   for (const action of prepared.actions) {
     const key = text(asRecord(action.after).correlationKey).toLowerCase();
@@ -2028,6 +2091,38 @@ export async function resolveInFlightActions(
         : undefined;
 
     await withTenant(tenantId, async (tx) => {
+      // A delete landed when the read no longer returns the anchor. Only for
+      // an account the read covers: an archived one can sit outside it, and
+      // absence there proves nothing, so it goes back to proposed.
+      if (action.actionType === 'delete_account' && action.accountId !== null) {
+        const account = await tx.targetAccount.findUnique({ where: { id: action.accountId } });
+        if (
+          account !== null &&
+          account.anchor !== null &&
+          account.status !== 'archived' &&
+          !anchorsAtTarget.has(account.anchor)
+        ) {
+          await tx.provisionAction.update({
+            where: { id: action.id },
+            data: {
+              status: 'applied',
+              appliedAt: new Date(),
+              message: 'Recovered after an interrupted apply: the account is no longer at the target.',
+            },
+          });
+          await markAccountDeleted(tx, account.id, new Date(), null, 'recovered after an interrupted apply');
+          await recordEvent(tx, {
+            actorUserId: null,
+            action: 'provision.action.resolve_in_flight',
+            targetType: 'ProvisionAction',
+            targetId: action.id,
+            outcome: 'success',
+            sourceIp: null,
+            payload: { actionType: action.actionType, landed: true, credentialSealed: null },
+          });
+          return;
+        }
+      }
       if (landed !== undefined) {
         // Our own previous attempt succeeded and we lost the answer.
         await tx.provisionAction.update({

@@ -268,6 +268,7 @@ export const ABSENT_IS_EMPTY: ReadonlyMap<string, string> = new Map<string, stri
  */
 export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>([
   ['PUT /api/admin/tenant', 'The tenant\'s own settings; addressed by the Host header, which is the boundary.'],
+  ['PUT /api/admin/person-purge-policy', 'The tenant purge policy; takes no object id.'],
   ['PUT /api/admin/tenant/brand', 'The tenant\'s own branding.'],
   ['POST /api/admin/tenant/offboarding/assess', 'Assesses the calling tenant; takes no object id.'],
   ['POST /api/admin/tenant/offboarding/export', 'Exports the calling tenant; takes no object id.'],

@@ -38,7 +38,8 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
   const toast = useToast();
   const groups = [...new Map(reviews.map((review) => [review.changeId, reviews.filter((item) => item.changeId === review.changeId)])).values()];
 
-  async function resolve(review: DuplicateReview, resolution: 'keep_separate' | 'link_existing' | 'skip_source_record') {
+  // No "keep separate": two people cannot share a business email.
+  async function resolve(review: DuplicateReview, resolution: 'link_existing' | 'skip_source_record') {
     const note = (notes[review.changeId] ?? '').trim();
     if (note.length < 10) {
       setProblem('Decision note: enter at least 10 characters.');
@@ -55,9 +56,7 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
         title:
           resolution === 'link_existing'
             ? 'Linked to the existing person'
-            : resolution === 'keep_separate'
-              ? 'Kept as separate people'
-              : 'Incoming HR record skipped',
+            : 'Incoming HR record skipped',
       });
       reload();
     } catch (cause) {
@@ -95,8 +94,7 @@ export function DuplicateReviewsTab({ reviews, loading, error, reload }: {
               </div>
               <Textarea label="Decision note" rows={2} value={notes[review.changeId] ?? ''} onChange={(value) => setNotes((current) => ({ ...current, [review.changeId]: value }))} maxLength={1000} />
               <div className="flex flex-wrap gap-2">
-                <Button variant="primary" onClick={() => resolve(review, 'keep_separate')} loading={busy === review.changeId} disabled={busy !== null}>Keep as separate people</Button>
-                <Button onClick={() => resolve(review, 'skip_source_record')} disabled={busy !== null}>Skip incoming HR record</Button>
+                <Button onClick={() => resolve(review, 'skip_source_record')} loading={busy === review.changeId} disabled={busy !== null}>Skip incoming HR record</Button>
               </div>
             </div>
           </Panel>

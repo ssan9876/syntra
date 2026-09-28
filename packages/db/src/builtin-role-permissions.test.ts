@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ALL_PERMISSIONS } from '@syntra/core';
+import { ALL_PERMISSIONS, RESTRICTED_PERMISSIONS } from '@syntra/core';
 import { prisma } from './client.js';
 import { withTenant } from './with-tenant.js';
 import { resetDatabase } from './test-support.js';
@@ -50,6 +50,17 @@ describe('the built-in role backfill', () => {
   it('names only permissions the catalogue has', () => {
     const catalog = new Set<string>(ALL_PERMISSIONS);
     expect(backfilled(sql).filter((p) => !catalog.has(p))).toEqual([]);
+  });
+
+  /**
+   * "The full catalogue" means the catalogue a built-in Owner holds, which
+   * excludes the restricted permissions: `person.purge` is held through the
+   * Data deletion role only. Neither backfill may ever name one.
+   */
+  it('never names a restricted permission', () => {
+    for (const migration of [sql, repairSql]) {
+      expect(backfilled(migration).filter((p) => (RESTRICTED_PERMISSIONS as readonly string[]).includes(p))).toEqual([]);
+    }
   });
 
   /**

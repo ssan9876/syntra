@@ -107,7 +107,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `SweepAction` | person: `subjectPersonId` | retain | Identifiers only. |
 | `SweepException` | person: `personId` | pseudonymize | The message can name the person and is replaced. |
 | `SyncChange` | any: `targetId` | pseudonymize | Kept as the record of what a sync did; the before and after values are cleared. |
-| `TargetAccount` | person: `personId` | pseudonymize | Accounts are disabled or archived before an erasure. The login Syntra generated and the attributes it last wrote are replaced; the target's immutable object id is kept so a later run recognises the account. The copy in the target system itself must be erased there: Syntra has no delete path to a target, by design. |
+| `TargetAccount` | person: `personId` | pseudonymize | Accounts are disabled or archived before an erasure. The login Syntra generated and the attributes it last wrote are replaced; the target's immutable object id is kept so a later run recognises the account. The copy in the target system itself must be erased there, unless the target's `deleteAfterDays` has already deleted it (Active Directory and Entra ID only). |
 | `TotpCredential` | user: `userId` | delete | Credential material; the vault secret it names is deleted with it. |
 | `UpstreamLink` | user: `userId` | pseudonymize | The upstream provider's subject identifier is replaced by a pseudonym so the binding can no longer be used to recognise the person. |
 | `User` | person: `personId` | pseudonymize | Accounts are deactivated before an erasure and kept afterwards (deactivate, never delete); login, email and display name are replaced by pseudonyms. The directory anchor is kept so a directory sync recognises the account and the restriction refuses its changes. |
@@ -698,7 +698,7 @@ Not personal data: `tenantId`.
 
 - **Purpose.** Know which account each person holds in each connected system, and what it was granted, so access follows employment.
 - **Source.** Provisioning runs and the target systems they read.
-- **Retention.** For as long as the target is connected. Disabled and archived, never deleted; pseudonymised by a data-subject erasure; removed with the target or tenant.
+- **Retention.** For as long as the target is connected. Disabled and archived; deleted at Active Directory and Entra ID targets after `deleteAfterDays`, when set, with the row kept as `deleted`; pseudonymised by a data-subject erasure; removed with the target or tenant.
 - **Legal basis.** PLACEHOLDER -- to be confirmed by the controller. Typically performance of the employment contract (6(1)(b)) and legitimate interests in securing systems (6(1)(f)).
 - **Access.** `provision.read`, `provision.manage`; `privacy.manage`.
 
@@ -758,7 +758,7 @@ Not personal data: `tenantId`.
 
 #### `TargetAccount`
 
-Linked to a data subject by person: `personId`. Erasure: **pseudonymize** -- Accounts are disabled or archived before an erasure. The login Syntra generated and the attributes it last wrote are replaced; the target's immutable object id is kept so a later run recognises the account. The copy in the target system itself must be erased there: Syntra has no delete path to a target, by design.
+Linked to a data subject by person: `personId`. Erasure: **pseudonymize** -- Accounts are disabled or archived before an erasure. The login Syntra generated and the attributes it last wrote are replaced; the target's immutable object id is kept so a later run recognises the account. The copy in the target system itself must be erased there, unless the target's `deleteAfterDays` has already deleted it (Active Directory and Entra ID only).
 
 | Column | Category | Erasure | Notes |
 | --- | --- | --- | --- |
@@ -1170,6 +1170,7 @@ Not personal data: `tenantId`.
 | `enableAccountCount` | operational |  |  |
 | `disableAccountCount` | operational |  |  |
 | `archiveAccountCount` | operational |  |  |
+| `deleteAccountCount` | operational |  |  |
 | `renameAccountCount` | operational |  |  |
 | `grantEntitlementCount` | operational |  |  |
 | `revokeEntitlementCount` | operational |  |  |
@@ -2413,7 +2414,7 @@ Not personal data: `id`, `tenantId`, `resourceType`, `resourceId`, `ownerGroupId
 
 #### `Role`
 
-No personal data. Columns: `id`, `tenantId`, `name`, `description`, `permissions`, `builtIn`.
+No personal data. Columns: `id`, `tenantId`, `name`, `description`, `permissions`, `builtIn`, `systemKey`.
 
 #### `RuleEntitlement`
 
@@ -2436,11 +2437,11 @@ No personal data. Columns: `id`, `tenantId`, `name`, `functionAId`, `functionBId
 | `adapterSelectionChangedByUserId` | identity |  |  |
 | `deprecationOverrideByUserId` | identity |  |  |
 
-Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `autoConfirmRenames`, `mirrorOrgUnits`, `orgUnitRootDn`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
+Not personal data: `id`, `tenantId`, `name`, `type`, `config`, `secretName`, `pairedDirectorySourceId`, `schedule`, `autoApply`, `enabled`, `externalWritesPausedAt`, `externalWritesPauseReason`, `externalWritesPauseExpiresAt`, `externalWritesResumedAt`, `maintenanceWindowEnabled`, `maintenanceWindowDays`, `maintenanceWindowStartMinute`, `maintenanceWindowDurationMinutes`, `adapterChannel`, `adapterVersionPin`, `adapterRollbackVersion`, `adapterSelectionChangedAt`, `adapterSelectionReason`, `deprecationOverrideVersion`, `deprecationOverrideReason`, `deprecationOverrideAt`, `deprecationOverrideExpiresAt`, `enforcementMode`, `preHireDays`, `entitlementRevocationDelayDays`, `disableGraceDays`, `archiveAfterDays`, `deleteAfterDays`, `reenableWithoutConfirmationDays`, `createAccountThresholdPercent`, `disableAccountThresholdPercent`, `archiveAccountThresholdPercent`, `deleteAccountThresholdPercent`, `revokeEntitlementThresholdPercent`, `deactivateSyntraUserThresholdPercent`, `perEntitlementThresholdPercent`, `personPopulationDropPercent`, `maxContainerCreatesPerRun`, `maxAttempts`, `concurrency`, `renameEnabled`, `autoConfirmRenames`, `mirrorOrgUnits`, `orgUnitRootDn`, `lastRunAt`, `lastAppliedRunAt`, `consecutiveSkippedRuns`, `lastSkippedAt`, `lastSkipReason`, `createdAt`, `updatedAt`.
 
 #### `Tenant`
 
-No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `brandSupportUrl`, `brandSupportLabel`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
+No personal data. Columns: `id`, `name`, `slug`, `primaryDomain`, `additionalDomains`, `status`, `adminMfaRequired`, `passwordMinLength`, `selfEnrolmentEnabled`, `lockoutThreshold`, `personPurgeAfterDays`, `lockoutWindowMinutes`, `lockoutDurationMinutes`, `passwordMaxAgeDays`, `passwordHistoryDepth`, `emailOtpEnabled`, `portalSessionIdleMinutes`, `portalSessionAbsoluteMinutes`, `adminSessionIdleMinutes`, `adminSessionAbsoluteMinutes`, `adminWebauthnRequired`, `brandName`, `brandLogo`, `brandPrimary`, `brandAccent`, `brandSupportUrl`, `brandSupportLabel`, `oidcConfigGeneration`, `privilegedChangeClasses`, `breakGlassActivationDelayMinutes`, `securityEmailCategories`, `credentialAlertDays`, `createdAt`.
 
 #### `TenantDeletionRequest`
 

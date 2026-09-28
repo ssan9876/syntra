@@ -42,6 +42,8 @@ interface CapabilitiesResponse {
     updateAccount: boolean;
     disableAccount: boolean;
     manageEntitlements: boolean;
+    /** Absent from an older API. */
+    deleteAccount?: boolean;
   };
 }
 
@@ -84,6 +86,7 @@ const SUMMARY_LABELS: [keyof CapabilitiesResponse['capabilities'], string][] = [
   ['updateAccount', 'Update accounts'],
   ['disableAccount', 'Disable and enable accounts'],
   ['manageEntitlements', 'Grant and revoke entitlements'],
+  ['deleteAccount', 'Delete accounts'],
   ['readBack', 'Read back after a write'],
 ];
 

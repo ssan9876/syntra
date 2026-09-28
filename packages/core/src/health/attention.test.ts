@@ -12,7 +12,7 @@ beforeEach(async () => {
 
 const counters = {
   createAccountCount: 0, updateAccountCount: 0, enableAccountCount: 0, disableAccountCount: 0,
-  archiveAccountCount: 0, renameAccountCount: 0, grantEntitlementCount: 0, revokeEntitlementCount: 0,
+  archiveAccountCount: 0, deleteAccountCount: 0, renameAccountCount: 0, grantEntitlementCount: 0, revokeEntitlementCount: 0,
   deactivateSyntraUserCount: 0, reactivateSyntraUserCount: 0,
 };
 
@@ -126,5 +126,9 @@ describe('attention summary', () => {
       .toBe('Blocked by the safety guard: the target returned no accounts at all');
     expect(runAttentionSummary({ ...counters, status: 'previewed', requiresConfirmation: false, blockedReason: null }))
       .toBe('Ready to apply: no changes');
+    expect(runAttentionSummary({ ...counters, disableAccountCount: 1, deleteAccountCount: 2, status: 'previewed', requiresConfirmation: false, blockedReason: null }))
+      .toBe('Ready to apply: would disable 1 account, delete 2 accounts');
+    expect(runAttentionSummary({ ...counters, deleteAccountCount: 30, status: 'blocked', requiresConfirmation: true, blockedReason: 'would delete 30 of 1000 accounts (3.0%), above the 2% threshold' }))
+      .toBe('Needs confirmation: would delete 30 of 1000 accounts (3.0%), above the 2% threshold');
   });
 });

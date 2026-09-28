@@ -115,7 +115,7 @@ async function snapshot(tx: TenantClient, id: string) {
   } });
   const targets = await tx.targetAccount.findMany({ where: { personId: id }, orderBy: { id: 'asc' }, select: {
     id: true, status: true, correlationKey: true, lastReconciledAt: true, disableDueAt: true, archiveDueAt: true,
-    target: { select: { id: true, name: true, enabled: true, schedule: true, autoApply: true, disableGraceDays: true, entitlementRevocationDelayDays: true, archiveAfterDays: true } },
+    target: { select: { id: true, name: true, enabled: true, schedule: true, autoApply: true, disableGraceDays: true, entitlementRevocationDelayDays: true, archiveAfterDays: true, deleteAfterDays: true } },
   } });
   const revision = createHash('sha256').update(JSON.stringify({ person, accounts, targets })).digest('hex');
   return { person, accounts, targets, revision };

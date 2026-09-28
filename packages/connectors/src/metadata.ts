@@ -113,7 +113,14 @@ const catalog = {
           // and archives against real infrastructure. It also moves an OU
           // with the accounts inside it (`move_container`, an LDAP modifyDN),
           // which is what a mirrored org unit renamed or re-parented needs.
-          capabilities: ['create_container', 'move_container', ...ACCOUNT_AND_ENTITLEMENT_WRITES],
+          // `delete_account` by objectGUID, refused unless the object is
+          // disabled and inside the base DN or the archive container.
+          capabilities: [
+            'create_container',
+            'move_container',
+            ...ACCOUNT_AND_ENTITLEMENT_WRITES,
+            'delete_account',
+          ],
         },
       },
     ],
@@ -176,7 +183,9 @@ const catalog = {
           status: 'partial',
           verifiedAt: VERIFIED_AT,
           evidence: 'Shared fake-Graph contract passed; direct-group tenant evidence remains required',
-          capabilities: ACCOUNT_AND_ENTITLEMENT_WRITES,
+          // `delete_account` is protocol-verified against the fake Graph only,
+          // like `rename_account`; the matrix says so.
+          capabilities: [...ACCOUNT_AND_ENTITLEMENT_WRITES, 'delete_account'],
         },
       },
     ],
@@ -316,8 +325,8 @@ export function releaseIsCertified(release: ConnectorAdapterRelease): boolean {
  *
  * `capabilitiesForTarget` reports coarse flags; certification speaks per
  * action. Rename is an attribute write like update; enable, disable and
- * archive are the account-state family; a container is only ever created to
- * place an account in it.
+ * archive are the account-state family; delete has a flag of its own; a
+ * container is only ever created to place an account in it.
  */
 export const ADVERTISED_FLAG_FOR: Record<ConnectorCapability, keyof ConnectorCapabilities> = {
   create_container: 'createAccount',
@@ -330,6 +339,7 @@ export const ADVERTISED_FLAG_FOR: Record<ConnectorCapability, keyof ConnectorCap
   enable_account: 'disableAccount',
   disable_account: 'disableAccount',
   archive_account: 'disableAccount',
+  delete_account: 'deleteAccount',
   grant_entitlement: 'manageEntitlements',
   revoke_entitlement: 'manageEntitlements',
 };
@@ -343,6 +353,7 @@ export const CAPABILITY_LABEL: Record<ConnectorCapability, string> = {
   enable_account: 'enable accounts',
   disable_account: 'disable accounts',
   archive_account: 'archive accounts',
+  delete_account: 'delete accounts',
   grant_entitlement: 'grant entitlements',
   revoke_entitlement: 'revoke entitlements',
 };

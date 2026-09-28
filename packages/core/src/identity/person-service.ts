@@ -3,6 +3,12 @@ import { currentTenant } from '../tenant-context.js';
 import { assertReferenceInTenant } from '../tenant-reference.js';
 import { escapeLike, normalisePaging, type ListOptions } from '../list.js';
 import { assertValidContractDates } from './contract-service.js';
+import {
+  EmailInUseError,
+  assertPersonEmailFree,
+  personOwnedEmail,
+  userHoldingEmail,
+} from './person-email.js';
 
 export interface CreatePersonInput {
   givenName: string;
@@ -29,6 +35,7 @@ export async function createPerson(
   const tenantId = await currentTenant(tx);
   // Looked up first: a foreign key does not see RLS. See tenant-reference.ts.
   await assertReferenceInTenant(tx, 'orgUnit', input.orgUnitId, 'orgUnitId');
+  await assertPersonEmailFree(tx, input.businessEmail);
   return tx.person.create({
     data: {
       tenantId,
@@ -187,12 +194,25 @@ export async function updateContract(
   });
 }
 
+/**
+ * Links a login to a person, and the login takes the person's business email
+ * when they have one. Throws `EmailInUseError` when another usable login
+ * already has that address.
+ */
 export async function linkUserToPerson(
   tx: TenantClient,
   userId: string,
   personId: string,
 ): Promise<void> {
-  await tx.user.update({ where: { id: userId }, data: { personId } });
+  const email = await personOwnedEmail(tx, personId);
+  if (email !== null) {
+    const holder = await userHoldingEmail(tx, email, { exceptUserId: userId, exceptPersonId: personId });
+    if (holder) throw new EmailInUseError('userId', email, holder);
+  }
+  await tx.user.update({
+    where: { id: userId },
+    data: { personId, ...(email === null ? {} : { email }) },
+  });
 }
 
 export async function unlinkUser(

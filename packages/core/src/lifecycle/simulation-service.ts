@@ -19,6 +19,8 @@ export interface SimulatedTarget extends AccessDelta {
     disableAt: string;
     revokeEntitlementsAt: string;
     archiveAt: string | null;
+    /** Null when the target never deletes. */
+    deleteAt: string | null;
   };
   /** Which advertised capability each step needs, and whether it is there. */
   blockers: string[];
@@ -124,6 +126,10 @@ async function simulatePerson(
           projection.ladder.archiveAfterDays === null
             ? null
             : new Date(now.getTime() + projection.ladder.archiveAfterDays * MS_PER_DAY).toISOString(),
+        deleteAt:
+          projection.ladder.deleteAfterDays === null
+            ? null
+            : new Date(now.getTime() + projection.ladder.deleteAfterDays * MS_PER_DAY).toISOString(),
       };
     }
     return simulated;

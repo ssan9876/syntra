@@ -34,16 +34,17 @@ describe('matchPersonForAccount', () => {
     expect(result.confident?.rule).toBe('businessEmail');
   });
 
-  it('demotes an ambiguous business-email match to candidates', async () => {
+  // Two people sharing a business email is no longer possible: the index
+  // from migration 20261110000000_person_email_unique refuses the second, in
+  // any case. The matcher still demotes such a pair, for an install whose
+  // duplicates predate the index.
+  it('cannot be ambiguous on business email: the database refuses a second person on one address', async () => {
     await person({ businessEmail: 'shared@acme.test', givenName: 'A' });
-    await person({ businessEmail: 'shared@acme.test', givenName: 'B' });
+    await expect(person({ businessEmail: 'SHARED@acme.test', givenName: 'B' })).rejects.toThrow();
 
     const result = await match('shared@acme.test');
 
-    // Picking the first would link an account to whichever row the planner
-    // happened to return that afternoon.
-    expect(result.confident).toBeNull();
-    expect(result.candidates).toHaveLength(2);
+    expect(result.confident?.rule).toBe('businessEmail');
   });
 
   it('never auto-links on a personal email', async () => {

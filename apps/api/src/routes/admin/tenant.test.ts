@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as protocols from '@syntra/protocols';
 import { prisma, withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createRole,
@@ -267,7 +267,7 @@ describe('tenant deletion routes', () => {
 
 describe('PUT /api/admin/tenant', () => {
   it('turns admin MFA on, and the elevation endpoint acts on it', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
 
     // The elevation that produced this cookie asked for a password only.
@@ -298,7 +298,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('records the resulting state in the same transaction as the change', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     await put(cookie, { selfEnrolmentEnabled: false });
 
@@ -314,7 +314,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('refuses the pair that locks the console from the inside', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
 
     const res = await put(cookie, {
@@ -336,7 +336,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('allows the same pair once the administrator holds a factor', async () => {
-    const admin = await seedAdmin([...ALL_PERMISSIONS]);
+    const admin = await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     await withTenant(ctx.tenantId, (tx) => generateRecoveryCodes(tx, admin.id));
 
@@ -348,7 +348,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('will not write the SLUG, but the primary domain is now writable', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
 
     // The slug stays out of the schema, and for a sharper reason than before:
@@ -392,7 +392,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('refuses a hostname carrying a scheme, port or path', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     for (const bad of ['http://x.test', 'x.test:5173', 'x.test/path', 'has space']) {
       const res = await put(cookie, { primaryDomain: bad });
@@ -405,7 +405,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('refuses to move the domain until the passkey count is acknowledged', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     await put(cookie, { primaryDomain: 'first.example.com' });
 
@@ -455,7 +455,7 @@ describe('PUT /api/admin/tenant', () => {
   });
 
   it('rejects a password minimum below the product floor', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     expect((await put(await adminCookie(), { passwordMinLength: 4 })).statusCode).toBe(400);
   });
 
@@ -506,7 +506,7 @@ describe('changing the tenant domain', () => {
 describe('PUT /api/admin/tenant and the password policy', () => {
   let cookie: string;
   beforeEach(async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     cookie = await adminCookie();
   });
 
@@ -562,7 +562,7 @@ describe('PUT /api/admin/tenant and the password policy', () => {
 describe('PUT /api/admin/tenant and session lifetimes', () => {
   let cookie: string;
   beforeEach(async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     cookie = await adminCookie();
   });
 
@@ -679,7 +679,7 @@ describe('PUT /api/admin/tenant and the security-key requirement for the console
     });
 
   beforeEach(async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     await prisma.tenant.update({
       where: { id: ctx.tenantId },
       data: { primaryDomain: DOMAIN },

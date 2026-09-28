@@ -331,6 +331,13 @@ export const scimTargetConnector: TargetConnector<Config> = {
               'This target has no containers. Nothing to create.',
             failure: 'rejected',
           };
+        case 'delete_account':
+          // Refused before any request: SCIM targets do not delete.
+          return {
+            ok: false,
+            message: 'Not deleted: SCIM targets do not delete accounts.',
+            failure: 'rejected',
+          };
         case 'grant_entitlement':
           return await patchGroupMembers(config, op.entitlementId, 'add', op.anchor);
         case 'revoke_entitlement':

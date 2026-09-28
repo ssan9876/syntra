@@ -432,6 +432,24 @@ describe('FakeTarget: the rest of the target-connector surface', () => {
     }
   });
 
+  it('deletes a disabled account, refuses an enabled one, and treats gone as done', async () => {
+    const target = seeded();
+    const anchor = (await target.write(config, create('act-1', 'a.novak'))).anchor!;
+    target.objects.get(anchor)!.enabled = true;
+    const refused = await target.write(config, { op: 'delete_account', actionId: 'act-2', anchor });
+    expect(refused).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(target.objects.has(anchor)).toBe(true);
+
+    target.objects.get(anchor)!.enabled = false;
+    const deleted = await target.write(config, { op: 'delete_account', actionId: 'act-3', anchor });
+    expect(deleted.ok).toBe(true);
+    expect(target.objects.has(anchor)).toBe(false);
+    expect(target.deleted.has(anchor)).toBe(true);
+
+    const again = await target.write(config, { op: 'delete_account', actionId: 'act-4', anchor });
+    expect(again.ok).toBe(true);
+  });
+
   it('records every operation it was asked to perform, and keeps no password', async () => {
     // `calls` is what a later task asserts a dry run leaves empty. It has to
     // hold the operations -- and the object it created must not become a place

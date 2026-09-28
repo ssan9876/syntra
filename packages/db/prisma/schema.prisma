@@ -41,6 +41,10 @@ model Tenant {
   /// This is not the API rate limit and does not replace it. A rate limit
   /// keyed on the caller's address is spent by one attacker and refills; a
   /// password guessed on the thousandth try is guessed for good.
+  /// Days after a person's departure before Syntra deletes them for good,
+  /// once their accounts on targets that delete accounts are gone. Null is
+  /// off. Changed only by a holder of `person.purge`.
+  personPurgeAfterDays   Int?
   lockoutThreshold       Int      @default(0)
   /// How long failures accumulate toward the threshold, measured from the
   /// first failure of the current run rather than the most recent one — so a
@@ -403,7 +407,9 @@ model User {
   /// Case-SENSITIVE. The case-insensitive login rule, and the local-only email
   /// rule, are functional indexes in migration
   /// `20260922000000_user_duplicate_guards` — Prisma has no syntax for a
-  /// functional or a partial index, so neither can be declared here.
+  /// functional or a partial index, so neither can be declared here. Since
+  /// `20261110000000_person_email_unique` the email rule leaves out logins
+  /// linked to a person: they carry the person's business email.
   /// `createUser` pre-checks both so the caller gets a domain error rather
   /// than a driver one.
   @@unique([tenantId, login])
@@ -543,6 +549,9 @@ model Person {
   erasedCaseId               String?       @db.Uuid
   privacyCases               PrivacyCase[]
 
+  /// `businessEmail` is unique per tenant, case-insensitively, through the
+  /// partial functional index in migration `20261110000000_person_email_unique`
+  /// -- Prisma cannot declare one. `assertPersonEmailFree` pre-checks it.
   @@unique([tenantId, externalId])
   @@index([orgUnitId])
   @@index([tenantId])
@@ -647,10 +656,15 @@ model Role {
   description String?
   permissions String[]
   builtIn     Boolean  @default(false)
+  /// Stable identity of a role the product installs: 'owner' | 'data-deletion'.
+  /// Null for every role an administrator created. Rules key on this, never on
+  /// the name, which can be edited.
+  systemKey   String?
 
   assignments RoleAssignment[]
 
   @@unique([tenantId, name])
+  @@unique([tenantId, systemKey])
   @@index([tenantId])
 }
 
@@ -2123,6 +2137,10 @@ model TargetSystem {
   /// Null means never. Archiving moves the object and strips its remaining
   /// managed entitlements, so it is opted into.
   archiveAfterDays                Int?
+  /// Null means never. Deletes a leaver's disabled account this many days
+  /// after departure; Active Directory and Entra ID only. New targets of those
+  /// types start at 30. At or after `disableGraceDays` and `archiveAfterDays`.
+  deleteAfterDays                 Int?
   /// Re-enabling an account disabled for longer than this is confirmable.
   /// Deliberately not derived from disableGraceDays: with that at its default
   /// of zero, deriving it would make every re-enable confirmable, including
@@ -2132,6 +2150,7 @@ model TargetSystem {
   createAccountThresholdPercent        Int @default(20)
   disableAccountThresholdPercent       Int @default(10)
   archiveAccountThresholdPercent       Int @default(2)
+  deleteAccountThresholdPercent        Int @default(2)
   revokeEntitlementThresholdPercent    Int @default(10)
   deactivateSyntraUserThresholdPercent Int @default(10)
   /// The second axis. Revoking every holder of one entitlement is 0.2% of a
@@ -2366,8 +2385,8 @@ model TargetAccount {
   /// runs cannot generate the same login.
   anchor                String?
   correlationKey        String
-  /// 'pending' | 'active' | 'disabled' | 'archived' | 'missing_at_target'
-  /// | 'conflict'
+  /// 'pending' | 'active' | 'disabled' | 'archived' | 'deleted'
+  /// | 'missing_at_target' | 'conflict'
   status                String       @default("pending")
   statusReason          String?
   disabledAt            DateTime?
@@ -3002,6 +3021,7 @@ model ProvisionRun {
   enableAccountCount        Int @default(0)
   disableAccountCount       Int @default(0)
   archiveAccountCount       Int @default(0)
+  deleteAccountCount        Int @default(0)
   renameAccountCount        Int @default(0)
   grantEntitlementCount     Int @default(0)
   revokeEntitlementCount    Int @default(0)

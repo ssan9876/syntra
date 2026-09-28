@@ -1045,6 +1045,59 @@ describe('the guard at the call site', () => {
   const noWritesAtTarget = () =>
     expect(target.calls.map((c) => c.op)).toEqual([]);
 
+  it('holds a run that would delete more accounts than the delete threshold', async () => {
+    // A leaver whose contract ended on 1 January, disabled at the target: past
+    // the 30-day delete a new Active Directory target starts with. Two others
+    // stay. 1 of 3 accounts is 33%, above the 2% default.
+    const leaverId = await seedPerson('Anna', 'Novak', day('2026-01-01'));
+    const anchor = await seedObject('anna.novak');
+    await target.write({ domain: 'acme.test' } as never, {
+      op: 'disable_account',
+      actionId: 'seed-disable',
+      anchor,
+      reason: 'left',
+    });
+    const accountId = await seedKnownAccount(leaverId, anchor, 'anna.novak');
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.update({ where: { id: accountId }, data: { status: 'disabled', disabledAt: day('2026-01-02') } }),
+    );
+    for (const [given, family, key] of [['Bea', 'Olsen', 'bea.olsen'], ['Cato', 'Praz', 'cato.praz']] as const) {
+      const personId = await seedPerson(given, family, null);
+      const other = await seedObject(key, { holdsFinance: true });
+      await seedKnownAccount(personId, other, key, { holdsFinance: true });
+    }
+    await markApplied();
+    target.calls.length = 0;
+
+    const run = await preview();
+    expect(run.status).toBe('blocked');
+    expect(run.requiresConfirmation).toBe(true);
+    expect(run.blockedReason).toContain('would delete 1 of 3 accounts (33.3%), above the 2% threshold');
+    const stored = await withTenant(tenantId, (tx) => tx.provisionRun.findUniqueOrThrow({ where: { id: run.id } }));
+    expect(stored.deleteAccountCount).toBe(1);
+    const deletes = (await actionsOf(run.id)).filter((a) => a.actionType === 'delete_account');
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0]!.accountId).toBe(accountId);
+    noWritesAtTarget();
+  });
+
+  it('proposes no delete on a target whose deleteAfterDays is null', async () => {
+    await updateTarget(tenantId, provider, null, targetId, { ladder: { deleteAfterDays: null } });
+    const leaverId = await seedPerson('Anna', 'Novak', day('2026-01-01'));
+    const anchor = await seedObject('anna.novak');
+    await target.write({ domain: 'acme.test' } as never, {
+      op: 'disable_account',
+      actionId: 'seed-disable',
+      anchor,
+      reason: 'left',
+    });
+    await seedKnownAccount(leaverId, anchor, 'anna.novak');
+    await markApplied();
+
+    const run = await preview();
+    expect((await actionsOf(run.id)).map((a) => a.actionType)).not.toContain('delete_account');
+  });
+
   it('blocks a run over the create threshold and asks for confirmation', async () => {
     // One account at the target, two joiners. 2 of 1 is 200%, above the 20%
     // default -- and this is the ordinary threshold path, not the first-run

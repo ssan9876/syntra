@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createRole,
@@ -133,7 +133,7 @@ describe('the placement routes', () => {
   });
 
   it('let a manager clear one, idempotently', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     // Nothing to clear is what somebody pressing the button twice means.
     expect((await call('DELETE', path(), cookie)).statusCode).toBe(204);
@@ -141,7 +141,7 @@ describe('the placement routes', () => {
   });
 
   it('return what was pinned once a placement exists', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     await withTenant(ctx.tenantId, (tx) =>
       tx.accountPlacement.create({
         data: {
@@ -165,7 +165,7 @@ describe('the placement routes', () => {
     // The row is a standing disagreement with the placement rule, and "who
     // moved this and why" is the only question anybody asks about one. A
     // reason nobody had to give is a reason nobody gives.
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const res = await call('PUT', path(), await adminCookie(), {
       container: 'OU=Finance,OU=Company,DC=acme,DC=test',
     });
@@ -173,7 +173,7 @@ describe('the placement routes', () => {
   });
 
   it('refuse a malformed person id before reaching the target', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const res = await call(
       'GET',
       `/api/admin/targets/${targetId}/placements/not-a-uuid`,
@@ -237,7 +237,7 @@ describe('the adoption routes', () => {
   });
 
   it('answer 409 when the person has no account here', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const res = await call('POST', adoptPath(), await adminCookie(), {
       reason: 'nothing there',
     });
@@ -249,7 +249,7 @@ describe('the adoption routes', () => {
     // Adoption is the exit from ONE state. Re-pointing a working account is
     // the power the provenance rule withholds, and the route says so rather
     // than reaching the directory to find out.
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     await withTenant(ctx.tenantId, (tx) =>
       tx.targetAccount.create({
         data: {
@@ -270,14 +270,14 @@ describe('the adoption routes', () => {
   it('refuse a body that does not say why', async () => {
     // The audit event is what stands where the provenance check cannot. An
     // adoption with no stated reason is the safeguard removed, not replaced.
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     await seedConflicted();
     const res = await call('POST', adoptPath(), await adminCookie(), { reason: '   ' });
     expect(res.statusCode).toBe(400);
   });
 
   it('refuse an ifNoCandidate the service does not offer', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     await seedConflicted();
     const res = await call('POST', adoptPath(), await adminCookie(), {
       reason: 'hers',
@@ -287,7 +287,7 @@ describe('the adoption routes', () => {
   });
 
   it('refuse a malformed person id before reaching the target', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const res = await call(
       'POST',
       `/api/admin/targets/${targetId}/accounts/not-a-uuid/adopt`,
@@ -320,7 +320,7 @@ describe('a flat target', () => {
   }
 
   it('answers 409 no-containers for the container list', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     const flat = await createFlatTarget(cookie);
     const res = await call('GET', `/api/admin/targets/${flat}/containers`, cookie);
@@ -329,7 +329,7 @@ describe('a flat target', () => {
   });
 
   it('refuses a move with 409 no-containers', async () => {
-    await seedAdmin([...ALL_PERMISSIONS]);
+    await seedAdmin([...OWNER_PERMISSIONS]);
     const cookie = await adminCookie();
     const flat = await createFlatTarget(cookie);
     const res = await call('PUT', `/api/admin/targets/${flat}/placements/${personId}`, cookie, {

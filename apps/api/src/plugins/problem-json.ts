@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import {
   EmailDomainError,
   EmailDomainNotVerifiedError,
+  EmailInUseError,
   SnapshotNotReadableError,
   UnknownReferenceError,
 } from '@syntra/core';
@@ -107,6 +108,21 @@ export function registerProblemJson(
         detail: `${message}. Add and verify it under Settings, Domains.`,
         domain: error.domain,
         errors: [{ path: error.field, message }],
+      });
+    }
+
+    /**
+     * An address another person, or a login of nobody's, already has. 409,
+     * with the field and who holds it.
+     */
+    if (error instanceof EmailInUseError) {
+      return reply.status(409).type('application/problem+json').send({
+        type: `${BASE}email-in-use`,
+        title: 'Email already in use',
+        status: 409,
+        detail: error.message,
+        holder: error.holder,
+        errors: [{ path: error.field, message: error.message }],
       });
     }
 

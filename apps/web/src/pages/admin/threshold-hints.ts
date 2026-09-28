@@ -29,6 +29,7 @@ const RULES: { pattern: RegExp; key: ThresholdKey; note?: string }[] = [
   { pattern: /^would create \d+ of \d+ accounts/, key: 'createAccountThresholdPercent' },
   { pattern: /^would disable \d+ of \d+/, key: 'disableAccountThresholdPercent' },
   { pattern: /^would archive \d+ of \d+/, key: 'archiveAccountThresholdPercent' },
+  { pattern: /^would delete \d+ of \d+/, key: 'deleteAccountThresholdPercent' },
   {
     pattern: /^would move \d+ of \d+/,
     key: 'archiveAccountThresholdPercent',

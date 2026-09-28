@@ -1,7 +1,10 @@
 import type { TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
+import { followPersonEmail, personHoldingEmail, userHoldingEmail } from './person-email.js';
 
 export interface PersonCsvRow {
+  /** The file's line number, for reporting a row the import skips. */
+  line?: number;
   externalId: string;
   givenName: string;
   familyName: string;
@@ -201,6 +204,7 @@ export function parsePersonCsv(text: string): {
     const department = at(cells, 'department');
 
     rows.push({
+      line: lineNumber,
       externalId,
       givenName,
       familyName,
@@ -223,19 +227,41 @@ export function parsePersonCsv(text: string): {
  * Upserts people by external identifier and their contracts by sequence
  * number, so re-importing the same file changes nothing and re-importing a
  * corrected one updates in place rather than accumulating duplicates.
+ *
+ * A row whose business email another person (or, for a person with logins,
+ * another login) already has is skipped and reported in `errors`; the rest
+ * of the file still imports. Two rows of one file sharing an address: the
+ * first imports, the second is skipped.
  */
 export async function importPersons(
   tx: TenantClient,
   rows: PersonCsvRow[],
-): Promise<{ created: number; updated: number }> {
+): Promise<{ created: number; updated: number; errors: CsvError[] }> {
   const tenantId = await currentTenant(tx);
   let created = 0;
   let updated = 0;
+  const errors: CsvError[] = [];
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     const existing = await tx.person.findFirst({
       where: { externalId: row.externalId },
     });
+
+    const holder =
+      (await personHoldingEmail(tx, row.businessEmail, existing?.id)) ??
+      (existing && (await tx.user.count({ where: { personId: existing.id } })) > 0
+        ? await userHoldingEmail(tx, row.businessEmail, { exceptPersonId: existing.id })
+        : null);
+    if (holder) {
+      errors.push({
+        line: row.line ?? index + 2,
+        message:
+          holder.kind === 'person'
+            ? `${row.externalId}: ${holder.name} already has ${row.businessEmail}`
+            : `${row.externalId}: account ${holder.name} already has ${row.businessEmail}`,
+      });
+      continue;
+    }
 
     const person = existing
       ? await tx.person.update({
@@ -256,8 +282,10 @@ export async function importPersons(
           },
         });
 
-    if (existing) updated++;
-    else created++;
+    if (existing) {
+      updated++;
+      await followPersonEmail(tx, person.id);
+    } else created++;
 
     const contract = await tx.contract.findFirst({
       where: { personId: person.id, sequence: row.contract.sequence },
@@ -285,5 +313,5 @@ export async function importPersons(
     }
   }
 
-  return { created, updated };
+  return { created, updated, errors };
 }

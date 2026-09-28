@@ -46,6 +46,7 @@ import { registerScimRoutes } from './routes/scim/index.js';
 import { registerAdminGroupRoutes } from './routes/admin/groups.js';
 import { registerAdminOrgUnitRoutes } from './routes/admin/org-units.js';
 import { registerAdminPersonRoutes } from './routes/admin/persons.js';
+import { registerAdminPersonDeleteRoutes } from './routes/admin/person-delete.js';
 import { registerEmployeeLifecycleRoutes } from './routes/admin/employee-lifecycle.js';
 import { registerAdminPersonReceiptRoutes } from './routes/admin/person-receipts.js';
 import { registerAdminLifecycleOperationRoutes } from './routes/admin/lifecycle-operations.js';
@@ -468,6 +469,7 @@ export async function buildApp(
     keyProvider,
   });
   await app.register(registerAdminPersonRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminPersonDeleteRoutes, { prefix: '/api/admin' });
   await app.register(registerEmployeeLifecycleRoutes, { prefix: '/api/admin', keyProvider, publicUrl: config.publicUrl, ...(options.scheduler ? { scheduler: options.scheduler } : {}) });
   await app.register(registerAdminPersonReceiptRoutes, {
     prefix: '/api/admin',

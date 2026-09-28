@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { withTenant } from '@syntra/db';
 import {
   ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createOrgUnit,
@@ -67,7 +68,7 @@ beforeEach(async () => {
 
 describe('the role API that did not exist', () => {
   it('lists roles with their holder counts, and the catalogue beside them', async () => {
-    await seedAdmin('owner', ALL_PERMISSIONS);
+    await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send('GET', '/api/admin/roles', cookie);
@@ -115,7 +116,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('names a permission it does not have, rather than dropping it', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send('PATCH', `/api/admin/roles/${roleId}`, cookie, {
@@ -128,7 +129,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('creates, assigns and revokes', async () => {
-    await seedAdmin('owner', ALL_PERMISSIONS);
+    await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
     const subject = await withTenant(ctx.tenantId, (tx) =>
       createUser(tx, { login: 'jo', email: 'jo@acme.test', displayName: 'Jo' }),
@@ -167,7 +168,7 @@ describe('the role API that did not exist', () => {
    * the very screen that fixes it.
    */
   it('refuses a change that leaves nobody able to administer roles', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send('PATCH', `/api/admin/roles/${roleId}`, cookie, {
@@ -188,7 +189,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('refuses revoking the last holder of rbac.manage', async () => {
-    const { user, roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { user, roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send(
@@ -200,7 +201,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('allows the same change once somebody else holds it', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
     await withTenant(ctx.tenantId, async (tx) => {
       const other = await createUser(tx, {
@@ -225,7 +226,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('names who holds each role, not merely how many', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send('GET', '/api/admin/roles', cookie);
@@ -243,7 +244,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('assigns and revokes, and the holder list follows', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
     const { user } = await seedAdmin('newcomer', [PERMISSIONS.DIRECTORY_READ]);
 
@@ -273,7 +274,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('answers 404 for an assignment to a user that is not there', async () => {
-    const { roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const res = await send('POST', `/api/admin/roles/${roleId}/assignments`, cookie, {
@@ -289,7 +290,7 @@ describe('the role API that did not exist', () => {
   });
 
   it('answers 404 for an assignment against a role that is not there', async () => {
-    await seedAdmin('owner', ALL_PERMISSIONS);
+    await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
     const { user } = await seedAdmin('other', [PERMISSIONS.DIRECTORY_READ]);
 
@@ -320,7 +321,7 @@ describe('the role API that did not exist', () => {
  */
 describe('DELETE /api/admin/roles/:id/assignments/:userId?scopeOrgUnitId', () => {
   it('removes the scoped grant and leaves the tenant-wide one standing', async () => {
-    await seedAdmin('owner', ALL_PERMISSIONS);
+    await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const { subject, roleId, unitId } = await withTenant(ctx.tenantId, async (tx) => {
@@ -351,7 +352,7 @@ describe('DELETE /api/admin/roles/:id/assignments/:userId?scopeOrgUnitId', () =>
   });
 
   it('still removes every scope when none is named', async () => {
-    await seedAdmin('owner', ALL_PERMISSIONS);
+    await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const { subject, roleId } = await withTenant(ctx.tenantId, async (tx) => {
@@ -386,7 +387,7 @@ describe('DELETE /api/admin/roles/:id/assignments/:userId?scopeOrgUnitId', () =>
    * of the same role survives it.
    */
   it('refuses to leave rbac.manage held only within one unit', async () => {
-    const { user, roleId } = await seedAdmin('owner', ALL_PERMISSIONS);
+    const { user, roleId } = await seedAdmin('owner', OWNER_PERMISSIONS);
     const cookie = await authCookie('owner');
 
     const unitId = await withTenant(ctx.tenantId, async (tx) => {

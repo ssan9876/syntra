@@ -128,6 +128,8 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
    */
   readonly holdings = new Map<string, Set<string>>();
   readonly calls: WriteOperation[] = [];
+  /** Anchors removed by `delete_account`. */
+  readonly deleted = new Set<string>();
   /** The catalog. `write` resolves an entitlementId to a DN through this. */
   readonly entitlements: DiscoveredEntitlement[] = [];
   /** The containers this target holds. Read by `listContainers`, never inferred. */
@@ -458,10 +460,22 @@ export class FakeTarget implements TargetConnector<FakeTargetConfig> {
         // that Provision manages every group in the target, which is never
         // true, and archive is the closest thing to destructive in the ladder.
         // The object, its attributes and any membership outside the remit are
-        // left intact. It never deletes.
+        // left intact. Deleting is `delete_account`'s, never archive's.
         const held = this.holdings.get(op.anchor);
         if (held) for (const dn of op.entitlementDns) held.delete(dn);
         return { ok: true, message: 'archived' };
+      }
+      case 'delete_account': {
+        // The real connectors' contract: gone is done, enabled is refused.
+        const object = this.objects.get(op.anchor);
+        if (!object) return { ok: true, message: 'account already deleted' };
+        if (object.enabled) {
+          return { ok: false, message: `Not deleted: account ${op.anchor} is enabled.`, failure: 'rejected' };
+        }
+        this.objects.delete(op.anchor);
+        this.holdings.delete(op.anchor);
+        this.deleted.add(op.anchor);
+        return { ok: true, message: 'deleted' };
       }
       case 'rename_account': {
         const object = this.objects.get(op.anchor);

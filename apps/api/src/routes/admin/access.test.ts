@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import {
-  ALL_PERMISSIONS,
+  OWNER_PERMISSIONS,
   PERMISSIONS,
   assignRole,
   createGroup,
@@ -41,7 +41,7 @@ beforeEach(async () => {
       displayName: 'Ada',
     });
     await setPasswordHash(tx, u.id, PASSWORD_HASH);
-    const role = await createRole(tx, 'Owner', ALL_PERMISSIONS);
+    const role = await createRole(tx, 'Owner', OWNER_PERMISSIONS);
     await assignRole(tx, u.id, role.id);
     return u.id;
   });

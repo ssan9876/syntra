@@ -28,7 +28,8 @@ export const usersOpenApi = describeAdminRoutes('Users', {
   'GET /users/:id': { summary: 'Get a user account', params: idParam },
   'POST /users': {
     summary: 'Create a user account',
-    description: 'Creating a second account for a person who already signs in is refused unless `allowSecondAccount` is set.',
+    description:
+      "Creating a second account for a person who already signs in is refused unless `allowSecondAccount` is set. An account linked to a person takes the person's `businessEmail` as its email when they have one.",
     body: createUserRequest,
     status: 201,
   },
@@ -71,7 +72,8 @@ export const usersOpenApi = describeAdminRoutes('Users', {
   },
   'PATCH /users/:id/details': {
     summary: 'Edit an account\'s name, email and organizational unit',
-    description: 'Refused for an account a directory source owns, whose next sync would overwrite the change.',
+    description:
+      "Refused for an account a directory source owns, whose next sync would overwrite the change. A linked account's email is its person's business email: a different one is refused with `email-set-by-person`.",
     body: patchUserDetailsRequest,
     params: idParam,
   },

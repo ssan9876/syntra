@@ -584,6 +584,54 @@ describe('update, enable, disable, rename, archive', () => {
     expect(graphRequests().some((r) => r.method === 'DELETE' && /\/users\//.test(r.url))).toBe(false);
   });
 
+  it('deletes a disabled user by its object id', async () => {
+    const result = await entraTargetConnector.write(config(), {
+      op: 'delete_account',
+      actionId: 'd',
+      anchor: U3,
+    });
+    expect(result).toMatchObject({ ok: true, message: 'account deleted' });
+    expect(server.users.has(U3)).toBe(false);
+    expect(server.deletedUsers.has(U3)).toBe(true);
+    expect(
+      graphRequests().filter((r) => r.method === 'DELETE' && r.url === `/v1.0/users/${U3}`),
+    ).toHaveLength(1);
+  });
+
+  it('refuses to delete an enabled user and issues no DELETE', async () => {
+    const result = await entraTargetConnector.write(config(), {
+      op: 'delete_account',
+      actionId: 'd',
+      anchor: U1,
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toBe(`Not deleted: account ${U1} is enabled in Entra ID. Disable it first.`);
+    expect(server.users.has(U1)).toBe(true);
+    expect(graphRequests().some((r) => r.method === 'DELETE')).toBe(false);
+  });
+
+  it('treats a user already gone as deleted', async () => {
+    const result = await entraTargetConnector.write(config(), {
+      op: 'delete_account',
+      actionId: 'd',
+      anchor: 'aaaaaaaa-0000-0000-0000-00000000dead',
+    });
+    expect(result).toMatchObject({ ok: true, message: 'account already deleted' });
+    expect(graphRequests().some((r) => r.method === 'DELETE')).toBe(false);
+  });
+
+  it('classifies a refused DELETE from Graph rather than reporting it done', async () => {
+    server.failNext(1, 403, /^DELETE /);
+    const result = await entraTargetConnector.write(config(), {
+      op: 'delete_account',
+      actionId: 'd',
+      anchor: U3,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('unauthorized');
+    expect(server.users.has(U3)).toBe(true);
+  });
+
   it('stops an archive at the first membership it cannot remove', async () => {
     server.failNext(1, 503, /members/);
     const result = await entraTargetConnector.write(config(), {
@@ -777,9 +825,13 @@ describe('the outbound guard', () => {
 });
 
 describe('the capability matrix', () => {
-  it('never advertises delete and never advertises nested or dynamic groups', () => {
+  it('declares delete as protocol-verified only, and never advertises nested or dynamic groups', () => {
     expect(ENTRA_CAPABILITY_MATRIX.version).toBe(1);
-    expect(ENTRA_CAPABILITY_MATRIX.entries.deleteAccount.status).toBe('never');
+    expect(ENTRA_CAPABILITY_MATRIX.entries.deleteAccount).toMatchObject({
+      status: 'available',
+      validation: 'automated',
+      requiredPermissions: ['User.ReadWrite.All'],
+    });
     expect(ENTRA_CAPABILITY_MATRIX.entries.nestedGroups.status).toBe('unsupported');
     expect(ENTRA_CAPABILITY_MATRIX.entries.dynamicGroups.status).toBe('unsupported');
     for (const entry of Object.values(ENTRA_CAPABILITY_MATRIX.entries)) {

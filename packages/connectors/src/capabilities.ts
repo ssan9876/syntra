@@ -5,6 +5,8 @@ export interface ConnectorCapabilities {
   updateAccount: boolean;
   disableAccount: boolean;
   manageEntitlements: boolean;
+  /** `delete_account`. Only Active Directory and Entra ID. */
+  deleteAccount: boolean;
 }
 
 const unavailable: ConnectorCapabilities = {
@@ -14,6 +16,7 @@ const unavailable: ConnectorCapabilities = {
   updateAccount: false,
   disableAccount: false,
   manageEntitlements: false,
+  deleteAccount: false,
 };
 
 const capabilities: Record<string, ConnectorCapabilities> = {
@@ -24,6 +27,7 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     updateAccount: true,
     disableAccount: true,
     manageEntitlements: true,
+    deleteAccount: true,
   },
   scim2: {
     available: true,
@@ -36,6 +40,7 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     // was display-only; once capability enforcement made it a gate, that stale
     // value refused every SCIM grant that had worked the day before.
     manageEntitlements: true,
+    deleteAccount: false,
   },
   /**
    * The ceiling for a document-driven target, not a promise about any one
@@ -48,6 +53,7 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     updateAccount: true,
     disableAccount: true,
     manageEntitlements: true,
+    deleteAccount: false,
   },
   /** The native Graph connector: `entra/capabilities.ts` has the full matrix. */
   entraId: {
@@ -57,6 +63,7 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     updateAccount: true,
     disableAccount: true,
     manageEntitlements: true,
+    deleteAccount: true,
   },
   microsoft365: unavailable,
 };
@@ -151,5 +158,7 @@ export function capabilitiesForTarget(type: string, config: unknown): ConnectorC
     updateAccount: isObject(account.update),
     disableAccount: isObject(account.disable) || isObject(account.enable),
     manageEntitlements: isObject(entitlement.grant) || isObject(entitlement.revoke),
+    // A document has no delete to declare.
+    deleteAccount: false,
   };
 }
