@@ -97,6 +97,11 @@ describe('durable onboarding', () => {
     const user = await withTenant(tenantId, (tx) => tx.user.findFirstOrThrow());
     expect(user.email).toBe('maya.okafor@acme.test');
     expect(user.personId).not.toBeNull();
+    // Recorded like a console create, so Govern can credit the login.
+    const created = await withTenant(tenantId, (tx) =>
+      tx.auditEvent.findFirstOrThrow({ where: { action: 'user.create', targetId: user.id } }),
+    );
+    expect(created.payload).toMatchObject({ login: 'maya.okafor', personId: user.personId, via: 'onboarding' });
   });
 
   it('refuses a business email another person has before recording anything', async () => {

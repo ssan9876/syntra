@@ -337,3 +337,76 @@ describe('summariseAttributions', () => {
     );
   });
 });
+
+describe('accounts Provision made', () => {
+  const accountRule = { ...rule, ruleName: 'All Staff', grantsAccount: true };
+  const create = { actionId: 'action-1', runId: 'run-1', appliedAt: '2026-05-01T08:00:00Z' };
+
+  it('credits the account to the rule that requires it, and that rule is live', () => {
+    const drafts = attributionsFor(input({ rules: [accountRule] }), AT);
+    expect(drafts.map((d) => d.kind)).toEqual(['business_rule']);
+    expect(drafts[0]!.detail).toMatchObject({ ruleName: 'All Staff', grantsAccount: true, ruleEnabled: true });
+    expect(isUnattributable(drafts.map((d) => d.kind))).toBe(false);
+    expect(hasLiveRuleAttribution(drafts)).toBe(true);
+    expect(summariseAttributions(drafts)).toBe('the business rule "All Staff" requires their account');
+  });
+
+  it('credits a recorded create, which explains the arrival and never keeps the account', () => {
+    const drafts = attributionsFor(input({ provisionCreates: [create] }), AT);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      kind: 'business_rule',
+      refType: 'ProvisionAction',
+      refId: 'action-1',
+      detail: { ruleId: null, ruleEnabled: false, runId: 'run-1' },
+    });
+    expect(isUnattributable(drafts.map((d) => d.kind))).toBe(false);
+    // A leaver's account in its grace period stays removable.
+    expect(hasLiveRuleAttribution(drafts)).toBe(false);
+    expect(summariseAttributions(drafts)).toContain('Provision created the account');
+  });
+
+  it('still reads unattributable when neither a rule nor a create explains the account', () => {
+    const drafts = attributionsFor(input({ rules: [], provisionCreates: [] }), AT);
+    expect(drafts.map((d) => d.kind)).toEqual(['unattributable']);
+  });
+});
+
+describe('logins and memberships an administrator made', () => {
+  const made = {
+    administratorName: 'Seth Sander',
+    recordedAt: '2026-05-02T10:00:00Z',
+    reason: null,
+    auditEvent: { id: 'audit-1', sequence: 812, action: 'user.create' },
+  };
+
+  it('names the administrator and the audit event', () => {
+    const [draft] = attributionsFor(input({ manual: [made] }), AT);
+    expect(draft).toMatchObject({
+      kind: 'manual',
+      refType: 'AuditEvent',
+      refId: 'audit-1',
+      detail: { administratorName: 'Seth Sander', auditAction: 'user.create', auditSequence: 812 },
+    });
+    expect(isUnattributable([draft!.kind])).toBe(false);
+    expect(summariseAttributions([draft!])).toBe('Seth Sander created the login in Syntra (audit event 812)');
+  });
+
+  it('says the membership was added, for a group.addMember event', () => {
+    const drafts = attributionsFor(
+      input({ manual: [{ ...made, auditEvent: { id: 'audit-2', sequence: 9, action: 'group.addMember' } }] }),
+      AT,
+    );
+    expect(summariseAttributions(drafts)).toBe('Seth Sander added the membership in Syntra (audit event 9)');
+  });
+
+  it('keeps the old wording for a Provision manual origin with no audit event', () => {
+    const [draft] = attributionsFor(
+      input({ manual: [{ administratorName: null, recordedAt: '2026-05-02T10:00:00Z', reason: null }] }),
+      AT,
+    );
+    expect(draft).toMatchObject({ refType: 'AccountEntitlement', refId: null });
+    expect(draft!.detail).not.toHaveProperty('auditAction');
+    expect(summariseAttributions([draft!])).toBe('an administrator recorded in Syntra that this grant exists');
+  });
+});

@@ -179,6 +179,52 @@ export interface ConditionFacts {
   'person.status': string | null;
 }
 
+/** The contract columns a condition reads. */
+export interface ConditionContract {
+  department: string | null;
+  jobTitle: string | null;
+  costCentre: string | null;
+  employer: string | null;
+  location: string | null;
+  fte: number | null;
+}
+
+export function conditionFacts(
+  person: { status: string | null },
+  contract: ConditionContract,
+): ConditionFacts {
+  return {
+    'contract.department': contract.department,
+    'contract.jobTitle': contract.jobTitle,
+    'contract.costCentre': contract.costCentre,
+    'contract.employer': contract.employer,
+    'contract.location': contract.location,
+    'contract.fte': contract.fte,
+    'person.status': person.status,
+  };
+}
+
+/**
+ * The enabled `grantsAccount` rules that match the person under any of these
+ * contracts, each with the first contract that satisfied it.
+ *
+ * Provision's `desiredState` requires an account when this is non-empty, and
+ * Govern credits the account to exactly these rules. One function, so the two
+ * cannot disagree about who a rule reaches.
+ */
+export function accountGrantingRules<
+  R extends { enabled: boolean; grantsAccount: boolean; condition: Condition },
+  C extends ConditionContract,
+>(rules: readonly R[], person: { status: string | null }, contracts: readonly C[]): { rule: R; contract: C }[] {
+  const matches: { rule: R; contract: C }[] = [];
+  for (const rule of rules) {
+    if (!rule.enabled || !rule.grantsAccount) continue;
+    const contract = contracts.find((c) => evaluateCondition(rule.condition, conditionFacts(person, c)));
+    if (contract !== undefined) matches.push({ rule, contract });
+  }
+  return matches;
+}
+
 /**
  * String comparisons trim surrounding whitespace and fold case, because HR
  * data is typed by humans and "Finance " and "finance" are the same

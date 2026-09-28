@@ -124,7 +124,10 @@ describe('the prevention points depend on Govern, never the reverse', () => {
     // ESM tolerates until an initialisation order changes.
     const ALLOWED = new Map([
       ['jobs.ts', ["'../automate/notify.js'"]],
-      ['collect.ts', ["'../automate/types.js'"]],
+      // `condition.js` is the leaf `campaign-service.ts` also reads: collect
+      // credits an account to the rule that requires it with Provision's own
+      // matcher, `accountGrantingRules`.
+      ['collect.ts', ["'../automate/types.js'", "'../provision/condition.js'"]],
       // §12: Automate's selector machinery is REUSED rather than
       // reimplemented. An approval chain and a review chain disagreeing about
       // who somebody's manager is would be a support call nobody can close.

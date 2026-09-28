@@ -1,6 +1,7 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import { LIVE_GRANT_STATUSES } from '../automate/types.js';
 import { effectiveOrgUnit } from '../access/effective-org-unit.js';
+import { accountGrantingRules, conditionSchema, type Condition } from '../provision/condition.js';
 import type {
   AttributionInput,
   DirectAssignmentFact,
@@ -8,6 +9,7 @@ import type {
   GroupInheritanceFact,
   ManualFact,
   OrgUnitInheritanceFact,
+  ProvisionCreateFact,
   RequestFact,
   RuleFact,
 } from './attribute.js';
@@ -17,6 +19,23 @@ import { SYNTRA_SYSTEM_ID, subjectKey, type ResourceKind, type SubjectRef, type 
 
 /** A tree deep enough to hit this is a cycle, not an organization. */
 export const MAX_ORG_UNIT_DEPTH = 64;
+
+/**
+ * The audit actions that record an administrator (or a SCIM client) creating
+ * a login, adding a group member or assigning a role. Their payload shapes are
+ * the routes' own: `user.create` and `scim.user_created` target the user;
+ * `group.addMember` targets the group and names the member by `userId` (newer
+ * events) or `login`; `rbac.role_assigned` targets the user with `roleId` and
+ * `scopeOrgUnitId`.
+ */
+export const ADMIN_CREATE_ACTIONS = [
+  'user.create',
+  'scim.user_created',
+  'group.addMember',
+  'rbac.role_assigned',
+] as const;
+
+const MS_PER_DAY = 86_400_000;
 
 /**
  * Every comparison between an identifier that came from a directory and one
@@ -266,6 +285,68 @@ function subjectForUser(user: { id: string; personId: string | null }): SubjectR
     : { kind: 'person', personId: user.personId };
 }
 
+export interface AdminEvent {
+  id: string;
+  sequence: number;
+  action: string;
+  actorUserId: string | null;
+  targetId: string | null;
+  occurredAt: Date;
+  payload: unknown;
+}
+
+export interface AdminCreations {
+  /** userId -> the event that created the login. */
+  logins: Map<string, AdminEvent>;
+  /** `${groupId}|${userId}` -> the latest event that added the member. */
+  memberships: Map<string, AdminEvent>;
+  /** `${userId}|${roleId}|${scopeOrgUnitId ?? ''}` -> the latest assignment. */
+  roles: Map<string, AdminEvent>;
+}
+
+/**
+ * Which login, membership and role assignment an audit event records being
+ * created, keyed the way `collectTenant` looks them up. Pure.
+ *
+ * Events are read in sequence order, so a later add (after a remove) wins. A
+ * `group.addMember` written before the payload carried `userId` names the
+ * member by login, matched case-insensitively as logins are unique that way.
+ */
+export function adminCreations(
+  events: readonly AdminEvent[],
+  users: readonly { id: string; login: string }[],
+): AdminCreations {
+  const userIdByLogin = new Map(users.map((u) => [foldIdentifier(u.login), u.id]));
+  const out: AdminCreations = { logins: new Map(), memberships: new Map(), roles: new Map() };
+  for (const event of events) {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (event.targetId === null) continue;
+    switch (event.action) {
+      case 'user.create':
+      case 'scim.user_created':
+        if (!out.logins.has(event.targetId)) out.logins.set(event.targetId, event);
+        break;
+      case 'group.addMember': {
+        const userId =
+          typeof payload['userId'] === 'string'
+            ? payload['userId']
+            : typeof payload['login'] === 'string'
+              ? userIdByLogin.get(foldIdentifier(payload['login']))
+              : undefined;
+        if (userId !== undefined) out.memberships.set(`${event.targetId}|${userId}`, event);
+        break;
+      }
+      case 'rbac.role_assigned': {
+        if (typeof payload['roleId'] !== 'string') break;
+        const scope = typeof payload['scopeOrgUnitId'] === 'string' ? payload['scopeOrgUnitId'] : '';
+        out.roles.set(`${event.targetId}|${payload['roleId']}|${scope}`, event);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 export async function collectTenant(
   tenantId: string,
   options: CollectOptions = {},
@@ -284,7 +365,10 @@ export async function collectTenant(
       select: { id: true, givenName: true, familyName: true, status: true },
     });
     const contracts = await tx.contract.findMany({
-      select: { id: true, personId: true, startDate: true, endDate: true, department: true, jobTitle: true },
+      select: {
+        id: true, personId: true, startDate: true, endDate: true, department: true, jobTitle: true,
+        costCentre: true, employer: true, location: true, fte: true,
+      },
     });
     return { persons, contracts };
   });
@@ -296,13 +380,34 @@ export async function collectTenant(
   }
   const personsWithActiveContract = [...activeByPerson.values()].filter(Boolean).length;
 
-  // (2) Users — the ability to sign in to Syntra at all, with its status.
-  const users = await withTenant(tenantId, (tx) =>
-    tx.user.findMany({
-      select: { id: true, login: true, displayName: true, email: true, status: true, personId: true, orgUnitId: true, sourceId: true, sourceAnchor: true },
+  // (2) Users — the ability to sign in to Syntra at all, with its status —
+  // and the audit events that name who created a login, a membership or a
+  // role assignment in the console. Success only: a refused assignment
+  // created nothing.
+  const { users, adminEvents } = await withTenant(tenantId, async (tx) => ({
+    users: await tx.user.findMany({
+      select: { id: true, login: true, displayName: true, email: true, status: true, kind: true, personId: true, orgUnitId: true, sourceId: true, sourceAnchor: true },
     }),
-  );
+    adminEvents: await tx.auditEvent.findMany({
+      where: { action: { in: [...ADMIN_CREATE_ACTIONS] }, outcome: 'success' },
+      orderBy: { sequence: 'asc' },
+      select: { id: true, sequence: true, action: true, actorUserId: true, targetId: true, occurredAt: true, payload: true },
+    }),
+  }));
   const userById = new Map(users.map((u) => [u.id, u]));
+  const made = adminCreations(adminEvents, users);
+  const manualFor = (event: AdminEvent | undefined): ManualFact[] =>
+    event === undefined
+      ? []
+      : [
+          {
+            administratorName:
+              event.actorUserId === null ? null : (userById.get(event.actorUserId)?.displayName ?? null),
+            recordedAt: event.occurredAt.toISOString(),
+            reason: null,
+            auditEvent: { id: event.id, sequence: event.sequence, action: event.action },
+          },
+        ];
 
   for (const user of users) {
     if (user.personId === null) continue;
@@ -322,6 +427,7 @@ export async function collectTenant(
         ...(user.sourceId === null
           ? {}
           : { directorySources: [{ sourceId: user.sourceId, sourceName: 'directory source', anchor: user.sourceAnchor, distinguishedName: null }] }),
+        manual: manualFor(made.logins.get(user.id)),
       },
     });
   }
@@ -329,8 +435,14 @@ export async function collectTenant(
   // A user with no linked person is a subject Govern cannot name. It is a gap,
   // not an omission: an account that can sign in to the identity platform and
   // belongs to nobody is exactly the row an access review exists to surface.
+  //
+  // A SERVICE account (`kind: 'service'`) is not one. It has no person by
+  // definition, and an administrator marked it so (audited `user.kindChanged`).
+  // It is still governed: its roles and memberships are holdings under its
+  // account subject, reviewed in campaigns, and its API tokens carry their own
+  // expiry. An unlinked login NOT marked as a service account stays a gap.
   for (const user of users) {
-    if (user.personId !== null) continue;
+    if (user.personId !== null || user.kind === 'service') continue;
     gaps.push({
       kind: 'subject_unresolvable',
       systemKind: 'syntraInternal',
@@ -374,6 +486,7 @@ export async function collectTenant(
       observedVia: 'syntra',
       attribution: {
         ...EMPTY_ATTRIBUTION_INPUT,
+        manual: manualFor(made.memberships.get(`${m.groupId}|${m.userId}`)),
         ...(m.group.sourceId === null
           ? {}
           : {
@@ -478,6 +591,7 @@ export async function collectTenant(
     // missing is a referential impossibility under the foreign key, and
     // guessing at it would invent a subject.
     if (user === undefined) continue;
+    const assigned = made.roles.get(`${ra.userId}|${ra.roleId}|${ra.scopeOrgUnitId ?? ''}`);
     holdings.push({
       subject: subjectForUser(user),
       systemKind: 'syntraInternal',
@@ -497,8 +611,9 @@ export async function collectTenant(
             rowId: ra.id,
             scopeOrgUnitId: ra.scopeOrgUnitId,
             scopeOrgUnitName: ra.scopeOrgUnitId === null ? null : (orgUnitNameById.get(ra.scopeOrgUnitId) ?? null),
-            administratorName: null,
-            assignedAt: null,
+            administratorName:
+              assigned?.actorUserId == null ? null : (userById.get(assigned.actorUserId)?.displayName ?? null),
+            assignedAt: assigned?.occurredAt.toISOString() ?? null,
           },
         ],
       },
@@ -509,7 +624,7 @@ export async function collectTenant(
   // be read at all.
   const targets = await withTenant(tenantId, (tx) =>
     tx.targetSystem.findMany({
-      select: { id: true, name: true, lastRunAt: true, lastAppliedRunAt: true },
+      select: { id: true, name: true, lastRunAt: true, lastAppliedRunAt: true, preHireDays: true },
     }),
   );
   const targetNameById = new Map(targets.map((t) => [t.id, t.name]));
@@ -518,8 +633,18 @@ export async function collectTenant(
     const accounts = await tx.targetAccount.findMany({
       select: {
         id: true, targetSystemId: true, personId: true, anchor: true, correlationKey: true,
-        status: true, lastReconciledAt: true,
+        status: true, lastReconciledAt: true, createdActionId: true,
       },
+    });
+    // The create that made each account, where it is still recorded. A pruned
+    // run takes its actions with it, and then only a rule can explain the account.
+    const creates = await tx.provisionAction.findMany({
+      where: {
+        id: { in: accounts.map((a) => a.createdActionId).filter((x): x is string => x !== null) },
+        actionType: 'create_account',
+        status: 'applied',
+      },
+      select: { id: true, runId: true, appliedAt: true },
     });
     const holdingsRows = await tx.accountEntitlement.findMany({
       where: { state: 'held' },
@@ -529,32 +654,85 @@ export async function collectTenant(
       },
     });
     const rules = await tx.businessRule.findMany({
-      select: { id: true, name: true, enabled: true, targetSystemId: true },
+      select: { id: true, name: true, enabled: true, targetSystemId: true, grantsAccount: true, condition: true },
     });
     const unreadable = await tx.entitlement.findMany({
       where: { status: { in: ['missing', 'unreadable'] } },
       select: { id: true, targetSystemId: true, displayName: true, status: true },
     });
-    return { accounts, holdingsRows, rules, unreadable };
+    return { accounts, creates, holdingsRows, rules, unreadable };
   });
 
   const ruleById = new Map(provision.rules.map((r) => [r.id, r]));
   const accountById = new Map(provision.accounts.map((a) => [a.id, a]));
+  const createById = new Map(provision.creates.map((c) => [c.id, c]));
+  const preHireDaysByTarget = new Map(targets.map((t) => [t.id, t.preHireDays]));
+  const personStatusById = new Map(people.persons.map((p) => [p.id, p.status]));
+  const contractsByPerson = new Map<string, ((typeof people.contracts)[number] & { fteNumber: number | null })[]>();
+  for (const c of people.contracts) {
+    const list = contractsByPerson.get(c.personId) ?? [];
+    list.push({ ...c, fteNumber: c.fte === null ? null : Number(c.fte) });
+    contractsByPerson.set(c.personId, list);
+  }
+  // Account-granting rules by target, parsed. A condition this version cannot
+  // read matches nobody, as `evaluateCondition` would: the account then falls
+  // back to its recorded create, or reads unattributable.
+  const accountRulesByTarget = new Map<string, { id: string; name: string; enabled: boolean; grantsAccount: boolean; condition: Condition }[]>();
+  for (const rule of provision.rules) {
+    if (!rule.enabled || !rule.grantsAccount) continue;
+    const parsed = conditionSchema.safeParse(rule.condition);
+    if (!parsed.success) continue;
+    const list = accountRulesByTarget.get(rule.targetSystemId) ?? [];
+    list.push({ ...rule, condition: parsed.data });
+    accountRulesByTarget.set(rule.targetSystemId, list);
+  }
+  // Which account a live grant on a target needs, for the grant union below.
+  const accountResourceByPersonTarget = new Map<string, string>();
 
   for (const account of provision.accounts) {
     const observedAt = account.lastReconciledAt ?? asOf;
+    const resourceId = account.anchor ?? account.correlationKey;
+    accountResourceByPersonTarget.set(`${account.personId}|${account.targetSystemId}`, resourceId);
+
+    // The account Provision would create today: the same rules, the same
+    // window (`asOf` to `asOf + preHireDays`) and the same evaluator as
+    // `desiredState`.
+    const windowEnd = asOf.getTime() + (preHireDaysByTarget.get(account.targetSystemId) ?? 0) * MS_PER_DAY;
+    const inWindow = (contractsByPerson.get(account.personId) ?? [])
+      .filter((c) => c.startDate.getTime() <= windowEnd && (c.endDate === null || c.endDate >= asOf))
+      .map((c) => ({ ...c, fte: c.fteNumber }));
+    const rules: RuleFact[] = accountGrantingRules(
+      accountRulesByTarget.get(account.targetSystemId) ?? [],
+      { status: personStatusById.get(account.personId) ?? null },
+      inWindow,
+    ).map(({ rule, contract }) => ({
+      ruleId: rule.id,
+      ruleName: rule.name,
+      contractId: contract.id,
+      department: contract.department,
+      jobTitle: contract.jobTitle,
+      ruleEnabled: true,
+      grantsAccount: true,
+    }));
+    const create = account.createdActionId === null ? undefined : createById.get(account.createdActionId);
+    // Only when no rule requires it: the fact says as much.
+    const provisionCreates: ProvisionCreateFact[] =
+      create === undefined || rules.length > 0
+        ? []
+        : [{ actionId: create.id, runId: create.runId, appliedAt: create.appliedAt?.toISOString() ?? null }];
+
     holdings.push({
       subject: { kind: 'person', personId: account.personId },
       systemKind: 'targetSystem',
       systemId: account.targetSystemId,
       systemName: targetNameById.get(account.targetSystemId) ?? account.targetSystemId,
       resourceKind: 'targetAccount',
-      resourceId: account.anchor ?? account.correlationKey,
+      resourceId,
       resourceName: `${account.correlationKey} (${account.status})`,
       state: account.status === 'missing_at_target' ? 'unknown' : 'held',
       observedAt,
       observedVia: `provision:${account.targetSystemId}`,
-      attribution: EMPTY_ATTRIBUTION_INPUT,
+      attribution: { ...EMPTY_ATTRIBUTION_INPUT, rules, provisionCreates },
     });
   }
 
@@ -696,6 +874,16 @@ export async function collectTenant(
     const systemId = grant.targetSystemId ?? SYNTRA_SYSTEM_ID;
     const holdingKey = `person:${grant.subjectPersonId}|${systemId}|${resourceKind}|${grant.resourceId}`;
     grantFactsByHolding.set(holdingKey, [...(grantFactsByHolding.get(holdingKey) ?? []), fact]);
+
+    // A live entitlement grant also needs an account at its target, and
+    // `desiredState` requires one for it. The grant explains the account too.
+    if (resourceKind === 'targetEntitlement' && grant.targetSystemId !== null) {
+      const account = accountResourceByPersonTarget.get(`${grant.subjectPersonId}|${grant.targetSystemId}`);
+      if (account !== undefined) {
+        const accountKey = `person:${grant.subjectPersonId}|${grant.targetSystemId}|targetAccount|${account}`;
+        grantFactsByHolding.set(accountKey, [...(grantFactsByHolding.get(accountKey) ?? []), fact]);
+      }
+    }
   }
 
   // The union: a grant explains a holding that already exists, and creates one
