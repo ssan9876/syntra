@@ -546,7 +546,7 @@ jobs:
       # Pinned, not `latest`: a Helm minor that tightens template parsing
       # should arrive as a deliberate bump, not as a red build on an
       # unrelated pull request.
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.2
 
