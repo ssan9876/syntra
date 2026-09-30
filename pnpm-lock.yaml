@@ -34,8 +34,8 @@ importers:
         specifier: ^7.1.1
         version: 7.1.1(eslint@10.9.1(jiti@2.7.0))
       ldapts:
-        specifier: ^9.0.0
-        version: 9.0.0
+        specifier: ^9.2.0
+        version: 9.2.0
       otpauth:
         specifier: 9.5.1
         version: 9.5.1
@@ -198,8 +198,8 @@ importers:
         specifier: ^2.2.0
         version: 2.5.0
       ldapts:
-        specifier: ^9.0.0
-        version: 9.0.0
+        specifier: ^9.2.0
+        version: 9.2.0
       ssh2:
         specifier: ^1.16.0
         version: 1.17.0
@@ -253,8 +253,8 @@ importers:
         specifier: 6.2.9
         version: 6.2.9
       ldapts:
-        specifier: ^9.0.0
-        version: 9.0.0
+        specifier: ^9.2.0
+        version: 9.2.0
       nodemailer:
         specifier: ^10.0.10
         version: 10.0.10
@@ -2413,8 +2413,8 @@ packages:
     resolution: {integrity: sha512-e7IpWJrnanNUroVK2taAgMxoEZvHLXdQiNjeExSu/DEIWm83jaKGBgb7tLmu2rMYpA027qFB3iLR/k3AVpFRnA==}
     engines: {node: '>= 18'}
 
-  ldapts@9.0.0:
-    resolution: {integrity: sha512-OaaoYBSuan7g0Nm2e1wsRl+9xol41zY+pDlRRSsBq36iKCd2tG/K8WifevNRDjyEfhz4bvkxKdDvJ6xHXwj7+Q==}
+  ldapts@9.2.0:
+    resolution: {integrity: sha512-5mDg3OT5fDP9DUXga9dCLW8cMW24OTOKT4pv/Qj+f2zCV3qxb+gkZLCzMAqzVTOANoycidKkYpPvkclUQU2aXw==}
     engines: {node: '>=22'}
 
   levn@0.4.1:
@@ -5707,7 +5707,7 @@ snapshots:
       type-is: 2.1.0
       vary: 1.1.2
 
-  ldapts@9.0.0:
+  ldapts@9.2.0:
     dependencies:
       strict-event-emitter-types: 2.0.0
 

@@ -18,7 +18,7 @@
     "argon2": "^0.45.1",
     "ipaddr.js": "2.5.0",
     "jose": "6.2.9",
-    "ldapts": "^9.0.0",
+    "ldapts": "^9.2.0",
     "nodemailer": "^10.0.10",
     "otpauth": "9.5.1",
     "pg-boss": "^12.27.0",
