@@ -42,7 +42,7 @@
     "@playwright/test": "^1.63.0",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.23.1",
-    "eslint": "^10.9.1",
+    "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "ldapts": "^9.2.0",
     "otpauth": "9.5.2",
