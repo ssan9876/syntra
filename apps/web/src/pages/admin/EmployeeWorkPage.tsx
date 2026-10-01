@@ -665,7 +665,7 @@ export function EmployeeWorkPage() {
                       {step && (
                         <Link className="link text-sm font-medium" to={step.to}>
                           {step.label}
-                          <span className="sr-only"> for {item.personName}</span>
+                          {' '}<span className="sr-only">for {item.personName}</span>
                         </Link>
                       )}
                     </td>

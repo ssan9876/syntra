@@ -123,7 +123,7 @@ export function PersonProvisionReceipts({ state }: { state: PersonReceipts }) {
                     <span className="flex flex-wrap items-center justify-end gap-3">
                       {run && (
                         <Link className="link whitespace-nowrap" to={run}>
-                          Review exact run<span className="sr-only"> for {receipt.targetName}</span>
+                          Review exact run{' '}<span className="sr-only">for {receipt.targetName}</span>
                         </Link>
                       )}
                       {canRetry(receipt) && (
@@ -135,7 +135,7 @@ export function PersonProvisionReceipts({ state }: { state: PersonReceipts }) {
                           onClick={() => { void retry(receipt); }}
                         >
                           {receipt.status === 'no_match' ? 'Evaluate again' : 'Retry unfinished work'}
-                          <span className="sr-only"> for {receipt.targetName}</span>
+                          {' '}<span className="sr-only">for {receipt.targetName}</span>
                         </Button>
                       )}
                     </span>
