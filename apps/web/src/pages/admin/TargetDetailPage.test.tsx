@@ -607,6 +607,10 @@ describe('TargetDetailPage', () => {
       'https://api.example.test/scim/v2',
     );
     await userEvent.type(screen.getByLabelText(/bearer token/i), 'a-token');
+    await userEvent.clear(screen.getByLabelText(/user resource path/i));
+    await userEvent.type(screen.getByLabelText(/user resource path/i), '/users');
+    await userEvent.clear(screen.getByLabelText(/group resource path/i));
+    await userEvent.type(screen.getByLabelText(/group resource path/i), '/groups');
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     await waitFor(() =>
@@ -627,7 +631,7 @@ describe('TargetDetailPage', () => {
     expect(create).toBeDefined();
     const body = JSON.parse(String(create![1]!.body));
     expect(body.type).toBe('scim2');
-    expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2' });
+    expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2', userResourcePath: '/users', groupResourcePath: '/groups' });
     expect(body.bindPassword).toBe('a-token');
   });
 
