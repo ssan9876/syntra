@@ -1068,7 +1068,7 @@ from the group. The credential is the bearer token the service provider issued.
 | Key | Default | Meaning |
 |---|---|---|
 | `baseUrl` | required | The SCIM base, `https://…`. |
-| `userResourcePath` / `groupResourcePath` | `/Users` / `/Groups` | |
+| `userResourcePath` / `groupResourcePath` | `/Users` / `/Groups` | Paths under the SCIM base URL, editable as User resource path and Group resource path. Preserve the provider's casing; use `/users` and `/groups` when required. |
 | `pageSize` | `200` | |
 | `connectTimeoutMs`, `timeoutMs` | `10000`, `60000` | |
 | `allowPrivateAddresses` | `false` | |
@@ -1076,6 +1076,19 @@ from the group. The credential is the bearer token the service provider issued.
 A SCIM target places accounts in no container, so container settings are
 ignored and mirroring is refused. This is Syntra pushing *out*; a system
 pushing users *into* Syntra is [Provisioning into Syntra with SCIM](#provisioning-into-syntra-with-scim).
+
+For FMX, map `oidc_subject` to `%person.syntraUserId%` in the account
+profile. This is the immutable Syntra login user UUID used to link provisioning
+with SSO. It is never an email address or the Person UUID. The placeholder
+resolves only when the person has exactly one linked Syntra login; no login or
+multiple logins makes the mapping unresolvable and prevents provisioning for
+that person. Resolve the login link before enabling automatic provisioning.
+A successful connector connection test alone does not validate this mapping.
+
+Create groups in FMX first, discover them as Syntra target entitlements, then
+assign those entitlements through provisioning rules. FMX's “Add newly
+provisioned users automatically” option works independently of Syntra group
+assignments.
 
 ### REST API connector documents
 

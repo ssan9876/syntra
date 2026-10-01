@@ -607,6 +607,10 @@ describe('TargetDetailPage', () => {
       'https://api.example.test/scim/v2',
     );
     await userEvent.type(screen.getByLabelText(/bearer token/i), 'a-token');
+    await userEvent.clear(screen.getByLabelText(/user resource path/i));
+    await userEvent.type(screen.getByLabelText(/user resource path/i), '/users');
+    await userEvent.clear(screen.getByLabelText(/group resource path/i));
+    await userEvent.type(screen.getByLabelText(/group resource path/i), '/groups');
     await userEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     await waitFor(() =>
@@ -627,7 +631,7 @@ describe('TargetDetailPage', () => {
     expect(create).toBeDefined();
     const body = JSON.parse(String(create![1]!.body));
     expect(body.type).toBe('scim2');
-    expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2' });
+    expect(body.config).toEqual({ baseUrl: 'https://api.example.test/scim/v2', userResourcePath: '/users', groupResourcePath: '/groups' });
     expect(body.bindPassword).toBe('a-token');
   });
 
@@ -1327,6 +1331,7 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     const fetchMock = mockTarget({ type: 'activeDirectory', disableGraceDays: 14, deleteAfterDays: 30 });
     renderExisting();
     const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    await waitFor(() => expect(field).toHaveValue('30'));
     await userEvent.clear(field);
     await userEvent.type(field, '7');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));

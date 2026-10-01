@@ -15,6 +15,8 @@ import type { Condition } from './condition.js';
  */
 export interface PersonFacts {
   id: string;
+  /** Immutable linked login ID; absent when there is no unambiguous login. */
+  syntraUserId?: string | null;
   givenName: string;
   familyName: string;
   /**

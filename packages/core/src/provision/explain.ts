@@ -851,11 +851,13 @@ export async function previewAccountProfile(
       fte: c.fte === null ? null : Number(c.fte),
     }));
     const mapping = resolveMappingContract(contracts, now);
+    const linkedUsers = await tx.user.findMany({ where: { personId: person.id }, select: { id: true } });
 
     // Exactly the shape `desiredState` builds, through the same helpers, so a
     // preview and a run cannot disagree about what a template resolves to.
     const context: TemplateContext = {
       person: {
+        syntraUserId: linkedUsers.length === 1 ? linkedUsers[0]!.id : null,
         givenName: person.givenName,
         familyName: person.familyName,
         businessEmail: person.businessEmail,

@@ -1082,16 +1082,15 @@ export const initialPasswordPolicySchema = z
  * RFC 4512 `descr` (a letter, then letters, digits and hyphens) — Active
  * Directory's attribute names — OR a dotted path of the same shape (SCIM's
  * `name.givenName`, `name.familyName`). Active Directory never produces a
- * dotted name, so widening this to allow one changes nothing for that
- * connector; it is what lets a `scim2` target's attribute profile name a
- * sub-attribute of SCIM's core User schema at all.
+ * dotted name; dots support SCIM sub-attributes and underscores support
+ * provider attributes such as FMX's `oidc_subject`.
  */
-const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9-]*(\.[A-Za-z][A-Za-z0-9-]*)*$/;
+const LDAP_ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$/;
 
 const attributeTemplatesSchema = z
   .record(
     z.string().max(64).regex(LDAP_ATTRIBUTE_NAME, {
-      message: 'not an LDAP attribute name',
+      message: 'not a supported attribute name',
     }),
     /**
      * Non-blank, which every other template field on this schema already is.

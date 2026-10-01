@@ -240,6 +240,7 @@ function templateContext(
 ): TemplateContext {
   return {
     person: {
+      syntraUserId: person.syntraUserId ?? null,
       givenName: person.givenName,
       familyName: person.familyName,
       // The two address columns Person actually has. There is no `email`

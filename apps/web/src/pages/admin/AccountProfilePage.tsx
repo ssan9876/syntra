@@ -563,6 +563,7 @@ function AccountProfileEditor() {
             }
           >
             <div className="space-y-3 sm:col-span-2">
+              <p className="text-muted">FMX: oidc_subject = %person.syntraUserId% (immutable login UUID; requires exactly one linked login).</p>
               {rows.length === 0 && (
                 <p className="text-muted">No attributes</p>
               )}

@@ -40,6 +40,13 @@ const target = (overrides: Partial<Target> = {}): Target => ({
 });
 
 describe('bounded connector retries', () => {
+  it('round-trips custom SCIM resource paths and defaults older targets', () => {
+    const form = formFrom(target({ type: 'scim2', config: { baseUrl: 'https://fmx.test/scim', userResourcePath: '/users', groupResourcePath: '/groups' } }));
+    expect(configFromForm(form, {})).toMatchObject({ userResourcePath: '/users', groupResourcePath: '/groups' });
+    const older = formFrom(target({ type: 'scim2', config: {} }));
+    expect(older.userResourcePath).toBe('/Users');
+    expect(older.groupResourcePath).toBe('/Groups');
+  });
   it('round-trips the saved attempt limit and refuses values outside 1–10', () => {
     expect(formFrom(target({ maxAttempts: 6 })).maxAttempts).toBe('6');
     expect(validateNumbers({ ...BLANK, maxAttempts: '0' })).toMatchObject({ bad: { maxAttempts: expect.any(String) } });
