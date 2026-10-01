@@ -64,6 +64,8 @@ const LABELS: Record<string, string> = {
   entitlementSearchBase: 'Entitlement search base',
   archiveContainer: 'Archive container',
   baseUrl: 'Base URL',
+  userResourcePath: 'User resource path',
+  groupResourcePath: 'Group resource path',
   tenantId: 'Directory (tenant) ID',
   clientId: 'Application (client) ID',
   correlationField: 'Correlation field',
@@ -825,6 +827,10 @@ export function TargetDetailPage() {
                   {...mark('baseUrl')}
                   className="sm:col-span-2"
                 />
+                <Field label="User resource path" name="userResourcePath" value={form.userResourcePath}
+                  onChange={(v) => set('userResourcePath', v)} {...mark('userResourcePath')} />
+                <Field label="Group resource path" name="groupResourcePath" value={form.groupResourcePath}
+                  onChange={(v) => set('groupResourcePath', v)} {...mark('groupResourcePath')} />
                 <Field
                   label="Bearer token"
                   name="bindPassword"

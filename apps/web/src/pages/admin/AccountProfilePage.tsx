@@ -563,6 +563,7 @@ function AccountProfileEditor() {
             }
           >
             <div className="space-y-3 sm:col-span-2">
+              <p className="text-muted">%person.syntraUserId% is the immutable linked Syntra login UUID. It requires exactly one linked login. For FMX, map it to oidc_subject.</p>
               {rows.length === 0 && (
                 <p className="text-muted">No attributes</p>
               )}

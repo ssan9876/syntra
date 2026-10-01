@@ -116,6 +116,13 @@ const evaluate = (
   });
 
 describe('activeOn', () => {
+  it('maps FMX to the login UUID and refuses a missing or ambiguous login', () => {
+    const fmxProfile = { ...profile, attributeTemplates: { oidc_subject: '%person.syntraUserId%' } };
+    const linked = evaluate([contract()], [financeRule], { person: { ...person, syntraUserId: 'login-uuid' }, profile: fmxProfile });
+    expect(linked).toMatchObject({ account: { attributes: { oidc_subject: ['login-uuid'] } } });
+    const missing = evaluate([contract()], [financeRule], { person: { ...person, syntraUserId: null }, profile: fmxProfile });
+    expect(missing.unprocessable).not.toBeNull();
+  });
   it('includes a contract on its first and last day', () => {
     const c = contract({ startDate: NOW, endDate: NOW });
     expect(activeOn([c], NOW)).toHaveLength(1);

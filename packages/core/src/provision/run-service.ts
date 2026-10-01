@@ -955,6 +955,18 @@ export async function previewProvisionRun(
      */
     const sodFacts = await withTenant(tenantId, (tx) => loadSodFactsIfEvaluable(tx));
 
+    const syntraUserByPerson = new Map<string, SyntraUserFacts[]>();
+    for (const user of snapshot.users) {
+      // Excluded by the `where` above as well. Kept because it is what narrows
+      // `personId` from `string | null` to `string`, and because a grouping
+      // keyed on null would put every service account in one bucket.
+      if (user.personId === null) continue;
+      const facts = { id: user.id, status: user.status };
+      const linked = syntraUserByPerson.get(user.personId);
+      if (linked === undefined) syntraUserByPerson.set(user.personId, [facts]);
+      else linked.push(facts);
+    }
+
     // Phase 6. Pure computation. No transaction, no I/O.
     const horizon = new Date(now.getTime() + prepared.target.preHireDays * MS_PER_DAY);
 
@@ -1110,8 +1122,10 @@ export async function previewProvisionRun(
 
       // The columns Person actually has. There is no `email` and no
       // `displayName` on the model, and spec section 15 forbids adding one.
+      const linkedLogins = syntraUserByPerson.get(person.id) ?? [];
       const facts: PersonFacts = {
         id: person.id,
+        syntraUserId: linkedLogins.length === 1 ? linkedLogins[0]!.id : null,
         givenName: person.givenName,
         familyName: person.familyName,
         nameConvention: person.nameConvention,
@@ -1221,18 +1235,6 @@ export async function previewProvisionRun(
      * employment; this subsystem has found six other routes to that and does
      * not add a seventh for tidiness.
      */
-    const syntraUserByPerson = new Map<string, SyntraUserFacts[]>();
-    for (const user of snapshot.users) {
-      // Excluded by the `where` above as well. Kept because it is what narrows
-      // `personId` from `string | null` to `string`, and because a grouping
-      // keyed on null would put every service account in one bucket.
-      if (user.personId === null) continue;
-      const facts = { id: user.id, status: user.status };
-      const linked = syntraUserByPerson.get(user.personId);
-      if (linked === undefined) syntraUserByPerson.set(user.personId, [facts]);
-      else linked.push(facts);
-    }
-
     const plannedActions = planActions({
       desired,
       actual: reconciled.actual,

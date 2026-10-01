@@ -1024,7 +1024,7 @@ describe('upsertAccountProfile, beyond the brief', () => {
     await expect(
       upsertAccountProfile(tenantId, null, id, {
         ...profile,
-        attributeTemplates: { 'name.givenName': '%person.givenName%' },
+        attributeTemplates: { 'name.givenName': '%person.givenName%', oidc_subject: '%person.syntraUserId%' },
       }),
     ).resolves.not.toThrow();
   });
@@ -1036,7 +1036,7 @@ describe('upsertAccountProfile, beyond the brief', () => {
         ...profile,
         attributeTemplates: { '..bad': 'x' },
       }),
-    ).rejects.toThrow(/not an LDAP attribute name/);
+    ).rejects.toThrow(/not a supported attribute name/);
   });
 
   it('audits against the target, so the event can be found from the target', async () => {

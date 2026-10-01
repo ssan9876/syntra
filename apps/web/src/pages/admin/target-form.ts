@@ -90,6 +90,8 @@ export interface Form {
   archiveContainer: string;
   // SCIM 2.0 only.
   baseUrl: string;
+  userResourcePath: string;
+  groupResourcePath: string;
   // Declarative HTTP only. `documentKey` is which shipped document was
   // started from -- kept so the picker can show it, never sent: the document
   // itself is what is stored, so editing a shipped one later cannot change a
@@ -148,6 +150,8 @@ export const BLANK: Form = {
   entitlementSearchBase: '',
   archiveContainer: '',
   baseUrl: 'https://',
+  userResourcePath: '/Users',
+  groupResourcePath: '/Groups',
   documentKey: '',
   documentJson: '',
   entraTenantId: '',
@@ -190,6 +194,8 @@ export const OWNED_CONFIG_KEYS = [
   'entitlementSearchBase',
   'archiveContainer',
   'baseUrl',
+  'userResourcePath',
+  'groupResourcePath',
   // Native Entra ID. `managedAttributes`, `groupScope` and the rest are
   // carried through untouched.
   'tenantId',
@@ -317,6 +323,8 @@ export function formFrom(target: Target): Form {
     entraUserPrincipalDomain:
       target.type === 'entraId' ? text(config.userPrincipalDomain) : '',
     baseUrl: text(config.baseUrl, BLANK.baseUrl),
+    userResourcePath: text(config.userResourcePath, BLANK.userResourcePath),
+    groupResourcePath: text(config.groupResourcePath, BLANK.groupResourcePath),
     url,
     tlsMode:
       config.tlsMode === 'starttls' || config.tlsMode === 'ldaps'
@@ -383,7 +391,7 @@ export function configFromForm(
     };
   }
   if (form.type === 'scim2') {
-    return { ...extraConfig, baseUrl: form.baseUrl.trim() };
+    return { ...extraConfig, baseUrl: form.baseUrl.trim(), userResourcePath: form.userResourcePath.trim(), groupResourcePath: form.groupResourcePath.trim() };
   }
   if (form.type === 'entraId') {
     // Lowercased: DNS is case-insensitive and the server accepts only the

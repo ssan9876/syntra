@@ -115,7 +115,8 @@ export async function projectPersonOnTargets(
   options: ProjectionOptions = {},
 ): Promise<PersonTargetProjection[]> {
   const now = options.now ?? new Date();
-  const { person, contracts, targets } = await withTenant(tenantId, async (tx) => ({
+  const { person, contracts, targets, users } = await withTenant(tenantId, async (tx) => ({
+    users: await tx.user.findMany({ where: { personId }, select: { id: true } }),
     person: await tx.person.findUniqueOrThrow({ where: { id: personId } }),
     contracts: await tx.contract.findMany({ where: { personId }, orderBy: { sequence: 'asc' } }),
     targets: await tx.targetSystem.findMany({
@@ -141,6 +142,7 @@ export async function projectPersonOnTargets(
 
   const facts: PersonFacts = {
     id: person.id,
+    syntraUserId: users.length === 1 ? users[0]!.id : null,
     givenName: person.givenName,
     familyName: person.familyName,
     nameConvention: person.nameConvention,
