@@ -21,7 +21,7 @@
     "ldapts": "^9.2.0",
     "nodemailer": "^10.0.11",
     "otpauth": "9.5.2",
-    "pg-boss": "^12.27.0",
+    "pg-boss": "^12.35.0",
     "reflect-metadata": "0.2.2",
     "zod": "^4.6.5"
   },
