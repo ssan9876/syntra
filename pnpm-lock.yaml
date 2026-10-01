@@ -321,8 +321,8 @@ importers:
         specifier: 6.8.5
         version: 6.8.5
       xml-crypto:
-        specifier: 6.3.0
-        version: 6.3.0
+        specifier: 6.3.2
+        version: 6.3.2
       xml-encryption:
         specifier: 6.0.1
         version: 6.0.1
@@ -3301,8 +3301,8 @@ packages:
     resolution: {integrity: sha512-leBOVQdVi8FvPJrMYoum7Ici9qyxfE4kVi+AkpUoYCSXaQF4IlBm1cneTK9oAxR61LpYxTx7lNcsnBIeRpGW2w==}
     engines: {node: '>=16'}
 
-  xml-crypto@6.3.0:
-    resolution: {integrity: sha512-UOFXhZf/paMcBYA9Gvr+XQQxLxfqoKTjfMkWJnPS0PcVEPcXdEn7etTbqONj0rwOtgBOlOAgB/0v4cNsR/hLWg==}
+  xml-crypto@6.3.2:
+    resolution: {integrity: sha512-XoUdpErePlpyFdNYVzG2Sfw5ghvqUCQMT3dQ0tAxs0JKzk9gLzwALFkvHZ/D0OyfD/OyxoXsCcYZzbDzgY18RA==}
     engines: {node: '>=16'}
 
   xml-encryption@3.1.0:
@@ -6334,7 +6334,7 @@ snapshots:
       '@xmldom/xmldom': 0.8.15
       xpath: 0.0.33
 
-  xml-crypto@6.3.0:
+  xml-crypto@6.3.2:
     dependencies:
       '@xmldom/is-dom-node': 1.0.1
       '@xmldom/xmldom': 0.8.15
