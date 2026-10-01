@@ -1331,6 +1331,7 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     const fetchMock = mockTarget({ type: 'activeDirectory', disableGraceDays: 14, deleteAfterDays: 30 });
     renderExisting();
     const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    await waitFor(() => expect(field).toHaveValue('30'));
     await userEvent.clear(field);
     await userEvent.type(field, '7');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
