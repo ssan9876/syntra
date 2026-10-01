@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@v3
         # Keep the expression out of a YAML flow mapping. The two closing
         # braces are otherwise parsed as mapping delimiters, so GitHub rejects
         # the whole workflow before creating even one job.
