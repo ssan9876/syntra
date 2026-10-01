@@ -25,7 +25,7 @@
     "@syntra/core": "workspace:*",
     "@syntra/db": "workspace:*",
     "@syntra/protocols": "workspace:*",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "jose": "6.2.9",
     "oidc-provider": "9.12.2",
     "zod": "^4.6.5"
