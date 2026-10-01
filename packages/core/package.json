@@ -10,7 +10,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1139.0",
-    "@peculiar/x509": "2.0.0",
+    "@peculiar/x509": "2.1.0",
     "@simplewebauthn/server": "13.3.2",
     "@syntra/connectors": "workspace:*",
     "@syntra/contracts": "workspace:*",
