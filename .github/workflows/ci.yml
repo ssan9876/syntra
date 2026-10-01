@@ -301,6 +301,16 @@ jobs:
           done
           echo "PostgreSQL never became ready"; docker compose -f infra/docker-compose.yml logs postgres; exit 1
 
+      # Same wait as the browser job: slapd restarts after seeding, and the LDAP
+      # connector tests failed with ECONNREFUSED on 1389 in that gap.
+      - name: Wait for OpenLDAP
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec infra-openldap-1 ldapsearch -x -H ldap://localhost:389 -D cn=admin,dc=acme,dc=test -w adminpassword -b ou=Shared,dc=acme,dc=test -s base dn > /dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "OpenLDAP never became ready"; docker compose -f infra/docker-compose.yml logs openldap; exit 1
+
       - run: pnpm db:generate
       - run: pnpm db:migrate
 
