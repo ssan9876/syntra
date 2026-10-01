@@ -32,9 +32,9 @@
   },
   "devDependencies": {
     "@node-saml/node-saml": "5.1.0",
-    "@peculiar/x509": "2.0.0",
+    "@peculiar/x509": "2.1.0",
     "@types/oidc-provider": "9.12.1",
-    "openid-client": "6.8.5",
+    "openid-client": "6.8.8",
     "otpauth": "9.5.2",
     "reflect-metadata": "0.2.2"
   }

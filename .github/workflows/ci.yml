@@ -147,7 +147,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -259,7 +259,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -300,6 +300,16 @@ jobs:
             sleep 2
           done
           echo "PostgreSQL never became ready"; docker compose -f infra/docker-compose.yml logs postgres; exit 1
+
+      # Same wait as the browser job: slapd restarts after seeding, and the LDAP
+      # connector tests failed with ECONNREFUSED on 1389 in that gap.
+      - name: Wait for OpenLDAP
+        run: |
+          for _ in $(seq 1 60); do
+            docker exec infra-openldap-1 ldapsearch -x -H ldap://localhost:389 -D cn=admin,dc=acme,dc=test -w adminpassword -b ou=Shared,dc=acme,dc=test -s base dn > /dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "OpenLDAP never became ready"; docker compose -f infra/docker-compose.yml logs openldap; exit 1
 
       - run: pnpm db:generate
       - run: pnpm db:migrate
@@ -385,7 +395,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -407,7 +417,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Cache Playwright's Chromium download
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -646,7 +656,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
