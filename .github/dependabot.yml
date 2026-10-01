@@ -4,6 +4,13 @@ updates:
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 10
+    ignore:
+      # Types track the Node runtime (22); bump with the runtime.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }

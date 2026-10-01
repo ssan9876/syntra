@@ -325,7 +325,7 @@ export function DashboardPage() {
                           className="size-4 text-muted group-hover:text-primary"
                         />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium text-ink">{system.name}</span>
+                          <span className="block truncate font-medium text-ink">{system.name}</span>{' '}
                           <span className="block text-sm text-muted">
                             {system.kind} · {TYPE_LABEL[system.type] ?? system.type}
                           </span>
@@ -362,7 +362,7 @@ export function DashboardPage() {
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-ink">
                         {describeAction(event.action)}
-                        {event.outcome !== 'success' && <span className="sr-only"> (failed)</span>}
+                        {event.outcome !== 'success' && <>{' '}<span className="sr-only">(failed)</span></>}
                       </span>
                       <span className="block truncate text-sm text-muted">
                         {event.actorUserId === null

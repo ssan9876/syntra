@@ -72,14 +72,17 @@ export function Segmented({
           >
             {option.label}
             {option.count !== undefined && (
-              <span
-                className={[
-                  'rounded-full px-1.5 text-xs font-semibold tabular-nums',
-                  COUNT_TONES[tone],
-                ].join(' ')}
-              >
-                {option.count.toLocaleString()}
-              </span>
+              <>
+                {' '}
+                <span
+                  className={[
+                    'rounded-full px-1.5 text-xs font-semibold tabular-nums',
+                    COUNT_TONES[tone],
+                  ].join(' ')}
+                >
+                  {option.count.toLocaleString()}
+                </span>
+              </>
             )}
           </button>
         );
