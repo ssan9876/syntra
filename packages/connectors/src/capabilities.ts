@@ -143,9 +143,9 @@ export function capabilitiesForTarget(type: string, config: unknown): ConnectorC
   // the second -- a field mapped to one of the spellings `observedEnabled`
   // understands.
   const fields = isObject(account.fields) ? Object.values(account.fields) : [];
-  const enabledObservable = fields.some(
-    (name) => typeof name === 'string' && ENABLED_SPELLINGS.has(name.toLowerCase()),
-  );
+  const enabledObservable =
+    isObject(account.enabledWhen) ||
+    fields.some((name) => typeof name === 'string' && ENABLED_SPELLINGS.has(name.toLowerCase()));
   return {
     available: true,
     readBack: isObject(document.entitlement)

@@ -33,6 +33,23 @@ export interface ConnectionResult {
   sampleCounts?: Record<ObjectType, number>;
   /** Which of the rights a target connector needs it could confirm. */
   rights?: ConnectorRight[];
+  /** Document-driven targets: the first page's accounts, as Syntra reads them. */
+  preview?: AccountPreview;
+}
+
+export interface AccountPreview {
+  /** Up to five accounts from the first page. */
+  accounts: {
+    anchor: string;
+    /** The correlation key, or the anchor when the document reads none. */
+    name: string;
+    enabled: boolean | null;
+    attributes: Record<string, string[]>;
+  }[];
+  /** First-page items left out: excluded by `account.exclude`, or with no anchor. */
+  skipped: number;
+  /** Top-level fields of the first item that the document does not read. */
+  unreadFields: string[];
 }
 
 export interface SchemaDescriptor {

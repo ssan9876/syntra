@@ -68,7 +68,7 @@ export function Textarea({
         </p>
       )}
       {error && (
-        <p id={`${id}-error`} className="mt-1.5 text-sm text-danger">
+        <p id={`${id}-error`} className="mt-1.5 whitespace-pre-line text-sm text-danger">
           {error}
         </p>
       )}

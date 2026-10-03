@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLANK, configFromForm, deletesAccounts, formFrom, validateNumbers, skipAdvice, type Target } from './target-form.js';
+import { BLANK, configFromForm, credentialLabel, deletesAccounts, documentIssues, formFrom, isDocumentPath, validateNumbers, skipAdvice, type Target } from './target-form.js';
 
 const target = (overrides: Partial<Target> = {}): Target => ({
   id: 't1',
@@ -192,5 +192,27 @@ describe('Delete accounts after N days inactive', () => {
   it('reads the delete threshold, defaulting to 2 from an older API', () => {
     expect(formFrom(target({ deleteAccountThresholdPercent: 5 })).deleteAccountThresholdPercent).toBe('5');
     expect(formFrom(target()).deleteAccountThresholdPercent).toBe('2');
+  });
+});
+
+describe('connector document helpers', () => {
+  it('collects schema errors inside the document, with their paths there', () => {
+    expect(
+      documentIssues([
+        { path: 'config.document.account.anchorAt', message: 'Required' },
+        { path: 'document', message: 'Expected object' },
+        { path: 'config.url', message: 'Invalid url' },
+      ]),
+    ).toBe('account.anchorAt: Required\nExpected object');
+    expect(documentIssues([{ path: 'name', message: 'Required' }])).toBeNull();
+    expect(isDocumentPath('config.document.name')).toBe(true);
+    expect(isDocumentPath('name')).toBe(false);
+  });
+
+  it('names the credential after the authentication type', () => {
+    expect(credentialLabel({ auth: { type: 'basic' } })).toBe('Password');
+    expect(credentialLabel({ auth: { type: 'query' } })).toBe('API key');
+    expect(credentialLabel({ auth: { type: 'oauth2' } })).toBe('Client secret');
+    expect(credentialLabel(null)).toBe('API token');
   });
 });

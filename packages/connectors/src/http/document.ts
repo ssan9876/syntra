@@ -32,11 +32,12 @@ const jsonPath = z
   .trim()
   .min(1)
   // `@` and `$` are here for Microsoft Graph, whose real property names are
-  // `@odata.nextLink` and `$select`. `constructor`, `__proto__` and
+  // `@odata.nextLink` and `$select`. A segment of digits is a list position,
+  // so `emails.0.value` reads the first entry. `constructor`, `__proto__` and
   // `prototype` are refused by name: `readPath` checks own properties too, but
   // a path that cannot be written is better than one that is merely defused.
-  .regex(/^[@$a-zA-Z_][a-zA-Z0-9_-]*(\.[@$a-zA-Z_][a-zA-Z0-9_-]*)*$/, {
-    message: 'A dotted property path, e.g. "value" or "data.items"',
+  .regex(/^([@$a-zA-Z_][a-zA-Z0-9_-]*|\d+)(\.([@$a-zA-Z_][a-zA-Z0-9_-]*|\d+))*$/, {
+    message: 'A dotted property path, e.g. "value", "data.items" or "emails.0.value"',
   })
   .refine(
     (v) => !/(^|\.)(constructor|__proto__|prototype)(\.|$)/.test(v),
@@ -128,13 +129,42 @@ const paging = z.discriminatedUnion('style', [
      */
     totalAt: jsonPath.optional(),
   }),
+  /**
+   * Numbered pages: `?page=1&per_page=100`, then `page=2`, and so on.
+   *
+   * Without `totalAt` the walk ends at the first EMPTY page, not the first
+   * short one. A server that caps `per_page` below `pageSize` numbers its
+   * pages by its own size, so asking for the next number is still right, and
+   * a short page is not yet proof of the end.
+   */
+  z.object({
+    style: z.literal('page'),
+    pageParam: trimmed.default('page'),
+    sizeParam: trimmed.default('per_page'),
+    pageSize: z.number().int().positive().max(1000).default(100),
+    /** The number of the first page: 0 (Mattermost) or 1 (most others). */
+    firstPage: z.union([z.literal(0), z.literal(1)]).default(1),
+    /** Where the response states the collection's item count. */
+    totalAt: jsonPath.optional(),
+  }),
+  /**
+   * The next page's URL in the `Link` response header, `rel="next"`
+   * (RFC 8288). GitHub, Okta and Freshservice page this way.
+   */
+  z.object({ style: z.literal('link') }),
 ]);
+
+/**
+ * Query parameters. Values may hold placeholders; one that renders to nothing
+ * leaves its parameter out.
+ */
+const queryMap = z.record(z.string(), z.string()).default({});
 
 /** Reads a collection. */
 const listSpec = z.object({
   path: requestPath,
-  /** Fixed query parameters, e.g. `{"$select": "id,displayName"}`. */
-  query: z.record(z.string(), z.string()).default({}),
+  /** Query parameters, e.g. `{"$select": "id,displayName"}`. */
+  query: queryMap,
   /**
    * Where the array of items is. Absent means the body IS the array.
    */
@@ -147,9 +177,19 @@ const writeSpec = <T extends z.ZodType<string>>(method: T) =>
   z.object({
     method,
     path: requestPath,
-    query: z.record(z.string(), z.string()).default({}),
-    /** A templated JSON body. Absent sends none. */
+    query: queryMap,
+    /**
+     * Headers for this request only, e.g. `If-Match`. Templated like the
+     * query. The credential is never a placeholder.
+     */
+    headers: z.record(z.string(), z.string()).default({}),
+    /** A templated body. Absent sends none. */
     body: z.unknown().optional(),
+    /**
+     * `json`, or `form` for `application/x-www-form-urlencoded`. A form body
+     * is one flat object of scalars.
+     */
+    bodyFormat: z.enum(['json', 'form']).default('json'),
     /**
      * Where the target's identifier for the new object is in the response.
      * Only meaningful on `create`.
@@ -167,9 +207,12 @@ const writeSpec = <T extends z.ZodType<string>>(method: T) =>
  */
 const readOneSpec = z.object({
   path: requestPath,
-  query: z.record(z.string(), z.string()).default({}),
+  query: queryMap,
   itemAt: jsonPath.optional(),
 });
+
+/** `at` equals `equals`, compared as text. */
+const fieldEquals = z.object({ at: jsonPath, equals: z.string() }).strict();
 
 /**
  * How a target's own field names map to the attribute names Syntra uses.
@@ -208,6 +251,35 @@ const accountResource = z.object({
   provenance: provenanceSelector.optional(),
   /** Target field → Syntra attribute, for everything else worth reading. */
   fields: fieldMap.default({}),
+  /**
+   * Where enabled state is, for a target that does not spell it as a
+   * boolean: the account is enabled when the value at `at` equals `equals`.
+   * Mattermost's is `{"at": "delete_at", "equals": "0"}`. Read as the
+   * `enabled` attribute.
+   */
+  enabledWhen: fieldEquals.optional(),
+  /**
+   * Items that are not accounts Syntra manages (bots, service users), left
+   * out of every read. An item matching any one rule is excluded.
+   */
+  exclude: z.array(fieldEquals).max(20).default([]),
+  /**
+   * Looks accounts up by correlation key before a create:
+   * `GET /users/username/{{correlationKey}}` or `GET /users?email={{correlationKey}}`.
+   *
+   * Optional. Without it the create collision check enumerates the whole
+   * collection. The answer may be a list (at `itemsAt`) or, with no paging,
+   * one object; a status in `failures.notFound` means none. Every item is
+   * still compared against `correlationAt` exactly, so a fuzzy search
+   * endpoint is safe to name.
+   */
+  find: listSpec.optional(),
+  /**
+   * The target's create always makes an ENABLED account (Mattermost's does).
+   * A create meant to be disabled, such as a pre-hire, is then followed by
+   * `disable`.
+   */
+  createsEnabled: z.boolean().default(false),
   /** Reads one account by anchor, for read-back. See `readOneSpec`. */
   read: readOneSpec.optional(),
   create: writeSpec(accountMethod).optional(),
@@ -288,7 +360,29 @@ const auth = z.discriminatedUnion('type', [
     }),
     clientId: trimmed,
     scope: trimmed.optional(),
+    /**
+     * `body` posts the client id and secret as form fields
+     * (`client_secret_post`); `basic` sends them as HTTP Basic
+     * (`client_secret_basic`), which some token endpoints require.
+     */
+    clientAuth: z.enum(['body', 'basic']).default('body'),
+    /** Extra token request fields, e.g. `{"audience": "https://api.example.com"}`. */
+    tokenParams: z
+      .record(z.string().trim().min(1), z.string())
+      .default({})
+      .refine(
+        (params) =>
+          !Object.keys(params).some((key) =>
+            ['grant_type', 'client_id', 'client_secret', 'scope'].includes(key.toLowerCase()),
+          ),
+        { message: 'grant_type, client_id, client_secret and scope are set by Syntra' },
+      ),
   }),
+  /**
+   * The credential as a query parameter, e.g. `?api_key=...`. Only for an API
+   * that accepts nothing else: a URL ends up in proxy and server logs.
+   */
+  z.object({ type: z.literal('query'), param: trimmed }),
 ]);
 
 /**
@@ -337,6 +431,22 @@ const bodyFailure = z
  * that answers 200 with an error body in it declares `body`; see
  * `bodyFailure`.
  */
+/**
+ * How a target explains a refusal it answers with a `4xx`.
+ *
+ * Mattermost answers a taken username with `400` and
+ * `{"message": "An account with that username already exists."}`. By status
+ * alone that is `rejected`; `conflictWhen` makes it the `conflict` it is.
+ * Applies only to a status the lists above leave as `rejected`.
+ */
+const errorFailure = z
+  .object({
+    messageAt: jsonPath,
+    conflictWhen: z.array(messageFragment).max(20).default([]),
+    notFoundWhen: z.array(messageFragment).max(20).default([]),
+  })
+  .strict();
+
 const failureMap = z
   .object({
     unauthorized: z.array(z.number().int()).default([401, 403]),
@@ -344,6 +454,7 @@ const failureMap = z
     conflict: z.array(z.number().int()).default([409]),
     throttled: z.array(z.number().int()).default([429]),
     body: bodyFailure.optional(),
+    error: errorFailure.optional(),
   })
   .default({
     unauthorized: [401, 403],
@@ -394,6 +505,7 @@ export type ListSpec = z.output<typeof listSpec>;
 export type WriteSpec = z.output<ReturnType<typeof writeSpec>>;
 export type ReadOneSpec = z.output<typeof readOneSpec>;
 export type BodyFailureSpec = z.output<typeof bodyFailure>;
+export type FieldEquals = z.output<typeof fieldEquals>;
 
 /**
  * The stored configuration of one `httpJson` target.

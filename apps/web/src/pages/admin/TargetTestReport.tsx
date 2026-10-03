@@ -1,4 +1,4 @@
-import { Alert, StateBadge, Status } from '@syntra/ui';
+import { Alert, StateBadge, Status, Table } from '@syntra/ui';
 import { StaleBadge } from './DraftState.js';
 
 export interface ConnectorRight {
@@ -7,10 +7,23 @@ export interface ConnectorRight {
   detail: string;
 }
 
+export interface AccountPreview {
+  accounts: {
+    anchor: string;
+    name: string;
+    enabled: boolean | null;
+    attributes: Record<string, string[]>;
+  }[];
+  skipped: number;
+  unreadFields: string[];
+}
+
 export interface TestResult {
   ok: boolean;
   message: string;
   rights?: ConnectorRight[];
+  /** REST API targets: the first page's accounts as Syntra reads them. */
+  preview?: AccountPreview;
 }
 
 const RIGHT_LABELS: Record<ConnectorRight['right'], string> = {
@@ -64,6 +77,67 @@ export function RightsReport({ rights }: { rights: ConnectorRight[] }) {
 }
 
 /**
+ * The first accounts of a REST API target, mapped by its connector document.
+ *
+ * What a document author checks before saving: that `anchorAt` finds an id,
+ * that the fields land on the right attribute names, that enabled state reads
+ * as it should, and which of the target's fields nothing reads yet.
+ */
+export function AccountPreviewReport({ preview }: { preview: AccountPreview }) {
+  return (
+    <div className="space-y-2">
+      <h5 className="font-medium text-ink">First accounts read</h5>
+      {preview.accounts.length === 0 ? (
+        <p className="text-muted">No accounts on the first page.</p>
+      ) : (
+        <Table tight label="First accounts read">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Id</th>
+              <th scope="col">Enabled</th>
+              <th scope="col">Attributes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.accounts.map((account) => (
+              <tr key={account.anchor}>
+                <th scope="row">{account.name}</th>
+                <td className="font-mono">{account.anchor}</td>
+                <td>
+                  {account.enabled === null ? (
+                    <Status tone="warning" glyph="alert">Not read</Status>
+                  ) : account.enabled ? (
+                    'Yes'
+                  ) : (
+                    'No'
+                  )}
+                </td>
+                <td className="font-mono text-xs">
+                  {Object.entries(account.attributes)
+                    .map(([name, values]) => `${name}: ${values.join(', ')}`)
+                    .join('; ')}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+      {preview.skipped > 0 && (
+        <p className="text-muted">
+          {preview.skipped} skipped: excluded, or no id at <code>anchorAt</code>.
+        </p>
+      )}
+      {preview.unreadFields.length > 0 && (
+        <p className="text-muted">
+          Not read: <span className="font-mono">{preview.unreadFields.join(', ')}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * The result of the last connection test, shown in the connection stage it
  * belongs to.
  *
@@ -90,6 +164,7 @@ export function TestReport({ result, stale = false }: { result: TestResult; stal
             <span className="text-muted">{result.message}</span>
           </p>
           {result.rights && result.rights.length > 0 && <RightsReport rights={result.rights} />}
+          {result.preview && <AccountPreviewReport preview={result.preview} />}
         </>
       )}
     </div>

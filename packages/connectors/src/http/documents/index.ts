@@ -1,6 +1,7 @@
 import type { HttpConnectorDocument } from '../document.js';
 import { entraIdDocument } from './entra-id.js';
 import { googleWorkspaceDocument } from './google-workspace.js';
+import { mattermostDocument } from './mattermost.js';
 import { snipeItDocument } from './snipe-it.js';
 
 /**
@@ -20,7 +21,8 @@ import { snipeItDocument } from './snipe-it.js';
 export const BUILTIN_CONNECTOR_DOCUMENTS: Record<string, HttpConnectorDocument> = {
   'entra-id': entraIdDocument,
   'google-workspace': googleWorkspaceDocument,
+  mattermost: mattermostDocument,
   'snipe-it': snipeItDocument,
 };
 
-export { entraIdDocument, googleWorkspaceDocument, snipeItDocument };
+export { entraIdDocument, googleWorkspaceDocument, mattermostDocument, snipeItDocument };

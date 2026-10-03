@@ -851,6 +851,62 @@ describe('testTargetConfiguration', () => {
     }
   });
 
+  it('refuses to borrow a REST credential for another host or another auth', async () => {
+    // The borrowed credential is sent to the document's `baseUrl`, or posted
+    // to its `tokenUrl`, so either changing would hand it to whoever answers.
+    const document = {
+      name: 'Example',
+      version: 1,
+      baseUrl: 'https://api.example.com/v1',
+      auth: { type: 'oauth2', tokenUrl: 'https://login.example.com/token', clientId: 'client-1' },
+      account: { list: { path: '/users' }, anchorAt: 'id' },
+    };
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'httpJson',
+      name: 'REST',
+      config: { document },
+      bindPassword: 'a-client-secret',
+    });
+    for (const requested of [
+      { ...document, baseUrl: 'https://attacker.example/v1' },
+      { ...document, auth: { ...document.auth, tokenUrl: 'https://attacker.example/token' } },
+      { ...document, auth: { type: 'query', param: 'key' } },
+    ]) {
+      const result = await testTargetConfiguration(tenantId, provider, {
+        type: 'httpJson',
+        config: { document: requested },
+        borrowFromTargetId: id,
+      });
+      expect(result.message).toMatch(/only be reused by a target of the same type/);
+    }
+  });
+
+  it('borrows a REST credential when only the paths changed', async () => {
+    // A closed loopback port: past the borrow, failing on the connection.
+    const document = {
+      name: 'Example',
+      version: 1,
+      baseUrl: 'https://127.0.0.1:1/v1',
+      allowPrivateAddresses: true,
+      timeoutMs: 2_000,
+      auth: { type: 'bearer' },
+      account: { list: { path: '/users' }, anchorAt: 'id' },
+    };
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'httpJson',
+      name: 'REST',
+      config: { document },
+      bindPassword: 'a-token',
+    });
+    const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'httpJson',
+      config: { document: { ...document, account: { ...document.account, list: { path: '/people' } } } },
+      borrowFromTargetId: id,
+    });
+    expect(result.message).not.toMatch(/only be reused/);
+    expect(result.message).not.toMatch(/no saved credential/);
+  });
+
   it('refuses to borrow for a different URL', async () => {
     // The whole point: a request naming a saved target without a password is
     // asking Syntra to send that password somewhere, and *where* is the
