@@ -74,10 +74,9 @@ export default defineConfig({
     // the Host header, and Vite's string-shorthand proxy rewrites it to the
     // target, which makes every request look like an unknown tenant.
     proxy: Object.fromEntries(
-      ['/api', '/saml', '/oidc', '/federation', '/health'].map((prefix) => [
-        prefix,
-        { target: apiTarget, changeOrigin: false },
-      ]),
+      ['/api', '/saml', '/oidc', '/federation', '/scim', '/health', '/metrics'].map(
+        (prefix) => [prefix, { target: apiTarget, changeOrigin: false }],
+      ),
     ),
   },
 });

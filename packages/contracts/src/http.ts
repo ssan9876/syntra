@@ -18,13 +18,19 @@
  * HTML, and every client parsing that as JSON would report a syntax error
  * instead of a 404. One list, imported by both, is the only way this stays
  * true as prefixes are added.
+ *
+ * `/scim` and `/metrics` were once missing. An unknown SCIM path, and
+ * `/metrics` on an install with no METRICS_TOKEN, were answered with 200 and
+ * the console's HTML.
  */
 export const SERVER_PATH_PREFIXES = [
   '/api',
   '/saml',
   '/oidc',
   '/federation',
+  '/scim',
   '/health',
+  '/metrics',
 ] as const;
 
 /**

@@ -9,6 +9,22 @@ describe('isServerPath', () => {
     }
   });
 
+  it('claims every root prefix the API registers', () => {
+    // apps/api/src/app.ts mounts routes under exactly these. One left out is
+    // answered by the production fallback with 200 and the console's HTML.
+    for (const path of [
+      '/api/admin/users',
+      '/saml/sso',
+      '/oidc/token',
+      '/federation/start',
+      '/scim/v2/Users',
+      '/health/ready',
+      '/metrics',
+    ]) {
+      expect(isServerPath(path), path).toBe(true);
+    }
+  });
+
   it('leaves the application its own paths', () => {
     for (const path of ['/', '/login', '/admin/users', '/catalog/abc']) {
       expect(isServerPath(path)).toBe(false);
@@ -22,5 +38,7 @@ describe('isServerPath', () => {
     expect(isServerPath('/apiary')).toBe(false);
     expect(isServerPath('/healthcare')).toBe(false);
     expect(isServerPath('/oidcish')).toBe(false);
+    expect(isServerPath('/scimitar')).toBe(false);
+    expect(isServerPath('/metricsboard')).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { SerialClient } from './serial-client.js';
 
 /**
  * Builds the client on first use rather than at import.
@@ -31,6 +32,8 @@ function createClient(): PrismaClient {
   const adapter = new PrismaPg(
     {
       connectionString: databaseUrl.toString(),
+      // One query at a time per connection. See serial-client.ts.
+      Client: SerialClient,
       ...(Number.isInteger(configuredLimit) && configuredLimit > 0
         ? { max: configuredLimit }
         : {}),
