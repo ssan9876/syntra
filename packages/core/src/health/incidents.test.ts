@@ -321,7 +321,11 @@ describe('listIncidents', () => {
     }
 
     it('names the target and how many runs in a row, and links the latest run', async () => {
-      const target = await aTarget({ name: 'fmx.ssander.xyz', type: 'scim', config: {} });
+      const target = await aTarget({
+        name: 'fmx.ssander.xyz',
+        type: 'scim2',
+        config: { baseUrl: 'https://fmx.ssander.xyz/scim/v2' },
+      });
       for (const h of [5, 4, 3, 2]) await aRun(target.id, 'partially_applied', h, ['applied', 'failed']);
       const latestRun = await aRun(target.id, 'partially_applied', 1, ['applied', 'failed', 'failed']);
 
