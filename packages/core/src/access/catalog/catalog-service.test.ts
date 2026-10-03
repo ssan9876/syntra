@@ -72,6 +72,33 @@ describe('the entries', () => {
     }
   });
 
+  it('render with their example values, to https URLs', () => {
+    // The examples are what the form shows greyed out, so they must fill
+    // every template. An entity ID need not be a URL (`box.net`), but one
+    // that is must be https, like every endpoint.
+    const isHttps = (value: string, label: string) =>
+      expect(new URL(value).protocol, label).toBe('https:');
+    for (const entry of CATALOG_ENTRIES) {
+      const examples = Object.fromEntries(entry.variables.map((v) => [v.key, v.example]));
+      for (const variable of entry.variables) {
+        expect(variable.example.trim(), `${entry.key}.${variable.key}`).not.toBe('');
+      }
+      const render = (template: string) => fill(template, examples);
+      const urls = [
+        entry.launchUrl,
+        ...(entry.saml?.acsUrls ?? []),
+        entry.saml?.sloUrl,
+        ...(entry.oidc?.redirectUris ?? []),
+        ...(entry.oidc?.postLogoutRedirectUris ?? []),
+      ].filter((url): url is string => url !== undefined);
+      for (const url of urls) isHttps(render(url), `${entry.key}: ${url}`);
+      if (entry.saml) {
+        const entityId = render(entry.saml.spEntityId);
+        if (entityId.includes('://')) isHttps(entityId, `${entry.key}: entity ID`);
+      }
+    }
+  });
+
   it('is sorted by name when listed', () => {
     const names = listCatalog().map((entry) => entry.name);
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
@@ -250,6 +277,21 @@ describe('createFromCatalog', () => {
     // A half-created application is an entry in the console that cannot be
     // signed in to and that nothing marks as broken.
     expect(await withTenant(tenantId, (tx) => tx.application.count())).toBe(0);
+  });
+
+  it('creates every entry from its example values', async () => {
+    // One tenant holding them all also proves no two entries share an
+    // entity ID.
+    for (const entry of CATALOG_ENTRIES) {
+      const variables = Object.fromEntries(entry.variables.map((v) => [v.key, v.example]));
+      const created = await withTenant(tenantId, (tx) =>
+        createFromCatalog(tx, { key: entry.key, variables }),
+      );
+      expect(created.protocol, entry.key).toBe(entry.saml ? 'saml' : 'oidc');
+    }
+    expect(await withTenant(tenantId, (tx) => tx.application.count())).toBe(
+      CATALOG_ENTRIES.length,
+    );
   });
 
   it('leaves the SP certificate empty for the administrator to supply', async () => {
