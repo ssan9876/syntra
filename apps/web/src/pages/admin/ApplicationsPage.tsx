@@ -17,13 +17,12 @@ import {
   Table,
   useToast,
 } from '@syntra/ui';
-// The file, not the package index: the index carries every zod schema.
-import { isLaunchableUrl } from '@syntra/contracts/src/launchable-url.js';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { formFieldErrors, summaryErrors } from './RecordPanel.js';
 import { PageHeader } from './PageHeader.js';
 import { StatCard, StatGrid } from '../../components/StatCards.js';
+import { AddApplicationByHand } from './AddApplicationByHand.js';
 
 interface CatalogEntry {
   key: string;
@@ -265,78 +264,6 @@ export function ApplicationsPage() {
 
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
-  const [description, setDescription] = useState('');
-  const [launchUrl, setLaunchUrl] = useState('');
-  const [category, setCategory] = useState('');
-  const [slugError, setSlugError] = useState<string | null>(null);
-  const [launchUrlError, setLaunchUrlError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  /** Every other per-field refusal the server names, against its own box. */
-  const [formFields, setFormFields] = useState<Record<string, string>>({});
-  const toast = useToast();
-
-  const dirty = [name, slug, description, launchUrl, category].some((v) => v !== '');
-
-  async function create() {
-    setSlugError(null);
-    setFormError(null);
-    setFormFields({});
-
-    // Checked here too, not only by the API: `z.string().url()` accepts
-    // `javascript:`, and this is the URL the portal navigates a signed-in
-    // user's browser to when they click the tile. The server still refuses a
-    // bad scheme on its own — this just means the administrator learns before
-    // submitting rather than after.
-    if (!isLaunchableUrl(launchUrl)) {
-      setLaunchUrlError('Must be an http or https URL');
-      return;
-    }
-    setLaunchUrlError(null);
-
-    setBusy(true);
-    try {
-      await api('/api/admin/applications', {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          slug,
-          launchUrl,
-          ...(description ? { description } : {}),
-          // Omitted when blank rather than sent as ''. The column is nullable
-          // and an empty string would be a category whose heading is nothing.
-          ...(category.trim() ? { category: category.trim() } : {}),
-        }),
-      });
-      setAdding(false);
-      setName('');
-      setSlug('');
-      setDescription('');
-      setLaunchUrl('');
-      setCategory('');
-      toast({ tone: 'success', title: 'Application saved' });
-      reload();
-    } catch (cause) {
-      const marked = formFieldErrors(cause);
-      if (cause instanceof ApiError && cause.problem.status === 409) {
-        setSlugError(`Slug ${slug} is already in use.`);
-      } else if (Object.keys(marked).length > 0) {
-        setFormFields(marked);
-      } else {
-        setFormError(
-          cause instanceof ApiError
-            ? (cause.problem.detail ?? cause.problem.title)
-            : `${name || 'Application'} was not saved.`,
-        );
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <>
       <PageHeader
@@ -397,98 +324,13 @@ export function ApplicationsPage() {
       )}
 
       {adding && (
-        <Panel title="New application">
-          <form
-            noValidate
-            className="space-y-4 p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void create();
-            }}
-          >
-            <ErrorSummary
-              errors={summaryErrors(
-                {
-                  ...formFields,
-                  ...(slugError ? { slug: slugError } : {}),
-                  ...(launchUrlError ? { launchUrl: launchUrlError } : {}),
-                },
-                {
-                  name: 'Name',
-                  slug: 'Slug',
-                  description: 'Description',
-                  category: 'Category',
-                  launchUrl: 'Launch URL',
-                },
-                formError,
-              )}
-              {...(!slugError && !launchUrlError && Object.keys(formFields).length === 0
-                ? { title: 'Not saved' }
-                : {})}
-            />
-            <div className="grid max-w-4xl gap-4 sm:grid-cols-2">
-              <Field
-                name="name"
-                label="Name"
-                value={name}
-                onChange={setName}
-                required
-                error={formFields.name}
-              />
-              <Field
-                name="slug"
-                label="Slug"
-                value={slug}
-                onChange={setSlug}
-                warning={
-                  // Only once they have typed one. An empty field has nothing
-                  // to warn about, and a permanent caption under an empty box
-                  // is the hint this replaced.
-                  slug ? 'Used in URLs; cannot be changed later' : undefined
-                }
-                required
-                error={slugError ?? formFields.slug}
-              />
-              <Field
-                name="launchUrl"
-                label="Launch URL"
-                value={launchUrl}
-                onChange={(v) => {
-                  setLaunchUrl(v);
-                  if (launchUrlError) setLaunchUrlError(null);
-                }}
-                required
-                placeholder="https://"
-                error={launchUrlError ?? formFields.launchUrl}
-              />
-              <Field
-                name="category"
-                label="Category"
-                value={category}
-                onChange={setCategory}
-                error={formFields.category}
-              />
-              <Field
-                name="description"
-                label="Description"
-                value={description}
-                onChange={setDescription}
-                className="sm:col-span-2"
-                error={formFields.description}
-              />
-            </div>
-            <FormActions
-              status={dirty ? <span className="text-muted">Unsaved changes</span> : null}
-            >
-              <Button type="button" variant="secondary" onClick={() => setAdding(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" loading={busy}>
-                Save application
-              </Button>
-            </FormActions>
-          </form>
-        </Panel>
+        <AddApplicationByHand
+          onCancel={() => setAdding(false)}
+          onCreated={() => {
+            setAdding(false);
+            reload();
+          }}
+        />
       )}
 
       <div className="mt-6">

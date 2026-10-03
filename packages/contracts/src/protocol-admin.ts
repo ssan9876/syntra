@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isProtocolEndpoint } from './protocol.js';
+import { applicationSlug, isLaunchableUrl } from './access.js';
 
 /**
  * Every URL an administrator may register as a protocol endpoint.
@@ -340,3 +341,101 @@ export const claimMappingSetRequest = z
     path: ['mappings'],
   });
 export type ClaimMappingSetRequest = z.input<typeof claimMappingSetRequest>;
+
+/**
+ * "New application" in one step: the tile, how people sign in, and which
+ * claims it receives.
+ *
+ * SAML takes the service provider's metadata (pasted or by URL), or its
+ * entity ID, ACS URL and Name ID format typed in. The same signing rule as
+ * `samlConfigRequest` applies: requiring signed requests needs a certificate,
+ * from the metadata or pasted here.
+ */
+export const setupApplicationRequest = z
+  .object({
+    name: z.string().trim().min(1).max(128),
+    /** Absent derives a free one from the name. */
+    slug: applicationSlug.optional(),
+    description: z.string().max(1024).optional(),
+    category: z.string().trim().max(64).optional(),
+    launchUrl: z
+      .string()
+      .max(2048)
+      .refine(isLaunchableUrl, { message: 'Must be an http or https URL' })
+      .optional(),
+    protocol: z.enum(['bookmark', 'saml', 'oidc']),
+    saml: z
+      .object({
+        metadataXml: z.string().min(1).max(1_048_576).optional(),
+        metadataUrl: endpoint.optional(),
+        spEntityId: z.string().trim().min(1).max(1024).optional(),
+        acsUrls: z.array(endpoint).max(16).default([]),
+        nameIdFormat: z
+          .string()
+          .max(256)
+          .default('urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress'),
+        spCertificates: z.array(pemCertificate).max(8).default([]),
+        wantAuthnRequestsSigned: z.boolean().default(true),
+      })
+      .strict()
+      .optional(),
+    oidc: z
+      .object({
+        redirectUris: z.array(endpoint).min(1).max(16),
+        scopes: z.array(z.string().max(64)).max(32).default(['openid', 'profile', 'email']),
+      })
+      .strict()
+      .optional(),
+    /**
+     * `standard` is email, first name, last name, display name and groups.
+     * `set` stamps a saved claim set of the same protocol.
+     */
+    claims: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('standard') }),
+        z.object({ kind: z.literal('set'), setId: z.string().uuid() }),
+        z.object({ kind: z.literal('none') }),
+      ])
+      .default({ kind: 'standard' }),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.protocol === 'bookmark' && v.launchUrl === undefined) {
+      ctx.addIssue({ code: 'custom', path: ['launchUrl'], message: 'A link needs a launch URL' });
+    }
+    if (v.protocol === 'oidc') {
+      if (v.oidc === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['oidc', 'redirectUris'], message: 'Add at least one redirect URI' });
+      }
+      if (v.launchUrl === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['launchUrl'], message: 'An OpenID Connect application needs a launch URL' });
+      }
+    }
+    if (v.protocol === 'saml') {
+      const saml = v.saml;
+      const fromMetadata = saml?.metadataXml !== undefined || saml?.metadataUrl !== undefined;
+      if (saml === undefined || (!fromMetadata && saml.spEntityId === undefined)) {
+        ctx.addIssue({ code: 'custom', path: ['saml', 'spEntityId'], message: 'Add the entity ID, or the metadata' });
+      }
+      if (saml !== undefined && !fromMetadata && saml.acsUrls.length === 0) {
+        ctx.addIssue({ code: 'custom', path: ['saml', 'acsUrls'], message: 'Add at least one ACS URL' });
+      }
+      if (saml !== undefined && !fromMetadata && saml.wantAuthnRequestsSigned && saml.spCertificates.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['saml', 'spCertificates'],
+          message: 'Requiring signed requests needs the service provider’s signing certificate.',
+        });
+      }
+    }
+  });
+export type SetupApplicationRequest = z.input<typeof setupApplicationRequest>;
+
+export const setupApplicationResponse = z.object({
+  applicationId: z.string().uuid(),
+  slug: z.string(),
+  name: z.string(),
+  protocol: z.enum(['saml', 'oidc', 'bookmark']),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
+});

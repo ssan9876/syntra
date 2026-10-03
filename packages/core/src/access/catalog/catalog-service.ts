@@ -47,7 +47,7 @@ export class EntityIdTakenError extends Error {
 
 export class SlugTakenError extends Error {
   constructor(readonly slug: string) {
-    super(`an application called "${slug}" already exists`);
+    super(`Slug ${slug} is already in use.`);
     this.name = 'SlugTakenError';
   }
 }
@@ -124,14 +124,69 @@ export interface CreatedFromCatalog {
   clientSecret?: string;
 }
 
+const BASIC_NAME_FORMAT = 'urn:oasis:names:tc:SAML:2.0:attrname-format:basic';
+
+/**
+ * The claims "New application" starts an application with unless told
+ * otherwise. OpenID Connect already sends email and name through the `email`
+ * and `profile` scopes, so it only adds groups.
+ */
+export function standardClaims(protocol: 'saml' | 'oidc'): CatalogClaim[] {
+  if (protocol === 'oidc') {
+    return [{ claimName: 'groups', sourceKind: 'groups', multiValued: true, releaseScope: 'profile' }];
+  }
+  return [
+    { claimName: 'email', nameFormat: BASIC_NAME_FORMAT, sourceKind: 'user', sourceField: 'email' },
+    { claimName: 'firstName', nameFormat: BASIC_NAME_FORMAT, sourceKind: 'person', sourceField: 'givenName' },
+    { claimName: 'lastName', nameFormat: BASIC_NAME_FORMAT, sourceKind: 'person', sourceField: 'familyName' },
+    { claimName: 'displayName', nameFormat: BASIC_NAME_FORMAT, sourceKind: 'user', sourceField: 'displayName' },
+    { claimName: 'groups', nameFormat: BASIC_NAME_FORMAT, sourceKind: 'groups', multiValued: true },
+  ];
+}
+
+/**
+ * A fully rendered application: what a catalog entry becomes once its
+ * variables are filled in, and what the one-step "New application" form
+ * submits directly.
+ */
+export interface ApplicationDefinition {
+  name: string;
+  /** Used as given, refused when taken. Absent derives a free one from the name. */
+  slug?: string | undefined;
+  description?: string | undefined;
+  category?: string | undefined;
+  launchUrl?: string | undefined;
+  /** Where the definition came from, written to `Application.catalogKey`. */
+  catalogKey?: string | undefined;
+  saml?:
+    | {
+        spEntityId: string;
+        acsUrls: string[];
+        defaultAcsUrl?: string | null | undefined;
+        nameIdFormat: string;
+        nameIdClaim?: string | null | undefined;
+        sloUrl?: string | null | undefined;
+        sloBinding?: 'HTTP-POST' | 'HTTP-Redirect' | undefined;
+        /** PEM. Empty until the administrator pastes one or imports metadata. */
+        spCertificates?: string[] | undefined;
+        encryptionCertificate?: string | null | undefined;
+        wantAuthnRequestsSigned?: boolean | undefined;
+        claims: CatalogClaim[];
+      }
+    | undefined;
+  oidc?:
+    | {
+        redirectUris: string[];
+        postLogoutRedirectUris?: string[] | undefined;
+        scopes: string[];
+        claims: CatalogClaim[];
+      }
+    | undefined;
+}
+
 /**
  * Creates an application from a catalog entry, with its protocol
  * configuration and claim mappings.
- *
- * One transaction. A half-created application — the row present, the SAML
- * config missing — is an entry in the console that cannot be signed in to and
- * that nothing marks as broken; the administrator's next move would be to
- * create it again and hit the slug clash.
  *
  * **The entry's values are COPIED, not referenced.** `catalogKey` records
  * where they came from and nothing reads the entry again. An entry corrected
@@ -143,26 +198,88 @@ export async function createFromCatalog(
   input: CreateFromCatalogInput,
 ): Promise<CreatedFromCatalog> {
   const entry = catalogEntry(input.key);
+  return createApplicationFromDefinition(tx, renderEntry(entry, input.variables, input.name));
+}
+
+/**
+ * An entry with its variables filled in. Throws `CatalogVariableMissingError`
+ * before anything is written, so a hole never reaches an entity ID.
+ */
+export function renderEntry(
+  entry: CatalogEntry,
+  variables: Record<string, string>,
+  name?: string | undefined,
+): ApplicationDefinition {
+  const render = (template: string) => fill(template, variables);
+  return {
+    name: name?.trim() || entry.name,
+    description: entry.description,
+    catalogKey: entry.key,
+    ...(entry.launchUrl ? { launchUrl: render(entry.launchUrl) } : {}),
+    ...(entry.saml
+      ? {
+          saml: {
+            spEntityId: render(entry.saml.spEntityId),
+            acsUrls: entry.saml.acsUrls.map(render),
+            nameIdFormat: entry.saml.nameIdFormat,
+            nameIdClaim: entry.saml.nameIdClaim ?? null,
+            sloUrl: entry.saml.sloUrl ? render(entry.saml.sloUrl) : null,
+            sloBinding: entry.saml.sloBinding ?? 'HTTP-POST',
+            ...(entry.saml.wantAuthnRequestsSigned === undefined
+              ? {}
+              : { wantAuthnRequestsSigned: entry.saml.wantAuthnRequestsSigned }),
+            claims: entry.saml.claims,
+          },
+        }
+      : {}),
+    ...(entry.oidc
+      ? {
+          oidc: {
+            redirectUris: entry.oidc.redirectUris.map(render),
+            postLogoutRedirectUris: (entry.oidc.postLogoutRedirectUris ?? []).map(render),
+            scopes: entry.oidc.scopes,
+            claims: entry.oidc.claims,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Creates an application with its protocol configuration and claim mappings.
+ *
+ * One transaction. A half-created application -- the row present, the SAML
+ * config missing -- is an entry in the console that cannot be signed in to and
+ * that nothing marks as broken; the administrator's next move would be to
+ * create it again and hit the slug clash.
+ */
+export async function createApplicationFromDefinition(
+  tx: TenantClient,
+  definition: ApplicationDefinition,
+): Promise<CreatedFromCatalog> {
   const tenantId = await currentTenant(tx);
 
-  // Rendered BEFORE anything is written. `fill` throws on a variable nobody
-  // supplied, and a throw here leaves no rows behind rather than an
-  // application whose entity ID has a hole in it.
-  const render = (template: string) => fill(template, input.variables);
-
-  const name = input.name?.trim() || entry.name;
-  const slug = await freeSlug(tx, name);
-  const protocol: 'saml' | 'oidc' | 'bookmark' = entry.saml
+  const name = definition.name.trim();
+  let slug: string;
+  if (definition.slug) {
+    if (await tx.application.findFirst({ where: { slug: definition.slug }, select: { id: true } })) {
+      throw new SlugTakenError(definition.slug);
+    }
+    slug = definition.slug;
+  } else {
+    slug = await freeSlug(tx, name);
+  }
+  const protocol: 'saml' | 'oidc' | 'bookmark' = definition.saml
     ? 'saml'
-    : entry.oidc
+    : definition.oidc
       ? 'oidc'
       : 'bookmark';
 
   // Checked BEFORE anything is written, and by name. The unique constraint
   // would catch it either way, but as a driver error with no application named
   // in it and a half-created row already committed inside this transaction.
-  if (entry.saml) {
-    const entityId = render(entry.saml.spEntityId);
+  if (definition.saml) {
+    const entityId = definition.saml.spEntityId;
     const clash = await tx.samlConfig.findFirst({
       where: { spEntityId: entityId },
       select: { application: { select: { name: true } } },
@@ -173,49 +290,52 @@ export async function createFromCatalog(
   const application = await createApplication(tx, {
     name,
     slug,
-    description: entry.description,
     type: protocol,
-    ...(entry.launchUrl ? { launchUrl: render(entry.launchUrl) } : {}),
+    ...(definition.description ? { description: definition.description } : {}),
+    ...(definition.category ? { category: definition.category } : {}),
+    ...(definition.launchUrl ? { launchUrl: definition.launchUrl } : {}),
   });
-  await tx.application.update({
-    where: { id: application.id },
-    data: { catalogKey: entry.key },
-  });
+  if (definition.catalogKey) {
+    await tx.application.update({
+      where: { id: application.id },
+      data: { catalogKey: definition.catalogKey },
+    });
+  }
 
   const claims: { protocol: 'saml' | 'oidc'; claims: CatalogClaim[] }[] = [];
 
-  if (entry.saml) {
+  if (definition.saml) {
+    const saml = definition.saml;
     await upsertSamlConfig(tx, application.id, {
-      spEntityId: render(entry.saml.spEntityId),
-      acsUrls: entry.saml.acsUrls.map(render),
-      defaultAcsUrl: entry.saml.acsUrls[0] ? render(entry.saml.acsUrls[0]) : null,
+      spEntityId: saml.spEntityId,
+      acsUrls: saml.acsUrls,
+      defaultAcsUrl: saml.defaultAcsUrl ?? saml.acsUrls[0] ?? null,
       acsBinding: 'HTTP-POST',
-      nameIdFormat: entry.saml.nameIdFormat,
-      nameIdClaim: entry.saml.nameIdClaim ?? null,
-      // Empty: the catalog knows the SP's URLs and cannot know its signing
-      // certificate, which is per-installation. The administrator pastes it,
-      // or imports the SP's metadata, before the first sign-in.
-      spCertificates: [],
-      ...(entry.saml.wantAuthnRequestsSigned === undefined
+      nameIdFormat: saml.nameIdFormat,
+      nameIdClaim: saml.nameIdClaim ?? null,
+      // A catalog entry cannot know the SP's signing certificate, which is
+      // per-installation; the administrator pastes it or imports metadata
+      // before the first sign-in.
+      spCertificates: saml.spCertificates ?? [],
+      ...(saml.wantAuthnRequestsSigned === undefined
         ? {}
-        : { wantAuthnRequestsSigned: entry.saml.wantAuthnRequestsSigned }),
+        : { wantAuthnRequestsSigned: saml.wantAuthnRequestsSigned }),
       encryptAssertions: false,
-      encryptionCertificate: null,
-      sloUrl: entry.saml.sloUrl ? render(entry.saml.sloUrl) : null,
-      sloBinding: entry.saml.sloBinding ?? 'HTTP-POST',
-      // Never true from a catalog entry. IdP-initiated sign-in is a posture
-      // an administrator adopts for a named application, not one that arrives
-      // with a template they picked off a list.
+      encryptionCertificate: saml.encryptionCertificate ?? null,
+      sloUrl: saml.sloUrl ?? null,
+      sloBinding: saml.sloBinding ?? 'HTTP-POST',
+      // Never true at creation. IdP-initiated sign-in is a posture an
+      // administrator adopts for a named application, on its SSO settings.
       allowIdpInitiated: false,
       assertionLifetimeMs: 300_000,
     });
-    claims.push({ protocol: 'saml', claims: entry.saml.claims });
+    claims.push({ protocol: 'saml', claims: saml.claims });
   }
 
   let clientId: string | undefined;
   let clientSecret: string | undefined;
 
-  if (entry.oidc) {
+  if (definition.oidc) {
     clientId = `${slug}-${randomBytes(6).toString('hex')}`;
     clientSecret = randomBytes(32).toString('base64url');
     await tx.oidcClient.create({
@@ -224,18 +344,17 @@ export async function createFromCatalog(
         applicationId: application.id,
         clientId,
         clientSecretHash: hashClientSecret(clientSecret),
-        redirectUris: entry.oidc.redirectUris.map(render),
-        postLogoutRedirectUris: (entry.oidc.postLogoutRedirectUris ?? []).map(render),
+        redirectUris: definition.oidc.redirectUris,
+        postLogoutRedirectUris: definition.oidc.postLogoutRedirectUris ?? [],
         grantTypes: ['authorization_code', 'refresh_token'],
-        // Off, always, whatever an entry says — there is no entry field for
-        // it. This is the one grant that issues a token without a decision
-        // from `authorize()`, and it is not something a template turns on.
+        // Off, always. This is the one grant that issues a token without a
+        // decision from `authorize()`, and creation does not turn it on.
         clientCredentialsEnabled: false,
-        scopes: entry.oidc.scopes,
+        scopes: definition.oidc.scopes,
         requirePkce: true,
       },
     });
-    claims.push({ protocol: 'oidc', claims: entry.oidc.claims });
+    claims.push({ protocol: 'oidc', claims: definition.oidc.claims });
   }
 
   for (const group of claims) {

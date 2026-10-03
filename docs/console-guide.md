@@ -100,6 +100,15 @@ Directory target with mirroring on) becomes an OU.
 
 - **Add from the catalog** configures SAML or OpenID Connect for a known
   application from a hostname; **Add by hand** for anything else.
+- **Add by hand** sets up sign-in in the same step. Choose **Sign-in**:
+  - **SAML**: the service provider's metadata URL, pasted metadata, or its
+    entity ID, ACS URLs, Name ID format and signing certificate typed in.
+  - **OpenID Connect**: redirect URIs and scopes. The client secret is shown
+    once.
+  - **Link only**: a portal tile.
+- **Claims** starts a SAML application with email, first name, last name,
+  display name and groups, an OpenID Connect one with groups, or a saved claim
+  set.
 - An application's record holds its sign-in configuration, who it is assigned
   to (people, groups or org units — an org unit reaches everyone in it and in
   the units beneath), its portal tile, and retiring or deleting it.

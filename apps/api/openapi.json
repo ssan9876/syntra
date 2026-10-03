@@ -2098,6 +2098,228 @@
         }
       }
     },
+    "/api/admin/applications/setup": {
+      "post": {
+        "operationId": "postApplicationsSetup",
+        "tags": [
+          "Protocol applications"
+        ],
+        "summary": "Create an application with its sign-in configuration",
+        "description": "The tile, its SAML (from metadata, or entity ID and ACS URLs) or OpenID Connect configuration, and its claims, in one transaction. An OpenID Connect client secret is returned once.\n\nRequires `access.manage`.",
+        "x-syntra-permission": [
+          "access.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "slug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z0-9][a-z0-9-]*$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "category": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "launchUrl": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "bookmark",
+                      "saml",
+                      "oidc"
+                    ]
+                  },
+                  "saml": {
+                    "type": "object",
+                    "properties": {
+                      "metadataXml": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1048576
+                      },
+                      "metadataUrl": {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      "spEntityId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1024
+                      },
+                      "acsUrls": {
+                        "default": [],
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2048
+                        }
+                      },
+                      "nameIdFormat": {
+                        "default": "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "spCertificates": {
+                        "default": [],
+                        "maxItems": 8,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 16384
+                        }
+                      },
+                      "wantAuthnRequestsSigned": {
+                        "default": true,
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "oidc": {
+                    "type": "object",
+                    "properties": {
+                      "redirectUris": {
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2048
+                        }
+                      },
+                      "scopes": {
+                        "default": [
+                          "openid",
+                          "profile",
+                          "email"
+                        ],
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 64
+                        }
+                      }
+                    },
+                    "required": [
+                      "redirectUris"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "claims": {
+                    "default": {
+                      "kind": "standard"
+                    },
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "standard"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "set"
+                          },
+                          "setId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "setId"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "none"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "protocol"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/attention/summary": {
       "get": {
         "operationId": "getAttentionSummary",
