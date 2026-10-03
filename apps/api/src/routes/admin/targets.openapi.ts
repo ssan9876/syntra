@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   adoptAccountRequest,
   validateConnectorDocumentRequest,
+  adoptConflictsRequest,
   containerListResponse,
   createTargetRequestSchema,
   idParam,
@@ -83,6 +84,18 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
     description: 'Binds the account that collided on create to the object that caused the collision. A recorded reason is required.',
     body: adoptAccountRequest,
     params: placementParams,
+  },
+  'GET /targets/:id/conflicts/adoption-preview': {
+    summary: 'List conflicted accounts and the target object each would adopt',
+    description: 'Reads the target once for every conflicted account. Needs the manage permission because it opens a connection to the target.',
+    params: idParam,
+  },
+  'POST /targets/:id/conflicts/adopt': {
+    summary: 'Adopt conflicted accounts confirmed from the preview',
+    description:
+      'Each entry names a person and the object seen in the preview; one whose candidate has changed is not adopted. A recorded reason is required. Answers 200 with a result per person.',
+    body: adoptConflictsRequest,
+    params: idParam,
   },
   'DELETE /targets/:id/placements/:personId': {
     summary: "Clear a person's manual account placement",

@@ -1198,7 +1198,9 @@ shows the same document as text; keys the form has no control for are kept.
   service users (`[{"at": "is_bot", "equals": "true"}]`); `find` looks one
   correlation key up before a create instead of reading every account; and
   `createsEnabled: true` says the target cannot create a disabled account, so
-  a pre-hire create is followed by the document's `disable`.
+  a pre-hire create is followed by the document's `disable`; `followUps` are
+  further writes after a create or update, each made only when the account
+  has a value for its `when` attribute (Mattermost's sign-in method).
 - **Only what the document declares is possible.** A document with no create
   cannot create, and no document can express `DELETE` on an account.
 - **Refusals**: HTTP status lists for unauthorized, not-found, conflict and
@@ -1328,6 +1330,7 @@ The shipped Mattermost document provisions Mattermost **user accounts** and
 | Update | `PUT /api/v4/users/{id}/patch` | `first_name`, `last_name`, `email`, `position`. |
 | Rename | `PUT /api/v4/users/{id}/patch` | `username`. |
 | Disable / enable | `PUT /api/v4/users/{id}/active` | `active: false` / `true`. Enabled state is read from `delete_at` (`0` is active). |
+| Sign-in method | `PUT /api/v4/users/{id}/auth` | After every create and update, when the account profile maps `authService`. `auth_service` and `auth_data`. |
 | Read-back | `GET /api/v4/users/{id}` | |
 | Teams | `GET /api/v4/teams`, `GET /api/v4/teams/{id}/members` | Each team is an entitlement. |
 | Grant / revoke a team | `POST /api/v4/teams/{id}/members`, `DELETE /api/v4/teams/{id}/members/{user}` | Removes the membership only. |
@@ -1355,7 +1358,8 @@ characters, start with a letter, and use lowercase letters, digits, `.`, `-`
 and `_`; the default naming rule (letters, digits, `.` and `-`, 20
 characters) fits, e.g. `%person.givenName.initial%%person.familyName%`.
 Attributes `givenName`, `familyName`, `mail` (required; Mattermost refuses a
-user with no email) and `title`. The initial password must meet the server's
+user with no email) and `title`; `authService` and `authData` for single
+sign-on (below). The initial password must meet the server's
 password requirements (**System Console → Authentication → Password**).
 
 **Refusals.** A username or email already in use is `400` with
@@ -1368,13 +1372,27 @@ the next free one (`ssander2`), and Mattermost refuses it because the email is
 taken. **Adopt** on the person's account then finds the existing user by the
 person's business email (exactly one match, read from `mail`) and binds it
 under its own name, so no rename follows. Two users with the same email are
-refused; pick by hand. Mattermost's API rate limit, when on, answers `429`;
+refused; pick by hand. **Accounts in conflict → Find conflicts** on the target
+lists every person in conflict and the Mattermost user each would adopt, from
+one read; **Adopt N accounts** adopts those with a match, each with its own
+audit event. A person whose match changed since the list was read is skipped.
+Mattermost's API rate limit, when on, answers `429`;
 reads wait and retry, writes are retried by the run.
 
-**Single sign-on.** For SAML sign-in (a Mattermost Enterprise feature), change
-the create body to send `auth_service: "saml"` and `auth_data: "{{attr.mail}}"` instead of
-`password`, under *Edit the connector document*. On the
-Syntra application, turn on **Sign the whole response, not only the
+**Single sign-on.** For SAML sign-in (a Mattermost Enterprise feature), map
+two attributes in the account profile: `authService` to `saml`, and
+`authData` to what Mattermost's SAML login matches users on: the value of
+**Id Attribute** (System Console → Authentication → SAML 2.0), or
+`%person.businessEmail%` when none is set. Every create and update then
+switches the Mattermost user to SAML sign-in, so a person who already had an
+email-and-password user signs in to it instead of getting "An account with
+that username already exists". Repeating the switch changes nothing. Users
+are switched on the next run after the mapping is saved, adopted users
+included. A target created before this document carried the switch needs
+**Edit the connector document** to add `account.followUps` from the shipped
+document.
+
+On the Syntra application, turn on **Sign the whole response, not only the
 assertion**: Mattermost rejects a response whose only signature is on the
 assertion, with "We received an invalid signature in the response from the
 Identity Provider".

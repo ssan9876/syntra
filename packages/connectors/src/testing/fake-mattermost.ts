@@ -30,6 +30,9 @@ export interface FakeMattermostUser {
   delete_at: number;
   is_bot: boolean;
   props: Record<string, string>;
+  /** `''` for email and password; `saml`, `ldap`, `gitlab`… otherwise. */
+  auth_service: string;
+  auth_data: string;
 }
 
 export interface FakeMattermostTeam {
@@ -79,6 +82,8 @@ export class FakeMattermost {
       delete_at: 0,
       is_bot: false,
       props: {},
+      auth_service: '',
+      auth_data: '',
       ...user,
     };
     this.users.set(record.id, record);
@@ -158,7 +163,7 @@ export class FakeMattermost {
       return user ? { status: 200, body: user } : notFound('user');
     }
 
-    const one = /^\/users\/([^/]+)(\/patch|\/active)?$/.exec(path);
+    const one = /^\/users\/([^/]+)(\/patch|\/active|\/auth)?$/.exec(path);
     if (one) {
       const user = this.users.get(one[1] ?? '');
       if (!user) return notFound('user');
@@ -171,6 +176,14 @@ export class FakeMattermost {
           if (typeof body[key] === 'string') user[key] = body[key];
         }
         return { status: 200, body: user };
+      }
+      if (method === 'PUT' && one[2] === '/auth') {
+        if (typeof body.auth_service !== 'string' || typeof body.auth_data !== 'string') {
+          return appError(400, 'api.context.invalid_body_param.app_error', 'Invalid or missing user_auth in request body.');
+        }
+        user.auth_service = body.auth_service;
+        user.auth_data = body.auth_data;
+        return { status: 200, body: { auth_service: user.auth_service, auth_data: user.auth_data } };
       }
       if (method === 'PUT' && one[2] === '/active') {
         user.delete_at = body.active === true ? 0 : 1_700_000_000_000;

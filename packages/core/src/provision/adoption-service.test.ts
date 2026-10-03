@@ -11,7 +11,9 @@ import {
   NoAccountToAdoptError,
   NotInConflictError,
   adoptAccount,
+  adoptConflicts,
   adoptionCandidate,
+  conflictAdoptionPreview,
 } from './adoption-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
@@ -482,5 +484,95 @@ describe('adoptAccount — an email already in use', () => {
 
     await expect(adopt()).rejects.toBeInstanceOf(CorrelationKeyTakenError);
     expect((await accountOf(personId)).status).toBe('conflict');
+  });
+});
+
+describe('adopting every conflicted account on a target', () => {
+  const setEmail = (id: string, email: string) =>
+    withTenant(tenantId, (tx) => tx.person.update({ where: { id }, data: { businessEmail: email } }));
+  const seedWithMail = (key: string, mail: string) => {
+    const anchor = target.seedForeignObject(key);
+    target.objects.get(anchor)!.attributes = { mail: [mail] };
+    return anchor;
+  };
+  const adoptAll = (adoptions: { personId: string; anchor: string }[]) =>
+    adoptConflicts(tenantId, provider, {
+      targetSystemId: targetId,
+      adoptions,
+      reason: 'existing Mattermost users',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    });
+
+  it('previews each conflicted account with the object it would adopt, from one read', async () => {
+    await setEmail(personId, 'anna.novak@acme.test');
+    const bob = await seedConflicted('Bob', 'Stone', 'bob.stone');
+    await setEmail(bob, 'bob.stone@acme.test');
+    const annaAnchor = seedWithMail('anovak', 'anna.novak@acme.test');
+    let reads = 0;
+    const read = target.read.bind(target);
+    target.read = ((...args: Parameters<typeof read>) => {
+      reads += 1;
+      return read(...args);
+    }) as typeof target.read;
+
+    const preview = await conflictAdoptionPreview(tenantId, provider, targetId, target as never);
+
+    expect(reads).toBe(1);
+    expect(preview).toEqual([
+      expect.objectContaining({
+        personId,
+        correlationKey: 'anna.novak',
+        candidate: expect.objectContaining({ anchor: annaAnchor, correlationKey: 'anovak', matchedBy: 'email' }),
+      }),
+      expect.objectContaining({ personId: bob, correlationKey: 'bob.stone', candidate: null }),
+    ]);
+  });
+
+  it('adopts every confirmed account, each with its own audit event', async () => {
+    await setEmail(personId, 'anna.novak@acme.test');
+    const bob = await seedConflicted('Bob', 'Stone', 'bob.stone');
+    const annaAnchor = seedWithMail('anovak', 'anna.novak@acme.test');
+    const bobAnchor = target.seedForeignObject('bob.stone');
+
+    const results = await adoptAll([
+      { personId, anchor: annaAnchor },
+      { personId: bob, anchor: bobAnchor },
+    ]);
+
+    expect(results).toEqual([
+      { personId, adopted: true, anchor: annaAnchor, message: null },
+      { personId: bob, adopted: true, anchor: bobAnchor, message: null },
+    ]);
+    expect(await accountOf(personId)).toMatchObject({ status: 'active', correlationKey: 'anovak' });
+    expect(await accountOf(bob)).toMatchObject({ status: 'active', anchor: bobAnchor });
+    expect(await adoptedEvents()).toHaveLength(2);
+  });
+
+  it('skips a person whose candidate changed since the preview, and adopts the rest', async () => {
+    const bob = await seedConflicted('Bob', 'Stone', 'bob.stone');
+    target.seedForeignObject('anna.novak');
+    const bobAnchor = target.seedForeignObject('bob.stone');
+
+    const results = await adoptAll([
+      { personId, anchor: 'an-object-from-an-older-preview' },
+      { personId: bob, anchor: bobAnchor },
+    ]);
+
+    expect(results[0]).toMatchObject({ personId, adopted: false });
+    expect(results[0]?.message).toContain('Preview again');
+    expect(results[1]).toMatchObject({ personId: bob, adopted: true });
+    expect((await accountOf(personId)).status).toBe('conflict');
+  });
+
+  it('reports a person no longer in conflict', async () => {
+    await withTenant(tenantId, (tx) =>
+      tx.targetAccount.updateMany({ where: { personId }, data: { status: 'active' } }),
+    );
+
+    const [result] = await adoptAll([{ personId, anchor: 'x' }]);
+
+    expect(result).toMatchObject({ adopted: false, message: 'Account is no longer in conflict.' });
   });
 });

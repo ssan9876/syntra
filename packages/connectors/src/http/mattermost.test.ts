@@ -213,6 +213,64 @@ describe('Mattermost through the document-driven connector', () => {
     expect(user.delete_at).toBe(0);
   });
 
+  it('switches an existing user to SAML sign-in on update when the profile maps authService', async () => {
+    const user = mm.seedUser({ username: 'jdoe', email: 'jane.doe@example.test' });
+
+    const result = await httpTargetConnector.write(config(), {
+      op: 'update_account',
+      actionId: 'a-up',
+      anchor: user.id,
+      attributes: { givenName: ['Jane'], authService: ['saml'], authData: ['jane.doe@example.test'] },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(user).toMatchObject({ auth_service: 'saml', auth_data: 'jane.doe@example.test' });
+    const writes = mm.requests.map((r) => `${r.method} ${new URL(r.url).pathname}`);
+    expect(writes).toEqual([`PUT /api/v4/users/${user.id}/patch`, `PUT /api/v4/users/${user.id}/auth`]);
+  });
+
+  it('leaves the sign-in method alone when the profile does not map authService', async () => {
+    const user = mm.seedUser({ username: 'jdoe' });
+
+    await httpTargetConnector.write(config(), {
+      op: 'update_account',
+      actionId: 'a-up',
+      anchor: user.id,
+      attributes: { givenName: ['Jane'] },
+    });
+
+    expect(user.auth_service).toBe('');
+    expect(mm.requests.map((r) => new URL(r.url).pathname)).toEqual([`/api/v4/users/${user.id}/patch`]);
+  });
+
+  it('creates a user and switches it to SAML sign-in', async () => {
+    const op = create({ enabled: false });
+    const result = await httpTargetConnector.write(config(), {
+      ...op,
+      attributes: { ...op.attributes, authService: ['saml'], authData: ['jane.doe@example.test'] },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    const user = [...mm.users.values()].find((u) => u.username === 'jdoe');
+    expect(user).toMatchObject({ auth_service: 'saml', auth_data: 'jane.doe@example.test' });
+    expect(user?.delete_at).not.toBe(0);
+  });
+
+  it('reports a failed sign-in switch as a failed update', async () => {
+    const user = mm.seedUser({ username: 'jdoe' });
+
+    const result = await httpTargetConnector.write(config(), {
+      op: 'update_account',
+      actionId: 'a-up',
+      anchor: user.id,
+      // No authData: Mattermost refuses the body.
+      attributes: { authService: ['saml'] },
+    });
+
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(result.message).toMatch(/^Updated the account, but follow-up PUT \/users\/\{\{anchor\}\}\/auth failed: /);
+  });
+
   it('lists teams and reads, grants and revokes team membership', async () => {
     const team = mm.seedTeam('eng', 'Engineering');
     const user = mm.seedUser({ username: 'jdoe' });
@@ -265,7 +323,7 @@ describe('Mattermost through the document-driven connector', () => {
         },
       ],
       skipped: 1,
-      unreadFields: [],
+      unreadFields: ['auth_data'],
     });
   });
 
