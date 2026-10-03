@@ -1785,6 +1785,10 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "signResponse": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "encryptionCertificate": {
                     "default": null,
                     "anyOf": [

@@ -2422,7 +2422,7 @@ No personal data. Columns: `id`, `tenantId`, `ruleId`, `entitlementId`.
 
 #### `SamlConfig`
 
-No personal data. Columns: `id`, `tenantId`, `applicationId`, `spEntityId`, `acsUrls`, `defaultAcsUrl`, `acsBinding`, `nameIdFormat`, `nameIdClaim`, `spCertificates`, `wantAuthnRequestsSigned`, `encryptAssertions`, `encryptionCertificate`, `sloUrl`, `sloBinding`, `allowIdpInitiated`, `assertionLifetimeMs`, `wsFedEnabled`, `createdAt`, `updatedAt`.
+No personal data. Columns: `id`, `tenantId`, `applicationId`, `spEntityId`, `acsUrls`, `defaultAcsUrl`, `acsBinding`, `nameIdFormat`, `nameIdClaim`, `spCertificates`, `wantAuthnRequestsSigned`, `encryptAssertions`, `signResponse`, `encryptionCertificate`, `sloUrl`, `sloBinding`, `allowIdpInitiated`, `assertionLifetimeMs`, `wsFedEnabled`, `createdAt`, `updatedAt`.
 
 #### `SodRule`
 

@@ -254,6 +254,8 @@ export async function registerAdminProtocolRoutes(
       // document, so an import may start encrypting for a tenant that asked
       // for it — but it never starts encrypting for one that did not.
       encryptAssertions: existing?.encryptAssertions ?? false,
+      // How the IdP signs is not in SP metadata; an import keeps the choice.
+      signResponse: existing?.signResponse ?? false,
       encryptionCertificate:
         parsed.encryptionCertificates[0] ?? existing?.encryptionCertificate ?? null,
       sloUrl: parsed.sloUrl,

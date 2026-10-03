@@ -21,6 +21,7 @@ const baseConfig = (overrides: Partial<SamlConfigRecord> = {}): SamlConfigRecord
   spCertificates: [],
   wantAuthnRequestsSigned: false,
   encryptAssertions: false,
+  signResponse: false,
   encryptionCertificate: null,
   sloUrl: null,
   sloBinding: 'HTTP-POST',
