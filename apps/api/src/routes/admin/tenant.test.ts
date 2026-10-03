@@ -12,6 +12,7 @@ import {
   createSession,
   createUser,
   generateRecoveryCodes,
+  hashBreakGlassCredential,
   hashPassword,
   setPasswordHash,
   type Permission,
@@ -940,5 +941,99 @@ describe('the tenant brand', () => {
     await putBrand(cookie, { name: 'Acme' });
     await putBrand(cookie, { name: null });
     expect(await getBrand(cookie).then((r) => r.json())).toMatchObject({ name: null });
+  });
+});
+
+describe('GET /api/admin/tenant/sign-in-security', () => {
+  const getSecurity = (cookie: string) =>
+    ctx.app.inject({
+      method: 'GET',
+      url: '/api/admin/tenant/sign-in-security',
+      headers: { host: ctx.host, cookie },
+    });
+
+  it('refuses a caller without tenant.manage', async () => {
+    await seedAdmin([PERMISSIONS.DIRECTORY_READ]);
+    expect((await getSecurity(await adminCookie())).statusCode).toBe(403);
+  });
+
+  it('reports every check failing on a new tenant', async () => {
+    const admin = await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    const res = await getSecurity(await adminCookie());
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      adminsWithoutSecondFactor: [{ userId: admin.id, login: 'admin', displayName: 'Admin', owner: false }],
+      adminMfaRequired: false,
+      lockoutEnabled: false,
+      breakGlassDesignated: false,
+    });
+  });
+
+  it('lists active role holders with no confirmed second factor, and reads the tenant controls', async () => {
+    const admin = await seedAdmin([PERMISSIONS.TENANT_MANAGE]);
+    // Elevated before admin MFA is switched on, which would otherwise send
+    // this password-only administrator to enrol.
+    const cookie = await adminCookie();
+
+    const ids = await withTenant(ctx.tenantId, async (tx) => {
+      const owner = await createRole(tx, 'Owner', [...OWNER_PERMISSIONS], { systemKey: 'owner' });
+      const make = async (login: string, status = 'active') => {
+        const user = await createUser(tx, { login, email: `${login}@acme.test`, displayName: login.toUpperCase() });
+        if (status !== 'active') await tx.user.update({ where: { id: user.id }, data: { status } });
+        return user.id;
+      };
+      const mpuleo = await make('mpuleo');
+      const rsander = await make('rsander');
+      const agray = await make('agray');
+      const kjones = await make('kjones');
+      const gone = await make('gone', 'disabled');
+      await make('plain');
+      for (const id of [mpuleo, rsander, agray, kjones, gone]) await assignRole(tx, id, owner.id);
+
+      await tx.totpCredential.create({
+        data: { tenantId: ctx.tenantId, userId: rsander, secretName: 'totp.rsander', confirmedAt: new Date() },
+      });
+      // Enrolment started and never confirmed: no code was ever entered.
+      await tx.totpCredential.create({
+        data: { tenantId: ctx.tenantId, userId: agray, secretName: 'totp.agray' },
+      });
+      await tx.webAuthnCredential.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: kjones,
+          credentialId: `key-${ctx.tenantId}`,
+          publicKey: Buffer.from([0]),
+          rpId: 'acme.test',
+          label: 'key',
+        },
+      });
+      await tx.breakGlassAccount.create({
+        data: {
+          tenantId: ctx.tenantId,
+          userId: kjones,
+          credentialHash: hashBreakGlassCredential('syntra_bg_test'),
+          designatedByUserId: admin.id,
+        },
+      });
+      await tx.tenant.update({
+        where: { id: ctx.tenantId },
+        data: { adminMfaRequired: true, lockoutThreshold: 5 },
+      });
+      return { mpuleo, agray };
+    });
+
+    const res = await getSecurity(cookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      adminsWithoutSecondFactor: [
+        { userId: admin.id, login: 'admin', displayName: 'Admin', owner: false },
+        { userId: ids.agray, login: 'agray', displayName: 'AGRAY', owner: true },
+        { userId: ids.mpuleo, login: 'mpuleo', displayName: 'MPULEO', owner: true },
+      ],
+      adminMfaRequired: true,
+      lockoutEnabled: true,
+      breakGlassDesignated: true,
+    });
   });
 });

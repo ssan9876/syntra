@@ -7,6 +7,8 @@ import { StatCard, StatGrid } from '../../components/StatCards.js';
 import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import type { JobHealthBody, TenantStatusBody } from './OperationsPage.js';
+import { SignInSecurityChecks } from './SignInSecurityChecks.js';
+import { SIGN_IN_SECURITY_URL, type SignInSecurity } from './sign-in-security.js';
 
 interface Summary {
   people: { total: number; active: number; withoutAccount: number };
@@ -151,6 +153,9 @@ export function DashboardPage() {
   const users = useApiResource<{ users: { id: string; displayName: string }[] }>(
     mayAudit && can('directory.read') ? '/api/admin/users' : null,
   );
+  const signIn = useApiResource<SignInSecurity>(
+    can('tenant.manage') ? SIGN_IN_SECURITY_URL : null,
+  );
 
   const items: Item[] = [];
   const degradation = status.data?.degradation;
@@ -282,6 +287,8 @@ export function DashboardPage() {
           )}
         </section>
       )}
+
+      {signIn.data && <SignInSecurityChecks security={signIn.data} />}
 
       <StatGrid>
         {mayDirectory && (

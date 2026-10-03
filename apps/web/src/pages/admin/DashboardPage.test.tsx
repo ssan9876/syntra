@@ -113,6 +113,72 @@ describe('the overview', () => {
   });
 });
 
+describe('the sign-in security checklist', () => {
+  const FAILING = {
+    adminsWithoutSecondFactor: [
+      { userId: 'u-m', login: 'mpuleo', displayName: 'M Puleo', owner: true },
+      { userId: 'u-r', login: 'rsander', displayName: 'R Sander', owner: true },
+      { userId: 'u-a', login: 'agray', displayName: 'A Gray', owner: true },
+    ],
+    adminMfaRequired: false,
+    lockoutEnabled: false,
+    breakGlassDesignated: false,
+  };
+
+  it('lists each failing check with where it is fixed', async () => {
+    granted.add('tenant.manage');
+    BODIES['/api/admin/tenant/sign-in-security'] = FAILING;
+    mockApi();
+    renderPage();
+
+    const section = (await screen.findByRole('heading', { name: 'Sign-in security' })).closest('section')!;
+    const items = within(section).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('3 Owners have no second factor: mpuleo, rsander, agray.');
+    expect(within(items[0]!).getByRole('link', { name: 'mpuleo' })).toHaveAttribute('href', '/admin/users/u-m');
+    expect(items[1]).toHaveTextContent('The console does not require a second factor.');
+    expect(within(items[1]!).getByRole('link', { name: 'Sign-in settings' })).toHaveAttribute('href', '/admin/settings?tab=sign-in');
+    expect(items[2]).toHaveTextContent('Account lockout is off.');
+    expect(items[3]).toHaveTextContent('No break-glass account designated.');
+    expect(within(items[3]!).getByRole('link', { name: 'Break-glass settings' })).toHaveAttribute('href', '/admin/settings?tab=break-glass');
+  });
+
+  it('shows only the checks that fail', async () => {
+    granted.add('tenant.manage');
+    BODIES['/api/admin/tenant/sign-in-security'] = {
+      ...FAILING,
+      adminsWithoutSecondFactor: [],
+      adminMfaRequired: true,
+      breakGlassDesignated: true,
+    };
+    mockApi();
+    renderPage();
+
+    const section = (await screen.findByRole('heading', { name: 'Sign-in security' })).closest('section')!;
+    expect(within(section).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Account lockout is off.Sign-in settings',
+    ]);
+  });
+
+  it('shows nothing when every check passes', async () => {
+    granted.add('tenant.manage');
+    granted.add('access.read');
+    BODIES['/api/admin/tenant/sign-in-security'] = {
+      adminsWithoutSecondFactor: [],
+      adminMfaRequired: true,
+      lockoutEnabled: true,
+      breakGlassDesignated: true,
+    };
+    const fetchSpy = mockApi();
+    renderPage();
+
+    await screen.findByText('Applications');
+    await vi.waitFor(() =>
+      expect(fetchSpy.mock.calls.map(([input]) => String(input))).toContain('/api/admin/tenant/sign-in-security'),
+    );
+    expect(screen.queryByRole('heading', { name: 'Sign-in security' })).not.toBeInTheDocument();
+  });
+});
+
 describe('the overview helpers', () => {
   it('reads an audit action as a phrase', () => {
     expect(describeAction('user.kindChanged')).toBe('User kind changed');

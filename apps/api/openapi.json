@@ -31295,6 +31295,53 @@
         }
       }
     },
+    "/api/admin/tenant/sign-in-security": {
+      "get": {
+        "operationId": "getTenantSignInSecurity",
+        "tags": [
+          "Tenant"
+        ],
+        "summary": "Get the tenant's sign-in security checks",
+        "description": "Active accounts holding any role with no confirmed authenticator app and no security key, whether the console requires a second factor, whether account lockout is on, and whether a break-glass account is designated.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/update": {
       "get": {
         "operationId": "getUpdate",

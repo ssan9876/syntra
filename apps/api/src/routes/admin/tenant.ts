@@ -8,6 +8,7 @@ import {
   authPolicyRelaxations,
   isChangeClassHeld,
   readBrand,
+  readSignInSecurity,
   readTenant,
   recordEvent,
   setBrand,
@@ -53,6 +54,14 @@ export async function registerAdminTenantRoutes(
     '/tenant',
     { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
     async (request) => request.db((tx) => readTenant(tx)),
+  );
+
+  // The Overview's sign-in checklist. `tenant.manage`, like every setting it
+  // points at: Sign-in and Break-glass are both behind it.
+  app.get(
+    '/tenant/sign-in-security',
+    { preHandler: requirePermission(PERMISSIONS.TENANT_MANAGE) },
+    async (request) => request.db((tx) => readSignInSecurity(tx)),
   );
 
   app.post(
