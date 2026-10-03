@@ -1098,9 +1098,17 @@ disable and read back an account, optionally entitlements and containers, and
 how its refusals look. **Target systems → New target → REST API** offers the
 shipped documents as starting points (`GET /api/admin/targets/connector-documents`):
 Snipe-IT, Mattermost, Google Workspace and Microsoft Entra ID. The one you pick is
-**copied into the target's own configuration** and edited there under *Edit
-the connector document*, so editing one target's never changes another's —
-or changes a plan between its preview and its apply.
+**copied into the target's own configuration** and edited there, so editing
+one target's never changes another's — or changes a plan between its preview
+and its apply.
+
+For any other system, choose **Another application**. **Configure connector**
+edits the document as a form, in sections: Connection, Sign-in, Reading
+accounts, Field mapping, Account changes, Groups and roles, and Errors.
+**Fill from field mapping** writes the create and update bodies from the field
+mapping. Each field is checked against the connector schema as you type
+(`POST /api/admin/targets/connector-documents/validate`). **Edit as JSON**
+shows the same document as text; keys the form has no control for are kept.
 
 - **Authentication** is one of `bearer` (the credential sent as a bearer
   token), `basic` (a username in the document, the password in the vault),

@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, Field, Select, Textarea } from '@syntra/ui';
+import { api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
+import { ConnectorBuilder } from './connector-builder/ConnectorBuilder.js';
+import { blankDocument } from './connector-builder/doc-path.js';
 import { ENTRA_CORRELATION_FIELDS, credentialLabel, parseDocument } from './target-form.js';
 
 /**
@@ -157,7 +160,10 @@ export function HttpConnectorFields({
   const { data } = useApiResource<{
     documents: { key: string; name: string; document: Record<string, unknown> }[];
   }>('/api/admin/targets/connector-documents');
-  const [showJson, setShowJson] = useState(false);
+  // Open on the form for a hand-made application, closed for a shipped one
+  // whose document is already right.
+  const [view, setView] = useState<'closed' | 'form' | 'json'>(documentKey === 'custom' ? 'form' : 'closed');
+  const [problems, setProblems] = useState<Record<string, string>>({});
 
   const documents = data?.documents ?? [];
   const parsed = parseDocument(documentJson);
@@ -170,6 +176,27 @@ export function HttpConnectorFields({
   // connection test.
   const hostPlaceholder =
     typeof parsed?.baseUrl === 'string' && parsed.baseUrl.includes('{instance}');
+
+  // Checked against the connector's own schema while the document is open,
+  // so each problem shows beside its field before Save.
+  useEffect(() => {
+    if (view === 'closed' || parsed === null) return;
+    const timer = setTimeout(() => {
+      api<{ errors: { path: string; message: string }[] }>('/api/admin/targets/connector-documents/validate', {
+        method: 'POST',
+        body: JSON.stringify({ document: parsed }),
+      })
+        .then(({ errors }) => {
+          const byPath: Record<string, string> = {};
+          for (const e of errors) byPath[e.path] ??= e.message;
+          setProblems(byPath);
+        })
+        .catch(() => setProblems({}));
+    }, 400);
+    return () => clearTimeout(timer);
+    // `parsed` is derived from `documentJson` on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentJson, view]);
 
   return (
     <div className="sm:col-span-2 space-y-4">
@@ -186,6 +213,16 @@ export function HttpConnectorFields({
               {entry.name}
             </Button>
           ))}
+          <Button
+            type="button"
+            variant={documentKey === 'custom' ? 'primary' : 'secondary'}
+            onClick={() => {
+              onPick('custom', blankDocument());
+              setView('form');
+            }}
+          >
+            Another application
+          </Button>
         </div>
       </div>
 
@@ -234,15 +271,36 @@ export function HttpConnectorFields({
       )}
 
       <div className="space-y-2">
-        <Button
-          type="button"
-          variant="ghost"
-          aria-expanded={showJson}
-          onClick={() => setShowJson(!showJson)}
-        >
-          {showJson ? 'Hide the connector document' : 'Edit the connector document'}
-        </Button>
-        {showJson && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Connector">
+          <Button
+            type="button"
+            variant={view === 'form' ? 'primary' : 'ghost'}
+            aria-pressed={view === 'form'}
+            disabled={unreadable}
+            onClick={() => {
+              if (documentJson.trim() === '') onPick('custom', blankDocument());
+              setView(view === 'form' ? 'closed' : 'form');
+            }}
+          >
+            Configure connector
+          </Button>
+          <Button
+            type="button"
+            variant={view === 'json' ? 'primary' : 'ghost'}
+            aria-pressed={view === 'json'}
+            onClick={() => setView(view === 'json' ? 'closed' : 'json')}
+          >
+            Edit as JSON
+          </Button>
+        </div>
+        {view === 'form' && parsed !== null && (
+          <ConnectorBuilder
+            document={parsed}
+            errors={problems}
+            onChange={(next) => onDocumentChange(JSON.stringify(next, null, 2))}
+          />
+        )}
+        {view === 'json' && (
           <Textarea
             label="Connector document"
             name="document"
@@ -254,13 +312,10 @@ export function HttpConnectorFields({
             error={unreadable ? 'That is not valid JSON.' : documentError}
           />
         )}
-        {/* Still said while the box is closed. A document broken and then
-            hidden would otherwise save as `{}` with nothing on screen to
-            say why. */}
-        {!showJson && unreadable && (
+        {view !== 'json' && unreadable && (
           <Alert tone="danger">The connector document is not valid JSON.</Alert>
         )}
-        {!showJson && !unreadable && documentError && (
+        {view === 'closed' && !unreadable && documentError && (
           <Alert tone="danger" title="Connector document not valid">
             <span className="whitespace-pre-line">{documentError}</span>
           </Alert>

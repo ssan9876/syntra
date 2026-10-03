@@ -445,7 +445,7 @@ describe('TargetDetailPage', () => {
     await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
     expect(screen.queryByLabelText(/connector document/i)).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /edit the connector document/i }));
+    await userEvent.click(screen.getByRole('button', { name: /edit as json/i }));
     expect(screen.getByLabelText(/connector document/i)).toBeInTheDocument();
   });
 
@@ -564,7 +564,7 @@ describe('TargetDetailPage', () => {
     expect(screen.queryByLabelText(/directory \(tenant\) id/i)).not.toBeInTheDocument();
     expect(screen.getByText(/with your snipe-it host/i)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /edit the connector document/i }));
+    await userEvent.click(screen.getByRole('button', { name: /edit as json/i }));
     const editor = screen.getByLabelText(/connector document/i) as HTMLTextAreaElement;
     expect(JSON.parse(editor.value)).toEqual(document);
   });
@@ -1391,7 +1391,7 @@ describe('TargetDetailPage: REST API documents', () => {
     renderNew();
 
     await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
-    await userEvent.click(await screen.findByRole('button', { name: /edit the connector document/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /edit as json/i }));
     const editor = screen.getByLabelText(/connector document/i);
     await userEvent.click(editor);
     await userEvent.paste(JSON.stringify({ name: 'Other', auth: { type: 'header', header: 'X-Api-Key' } }));
