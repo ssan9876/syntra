@@ -1892,8 +1892,9 @@ the event to read, and `clientCredentialsEnabled` is the column to list.
 its endpoints, claims and launch address filled in from a hostname or tenant
 name you supply (`GET /api/admin/catalog`,
 `POST /api/admin/applications/from-catalog`). The catalog is deliberately
-short — SAML for Slack, Zoom, Google Workspace, Salesforce, Nextcloud,
-Snipe-IT and AWS IAM Identity Center, OpenID Connect for Grafana and GitLab —
+short — SAML for Slack, Zoom, Miro, Figma, Lucid, Rocket.Chat, Google
+Workspace, Salesforce, Nextcloud, Box, Snipe-IT, PagerDuty, Sentry, Jenkins and
+AWS IAM Identity Center, OpenID Connect for Grafana and GitLab —
 and each entry links to the vendor's own page, which stays authoritative.
 Where a service provider publishes SP metadata, importing it is better than an
 entry, and the console offers that first. An application made from the catalog

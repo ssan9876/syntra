@@ -25,7 +25,13 @@ import type { CatalogEntry } from './types.js';
  * page is configured, and Nextcloud's `user_saml` start route is not on the
  * vendor's documentation page — so an administrator whose tile lands on a
  * login form sets the SSO start page on the application rather than this
- * file guessing one.
+ * file guessing one. Later entries set `launchUrl` only where the vendor's page
+ * names a sign-on URL or the account's own address, and leave it out otherwise.
+ *
+ * WHERE A VENDOR LETS THE ADMINISTRATOR NAME THE ATTRIBUTES (Sentry, Jenkins,
+ * Box, Rocket.Chat), the entry ships one set of names and a comment saying
+ * where to enter them on the vendor's side. The vendor's URLs are still taken
+ * from its page; only the attribute names are this file's choice.
  */
 
 const EMAIL_NAMEID = 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress';
@@ -103,6 +109,145 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
     },
   },
   {
+    key: 'miro',
+    name: 'Miro',
+    category: 'collaboration',
+    description: 'Online whiteboard. One entry per Miro Enterprise account.',
+    docsUrl:
+      'https://help.miro.com/hc/en-us/articles/21899027429778-Miro-metadata-for-Single-sign-on-configuration',
+    variables: [],
+    saml: {
+      // Constant, like Slack's. With more than one identity provider on the
+      // account Miro switches to https://miro.com/<org_id>/<saml_settings_id>
+      // and a matching ACS URL; register that case by hand.
+      spEntityId: 'https://miro.com',
+      acsUrls: ['https://miro.com/sso/saml'],
+      nameIdFormat: EMAIL_NAMEID,
+      claims: [
+        {
+          claimName: 'FirstName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'givenName',
+        },
+        {
+          claimName: 'LastName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'familyName',
+        },
+        {
+          claimName: 'DisplayName',
+          nameFormat: BASIC,
+          sourceKind: 'user',
+          sourceField: 'displayName',
+        },
+      ],
+    },
+  },
+  {
+    key: 'figma',
+    name: 'Figma',
+    category: 'collaboration',
+    description: 'Interface design. One entry per Figma organization.',
+    docsUrl:
+      'https://help.figma.com/hc/en-us/articles/360040047774-Set-up-a-custom-SAML-configuration',
+    variables: [
+      {
+        key: 'tenantId',
+        label: 'Tenant ID',
+        example: '123456789123456789',
+        hint: 'From Admin → Settings → SAML SSO in Figma',
+      },
+    ],
+    saml: {
+      spEntityId: 'https://www.figma.com/saml/{{tenantId}}',
+      acsUrls: ['https://www.figma.com/saml/{{tenantId}}/consume'],
+      nameIdFormat: EMAIL_NAMEID,
+      claims: [],
+    },
+  },
+  {
+    key: 'lucid',
+    name: 'Lucid',
+    category: 'collaboration',
+    description: 'Lucidchart and Lucidspark diagrams. One entry per Lucid Enterprise account.',
+    docsUrl: 'https://help.lucid.co/hc/en-us/articles/360049898191-SAML-overview',
+    // Lucid's documented sign-on URL, which starts SP-initiated sign-in.
+    launchUrl: 'https://lucid.app/saml/sso/{{domain}}',
+    variables: [
+      {
+        key: 'domain',
+        label: 'SAML domain',
+        example: 'acme.example',
+        hint: 'The domain entered on the SAML tile in Lucid',
+      },
+    ],
+    saml: {
+      // Constant whatever the account, and not a URL.
+      spEntityId: 'lucidchart.com',
+      acsUrls: ['https://lucid.app/saml/sso/{{domain}}'],
+      nameIdFormat: EMAIL_NAMEID,
+      claims: [
+        { claimName: 'user.email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
+        {
+          claimName: 'user.firstname',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'givenName',
+        },
+        {
+          claimName: 'user.lastname',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'familyName',
+        },
+      ],
+    },
+  },
+  {
+    key: 'rocket-chat',
+    name: 'Rocket.Chat',
+    category: 'collaboration',
+    description: 'Self-hosted team chat, through its SAML settings (a premium feature).',
+    docsUrl: 'https://docs.rocket.chat/docs/saml-configuration',
+    launchUrl: 'https://{{host}}',
+    variables: [
+      { key: 'host', label: 'Rocket.Chat hostname', example: 'chat.acme.example' },
+      {
+        key: 'provider',
+        label: 'Custom Provider',
+        example: 'syntra',
+        hint: 'The Custom Provider name in Rocket.Chat → Settings → SAML',
+      },
+    ],
+    saml: {
+      // The Custom Issuer, set by convention to the metadata URL. Rocket.Chat
+      // serves its SP metadata there, so importing it is the better route.
+      spEntityId: 'https://{{host}}/_saml/metadata/{{provider}}',
+      acsUrls: ['https://{{host}}/_saml/validate/{{provider}}'],
+      nameIdFormat: EMAIL_NAMEID,
+      // The names in the example User Data Field Map on the docs page. Paste
+      // that map into Rocket.Chat, or change these to match yours.
+      claims: [
+        { claimName: 'mail', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
+        {
+          claimName: 'firstName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'givenName',
+        },
+        {
+          claimName: 'lastName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'familyName',
+        },
+        { claimName: 'uid', nameFormat: BASIC, sourceKind: 'user', sourceField: 'login' },
+      ],
+    },
+  },
+  {
     key: 'google-workspace',
     name: 'Google Workspace',
     category: 'productivity',
@@ -167,6 +312,49 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
           nameFormat: BASIC,
           sourceKind: 'user',
           sourceField: 'displayName',
+        },
+      ],
+    },
+  },
+  {
+    key: 'box',
+    name: 'Box',
+    category: 'productivity',
+    description: 'Cloud file storage and sharing. One entry per Box enterprise.',
+    docsUrl:
+      'https://docs.box.com/en/box-admin-tools/box-security/setting-up-single-sign-on-sso-for-your-organization',
+    // The company-branded subdomain is where Box documents SSO sign-in
+    // starting: Continue there forwards to the IdP.
+    launchUrl: 'https://{{subdomain}}.box.com',
+    variables: [
+      {
+        key: 'subdomain',
+        label: 'Box subdomain',
+        example: 'acme',
+        hint: 'The part before .box.com',
+      },
+    ],
+    saml: {
+      // Constant whatever the enterprise, and not a URL.
+      spEntityId: 'box.net',
+      acsUrls: ['https://sso.services.box.net/sp/ACS.saml2'],
+      nameIdFormat: EMAIL_NAMEID,
+      // Box asks for the email, first-name and last-name attribute names
+      // when SSO is set up; these are the names its page gives as the
+      // example. The names are used only when Box creates an account.
+      claims: [
+        { claimName: 'email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
+        {
+          claimName: 'firstName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'givenName',
+        },
+        {
+          claimName: 'lastName',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'familyName',
         },
       ],
     },
@@ -249,6 +437,108 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
       redirectUris: ['https://{{host}}/users/auth/openid_connect/callback'],
       scopes: ['openid', 'profile', 'email'],
       claims: [],
+    },
+  },
+  {
+    key: 'pagerduty',
+    name: 'PagerDuty',
+    category: 'engineering',
+    description: 'On-call scheduling and incident response. One entry per PagerDuty account.',
+    docsUrl: 'https://support.pagerduty.com/main/docs/sso',
+    launchUrl: 'https://{{subdomain}}.pagerduty.com',
+    variables: [
+      {
+        key: 'subdomain',
+        label: 'Account subdomain',
+        example: 'acme',
+        hint: 'The part before .pagerduty.com',
+      },
+    ],
+    saml: {
+      // No trailing slash on either: PagerDuty answers 400 to one.
+      spEntityId: 'https://{{subdomain}}.pagerduty.com',
+      acsUrls: ['https://{{subdomain}}.pagerduty.com/sso/saml/consume'],
+      nameIdFormat: EMAIL_NAMEID,
+      // Used only when PagerDuty auto-provisions the account.
+      claims: [
+        {
+          claimName: 'Name',
+          nameFormat: BASIC,
+          sourceKind: 'user',
+          sourceField: 'displayName',
+        },
+      ],
+    },
+  },
+  {
+    key: 'sentry',
+    name: 'Sentry',
+    category: 'engineering',
+    description: 'Error and performance monitoring on sentry.io. One entry per Sentry organization.',
+    docsUrl: 'https://docs.sentry.io/organization/authentication/sso/saml2/',
+    variables: [
+      {
+        key: 'org',
+        label: 'Organization slug',
+        example: 'acme',
+        hint: 'From Settings → General Settings in Sentry',
+      },
+    ],
+    saml: {
+      // Sentry's entity ID is its metadata URL, trailing slash included.
+      spEntityId: 'https://sentry.io/saml/metadata/{{org}}/',
+      acsUrls: ['https://sentry.io/saml/acs/{{org}}/'],
+      nameIdFormat: EMAIL_NAMEID,
+      // Sentry asks which attribute carries each value under Map IdP
+      // Attributes. Enter these names there. The user ID must never change.
+      claims: [
+        { claimName: 'user_id', nameFormat: BASIC, sourceKind: 'user', sourceField: 'login' },
+        { claimName: 'email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
+        {
+          claimName: 'first_name',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'givenName',
+        },
+        {
+          claimName: 'last_name',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'familyName',
+        },
+      ],
+    },
+  },
+  {
+    key: 'jenkins',
+    name: 'Jenkins',
+    category: 'engineering',
+    description: 'Self-hosted CI server, through the SAML plugin.',
+    docsUrl: 'https://github.com/jenkinsci/saml-plugin/blob/main/doc/CONFIGURE.md',
+    variables: [
+      { key: 'host', label: 'Jenkins hostname', example: 'ci.acme.example' },
+    ],
+    saml: {
+      // The plugin's default entity ID is the finishLogin URL, unless its
+      // SP Entity ID field overrides it. Its metadata at
+      // https://<host>/securityRealm/metadata shows the value in use. The
+      // plugin signs AuthnRequests only once its signing option is on.
+      spEntityId: 'https://{{host}}/securityRealm/finishLogin',
+      acsUrls: ['https://{{host}}/securityRealm/finishLogin'],
+      nameIdFormat: EMAIL_NAMEID,
+      // Enter these names in the plugin's Username, Email, Display Name and
+      // Group Attribute fields.
+      claims: [
+        { claimName: 'username', nameFormat: BASIC, sourceKind: 'user', sourceField: 'login' },
+        { claimName: 'email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
+        {
+          claimName: 'displayName',
+          nameFormat: BASIC,
+          sourceKind: 'user',
+          sourceField: 'displayName',
+        },
+        { claimName: 'groups', nameFormat: BASIC, sourceKind: 'groups', multiValued: true },
+      ],
     },
   },
   {
