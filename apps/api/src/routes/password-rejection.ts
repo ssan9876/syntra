@@ -1,3 +1,6 @@
+import type { PasswordSyncResult } from '@syntra/core';
+import { ProblemError } from '../plugins/problem-json.js';
+
 /**
  * What to tell somebody whose new password was refused.
  *
@@ -22,4 +25,18 @@ export const PASSWORD_REJECTION: Record<string, string> = {
 export function passwordRejectionMessage(detail: string | undefined): string {
   return (detail ? PASSWORD_REJECTION[detail] : undefined) ??
     'That password cannot be used.';
+}
+
+/** A target with `syncPassword` on refused the new password. Nothing changed. */
+export function targetPolicyProblem(message: string): ProblemError {
+  return new ProblemError(422, 'target-password-policy', 'Password refused', message, {
+    errors: [{ path: 'newPassword', message: 'target_policy' }],
+  });
+}
+
+/** Per-target results of a password sync, as every password route returns them. */
+export function passwordSyncResponse(
+  targets: PasswordSyncResult[],
+): { targetName: string; result: PasswordSyncResult['result']; message: string }[] {
+  return targets.map(({ targetName, result, message }) => ({ targetName, result, message }));
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakeGraphServer, type FakeGraphServer } from '../testing/fake-graph-server.js';
-import { entraTargetConnector } from './connector.js';
+import { entraPasswordReset, entraTargetConnector } from './connector.js';
 import { forgetEntraTokens } from './graph.js';
 import { entraTargetConfigSchema, entraUserPrincipalName, type EntraTargetConfig } from './config.js';
 import { readBackTarget, type TargetConnector, type TargetReadBack } from '../types.js';
@@ -840,5 +840,46 @@ describe('the capability matrix', () => {
         expect(entry.requiredPermissions.length).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe('entraPasswordReset', () => {
+  const reset = (anchor: string, newPassword = 'A-long-new-passphrase', requireChange = false) =>
+    entraPasswordReset.resetPassword(config(), { anchor, newPassword, requireChange });
+
+  it('sets the password and the must-change flag', async () => {
+    expect(await reset(U1, 'A-long-new-passphrase', true)).toEqual({ ok: true, message: 'password set' });
+    expect(server.users.get(U1)!.passwordProfile).toEqual({
+      password: 'A-long-new-passphrase',
+      forceChangePasswordNextSignIn: true,
+    });
+  });
+
+  it('skips a user synced from on-premises AD without writing', async () => {
+    server.users.get(U2)!.onPremisesSyncEnabled = true;
+    const result = await reset(U2);
+    expect(result).toMatchObject({ ok: false, failure: 'unsupported' });
+    expect(graphRequests().some((r) => r.method === 'PATCH')).toBe(false);
+  });
+
+  it('classifies a password the tenant refuses as policy, without its text', async () => {
+    const result = await reset(U1, 'short');
+    expect(result).toMatchObject({ ok: false, failure: 'policy' });
+    expect(result.message).not.toContain('complexity requirements');
+    expect(result.message).not.toContain('short');
+  });
+
+  it('names the missing permission on 403', async () => {
+    server.consentDenied();
+    const result = await reset(U1);
+    expect(result).toMatchObject({ ok: false, failure: 'unauthorized' });
+    expect(result.message).toContain('User-PasswordProfile.ReadWrite.All');
+  });
+
+  it('answers not_found for an unknown anchor', async () => {
+    expect(await reset('aaaaaaaa-0000-0000-0000-00000000ffff')).toMatchObject({
+      ok: false,
+      failure: 'not_found',
+    });
   });
 });

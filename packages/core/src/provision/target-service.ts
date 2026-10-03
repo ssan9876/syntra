@@ -8,6 +8,7 @@ import {
   forgetAccessTokens,
   forgetEntraTokens,
   TARGET_CONNECTOR_TYPES,
+  PASSWORD_SYNC_TARGET_TYPES,
   targetConnectorCapabilities,
   type ConnectionResult,
 } from '@syntra/connectors';
@@ -515,6 +516,11 @@ export interface UpdateTargetInput extends Partial<CreateTargetInput> {
    * DN. Validated below that base by `validateContainerDn`.
    */
   orgUnitRootDn?: string | null;
+  /**
+   * Push a person's new Syntra password to their account here. Active
+   * Directory and Entra ID only; refused for any other type.
+   */
+  syncPassword?: boolean;
 }
 
 const maintenanceWindowSchema = z.object({
@@ -631,6 +637,20 @@ export async function updateTarget(
         'this target has no containers to mirror org units into',
       );
     }
+    const syncPassword = input.syncPassword;
+    if (syncPassword !== undefined && typeof syncPassword !== 'boolean') {
+      throw new LadderConfigurationError('invalid-sync-password', 'syncPassword', 'syncPassword must be true or false');
+    }
+    if (
+      syncPassword === true &&
+      !(PASSWORD_SYNC_TARGET_TYPES as readonly string[]).includes(effectiveType)
+    ) {
+      throw new LadderConfigurationError(
+        'sync-password-unsupported',
+        'syncPassword',
+        'Password sync is available for Active Directory and Entra ID targets only.',
+      );
+    }
     const rootToCheck = orgUnitRootDn === undefined ? before.orgUnitRootDn : orgUnitRootDn;
     if (
       rootToCheck !== null &&
@@ -684,6 +704,7 @@ export async function updateTarget(
         // proposes the OUs, under the guard, where a person can read them.
         ...(mirrorOrgUnits === undefined ? {} : { mirrorOrgUnits }),
         ...(orgUnitRootDn === undefined ? {} : { orgUnitRootDn }),
+        ...(syncPassword === undefined ? {} : { syncPassword }),
         entitlementRevocationDelayDays: ladder.entitlementRevocationDelayDays,
         disableGraceDays: ladder.disableGraceDays,
         archiveAfterDays: ladder.archiveAfterDays,
@@ -745,6 +766,9 @@ export async function updateTarget(
         ...(mirrorOrgUnits === undefined
           ? {}
           : { mirrorOrgUnits: { from: before.mirrorOrgUnits, to: mirrorOrgUnits } }),
+        ...(syncPassword === undefined
+          ? {}
+          : { syncPassword: { from: before.syncPassword, to: syncPassword } }),
         ...(orgUnitRootDn === undefined
           ? {}
           : { orgUnitRootDn: { from: before.orgUnitRootDn, to: orgUnitRootDn } }),

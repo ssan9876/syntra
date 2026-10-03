@@ -397,6 +397,18 @@ export async function startFakeGraphServer(
               }
             }
           }
+          // Graph's two refusals of a password write: a user mastered on
+          // premises, and a password the tenant's policy rejects. The fake's
+          // policy is eight characters.
+          const profile = patch.passwordProfile as { password?: unknown } | undefined;
+          if (profile !== undefined) {
+            if (user.onPremisesSyncEnabled === true) {
+              return { status: 400, body: graphError('Request_BadRequest', 'Unable to update the specified properties for on-premises mastered Directory Sync objects or objects currently undergoing migration.') };
+            }
+            if (typeof profile.password !== 'string' || profile.password.length < 8) {
+              return { status: 400, body: graphError('Request_BadRequest', 'The specified password does not comply with password complexity requirements. Please provide a different password.') };
+            }
+          }
           const { onPremisesExtensionAttributes, ...flat } = patch;
           Object.assign(user, flat);
           if (onPremisesExtensionAttributes && typeof onPremisesExtensionAttributes === 'object') {

@@ -5,6 +5,12 @@ import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { findAttempt } from './attempt-service.js';
 import { endSessions } from './end-sessions.js';
+import {
+  pushPasswordToTargets,
+  recordPasswordSyncDesync,
+  type PasswordSyncResult,
+} from './password-sync.js';
+import type { MasterKeyProvider } from '../vault/master-key.js';
 
 export interface RenewExpiredPasswordInput {
   attemptToken: string;
@@ -14,12 +20,14 @@ export interface RenewExpiredPasswordInput {
 }
 
 export type RenewOutcome =
-  | { ok: true; userId: string }
+  | { ok: true; userId: string; targets: PasswordSyncResult[] }
   | { ok: false; reason: 'attempt_invalid' }
   | { ok: false; reason: 'user_inactive' }
   | { ok: false; reason: 'weak_password'; detail: string }
   | { ok: false; reason: 'unchanged' }
-  | { ok: false; reason: 'reused'; depth: number };
+  | { ok: false; reason: 'reused'; depth: number }
+  /** The first target written refused the new password. Nothing changed. */
+  | { ok: false; reason: 'target_policy'; message: string };
 
 /**
  * Sets a new password for somebody whose old one expired mid-sign-in.
@@ -38,6 +46,7 @@ export type RenewOutcome =
  */
 export async function renewExpiredPassword(
   tenantId: string,
+  provider: MasterKeyProvider,
   input: RenewExpiredPasswordInput,
 ): Promise<RenewOutcome> {
   const now = input.now ?? new Date();
@@ -87,6 +96,18 @@ export async function renewExpiredPassword(
   );
   if (reused) return { ok: false, reason: 'reused', depth };
 
+  const synced = await pushPasswordToTargets(tenantId, provider, {
+    userId: context.user.id,
+    newPassword: input.newPassword,
+    requireChange: false,
+    actorUserId: context.user.id,
+    sourceIp: input.sourceIp,
+    trigger: 'renewal',
+  });
+  if (!synced.ok) {
+    return { ok: false, reason: 'target_policy', message: synced.rejectedBy.message };
+  }
+
   // Argon2id outside every transaction, for the reason `authenticate` gives.
   const hash = await hashPassword(input.newPassword);
 
@@ -108,7 +129,15 @@ export async function renewExpiredPassword(
       sourceIp: input.sourceIp,
       payload: { reason: 'expired' },
     });
+  }).catch(async (cause: unknown) => {
+    await recordPasswordSyncDesync(
+      tenantId,
+      { userId: context.user.id, actorUserId: context.user.id, sourceIp: input.sourceIp },
+      synced.results,
+      cause,
+    );
+    throw cause;
   });
 
-  return { ok: true, userId: context.user.id };
+  return { ok: true, userId: context.user.id, targets: synced.results };
 }

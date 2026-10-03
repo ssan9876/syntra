@@ -1,13 +1,13 @@
 import type { z } from 'zod';
-import type { TargetConnector } from './types.js';
+import type { TargetConnector, TargetPasswordReset } from './types.js';
 import { traceConnector } from './observability/tracing.js';
-import { adTargetConnector } from './ad/connector.js';
+import { adPasswordReset, adTargetConnector } from './ad/connector.js';
 import { adTargetConfigSchema } from './ad/config.js';
 import { scimTargetConnector } from './scim/connector.js';
 import { scim2TargetConfigSchema } from './scim/config.js';
 import { httpTargetConnector } from './http/connector.js';
 import { httpTargetConfigSchema } from './http/document.js';
-import { entraTargetConnector } from './entra/connector.js';
+import { entraPasswordReset, entraTargetConnector } from './entra/connector.js';
 import { entraTargetConfigSchema } from './entra/config.js';
 
 /**
@@ -59,6 +59,24 @@ const CONFIG_SCHEMAS: Record<TargetConnectorType, z.ZodTypeAny> = {
   httpJson: httpTargetConfigSchema,
   entraId: entraTargetConfigSchema,
 };
+
+/** The target types that can take a password set by Syntra (`syncPassword`). */
+export const PASSWORD_SYNC_TARGET_TYPES = ['activeDirectory', 'entraId'] as const;
+
+const PASSWORD_RESETS: Record<
+  (typeof PASSWORD_SYNC_TARGET_TYPES)[number],
+  TargetPasswordReset<never>
+> = {
+  activeDirectory: adPasswordReset as unknown as TargetPasswordReset<never>,
+  entraId: entraPasswordReset as unknown as TargetPasswordReset<never>,
+};
+
+/** Null for a type that cannot take a password. */
+export function targetPasswordResetFor(type: string): TargetPasswordReset<never> | null {
+  return (PASSWORD_SYNC_TARGET_TYPES as readonly string[]).includes(type)
+    ? PASSWORD_RESETS[type as (typeof PASSWORD_SYNC_TARGET_TYPES)[number]]
+    : null;
+}
 
 function isKnownType(type: string): type is TargetConnectorType {
   return (TARGET_CONNECTOR_TYPES as readonly string[]).includes(type);

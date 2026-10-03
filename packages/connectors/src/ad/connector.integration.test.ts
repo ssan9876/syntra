@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Attribute, Change, Client } from 'ldapts';
 import { normaliseAnchor } from '../ldap/anchor.js';
-import { adTargetConnector } from './connector.js';
+import { adPasswordReset, adTargetConnector } from './connector.js';
 import { objectSidRid } from './sid.js';
 // A plain module. Importing `samba.smoke.test.js` would register its hooks and
 // its five tests inside THIS file's collection and run them again -- and they
@@ -1762,6 +1762,61 @@ describe('moveContainer against a real domain controller', () => {
 
   it('reports not_found when there is nothing to move', async () => {
     const result = await adTargetConnector.write(config, move(`OU=Gone,${testOu}`, `OU=Else,${testOu}`));
+    expect(result).toMatchObject({ ok: false, failure: 'not_found' });
+  });
+});
+
+describe('adPasswordReset', () => {
+  const created = async (key: string): Promise<string> => {
+    const result = await adTargetConnector.write(config, createOp(`reset-${key}`, key));
+    expect(result.ok).toBe(true);
+    return result.anchor!;
+  };
+
+  it('sets the password, and the account can bind with it', async () => {
+    const anchor = await created('rita.berg');
+    const result = await adPasswordReset.resetPassword(config, {
+      anchor,
+      newPassword: 'Synced!Passw0rd-2',
+      requireChange: false,
+    });
+    expect(result).toEqual({ ok: true, message: 'password set' });
+    const asUser = new Client({
+      url: samba.url,
+      tlsOptions: { rejectUnauthorized: false },
+      connectTimeout: 10_000,
+    });
+    await asUser.bind(`CN=rita.berg,${testOu}`, 'Synced!Passw0rd-2');
+    await asUser.unbind();
+    expect(await readAttribute(`CN=rita.berg,${testOu}`, 'pwdLastSet')).not.toBe('0');
+  });
+
+  it('writes pwdLastSet = 0 when a change is required', async () => {
+    const anchor = await created('sam.holt');
+    await adPasswordReset.resetPassword(config, {
+      anchor,
+      newPassword: 'Synced!Passw0rd-3',
+      requireChange: true,
+    });
+    expect(await readAttribute(`CN=sam.holt,${testOu}`, 'pwdLastSet')).toBe('0');
+  });
+
+  it('classifies a password the domain refuses as policy', async () => {
+    const anchor = await created('tom.vik');
+    const result = await adPasswordReset.resetPassword(config, {
+      anchor,
+      newPassword: 'short',
+      requireChange: false,
+    });
+    expect(result).toMatchObject({ ok: false, failure: 'policy' });
+  });
+
+  it('answers not_found for an anchor that names nothing', async () => {
+    const result = await adPasswordReset.resetPassword(config, {
+      anchor: '00000000-0000-0000-0000-000000000000',
+      newPassword: 'Synced!Passw0rd-4',
+      requireChange: false,
+    });
     expect(result).toMatchObject({ ok: false, failure: 'not_found' });
   });
 });

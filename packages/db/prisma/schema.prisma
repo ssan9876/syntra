@@ -2204,6 +2204,13 @@ model TargetSystem {
   /// is audited as confirmed by this setting.
   autoConfirmRenames Boolean @default(false)
 
+  /// Push a person's new Syntra password to their account here whenever it
+  /// is set: a self-service change, a reset, a renewal or an administrator
+  /// setting it. Off by default. On, the bind needs the target's reset right
+  /// (Reset Password on Active Directory, User-PasswordProfile.ReadWrite.All
+  /// on Entra ID). Active Directory and Entra ID only.
+  syncPassword Boolean @default(false)
+
   /// Mirror the org-unit tree as OUs. When on, every ACTIVE org unit without
   /// a manual materialisation is placed at a DN derived from its ancestor
   /// path -- `OU=<unit>,OU=<parent>,...,<orgUnitRootDn>` -- and a run creates

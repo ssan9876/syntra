@@ -25562,6 +25562,9 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "syncPassword": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false

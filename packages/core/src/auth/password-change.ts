@@ -7,6 +7,11 @@ import { validateNewPassword } from './password-policy.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { hashPassword, setPasswordHash, verifyPassword } from './password.js';
 import { endSessions } from './end-sessions.js';
+import {
+  pushPasswordToTargets,
+  recordPasswordSyncDesync,
+  type PasswordSyncResult,
+} from './password-sync.js';
 
 export interface ChangeOwnPasswordInput {
   userId: string;
@@ -24,7 +29,8 @@ export interface ChangeOwnPasswordInput {
  * somebody to guess which of their systems owns the password.
  */
 export type ChangeOwnPasswordOutcome =
-  | { ok: true; otherSessionsRevoked: number }
+  /** `targets`: one entry per target with `syncPassword` on that holds an account for them. */
+  | { ok: true; otherSessionsRevoked: number; targets: PasswordSyncResult[] }
   | { ok: false; reason: 'upstream'; hint: string | null }
   | { ok: false; reason: 'no_password' }
   | { ok: false; reason: 'wrong_password' }
@@ -40,7 +46,9 @@ export type ChangeOwnPasswordOutcome =
   /** The DIRECTORY refused the new password: its complexity, history or age. */
   | { ok: false; reason: 'directory_policy' }
   /** The directory could not be reached, or refused the change outright. */
-  | { ok: false; reason: 'directory_unavailable' };
+  | { ok: false; reason: 'directory_unavailable' }
+  /** The first target written refused the new password. Nothing changed. */
+  | { ok: false; reason: 'target_policy'; message: string };
 
 /**
  * Self-service password change, for somebody already signed in.
@@ -239,9 +247,30 @@ export async function changeOwnPassword(
     // Recorded and RE-THROWN. Swallowing it would report a successful change
     // to a user whose Syntra password is now the old one, which is the
     // failure this event exists to make visible rather than one to hide.
+    // Targets after the directory, never instead of it: the bind as the user
+    // above is what verified the current password. A target paired with this
+    // source is the same directory, written already.
+    const synced = await pushPasswordToTargets(tenantId, provider, {
+      userId: context.user.id,
+      newPassword: input.newPassword,
+      requireChange: false,
+      actorUserId: context.user.id,
+      sourceIp: input.sourceIp,
+      trigger: 'change',
+      alreadyApplied: true,
+      excludePairedSourceId: context.sourceId,
+    });
+    const targets = synced.ok ? synced.results : [];
+
     try {
-      return { ok: true, otherSessionsRevoked: await commit() };
+      return { ok: true, otherSessionsRevoked: await commit(), targets };
     } catch (cause) {
+      await recordPasswordSyncDesync(
+        tenantId,
+        { userId: context.user.id, actorUserId: context.user.id, sourceIp: input.sourceIp },
+        targets,
+        cause,
+      );
       await withTenant(tenantId, (tx) =>
         recordEvent(tx, {
           actorUserId: context.user.id,
@@ -312,7 +341,30 @@ export async function changeOwnPassword(
     return { ok: false, reason: 'reused', depth: context.historyDepth };
   }
 
-  return { ok: true, otherSessionsRevoked: await commit() };
+  const synced = await pushPasswordToTargets(tenantId, provider, {
+    userId: context.user.id,
+    newPassword: input.newPassword,
+    requireChange: false,
+    actorUserId: context.user.id,
+    sourceIp: input.sourceIp,
+    trigger: 'change',
+  });
+  if (!synced.ok) {
+    await auditFailure('target_policy');
+    return { ok: false, reason: 'target_policy', message: synced.rejectedBy.message };
+  }
+
+  try {
+    return { ok: true, otherSessionsRevoked: await commit(), targets: synced.results };
+  } catch (cause) {
+    await recordPasswordSyncDesync(
+      tenantId,
+      { userId: context.user.id, actorUserId: context.user.id, sourceIp: input.sourceIp },
+      synced.results,
+      cause,
+    );
+    throw cause;
+  }
 }
 
 /**
@@ -326,13 +378,15 @@ export type SetPasswordAsAdminOutcome =
    * `mustChange` is what was actually recorded: true for a person's account,
    * false for a service account (see `setPasswordAsAdmin`).
    */
-  | { ok: true; sessionsRevoked: number; mustChange: boolean }
+  | { ok: true; sessionsRevoked: number; mustChange: boolean; targets: PasswordSyncResult[] }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'upstream'; hint: string | null }
   /** A directory owns this password. Carries the source so the caller names it. */
   | { ok: false; reason: 'directory_owned'; sourceId: string }
   | { ok: false; reason: 'weak_password'; detail: string }
-  | { ok: false; reason: 'reused'; depth: number };
+  | { ok: false; reason: 'reused'; depth: number }
+  /** The first target written refused the new password. Nothing changed. */
+  | { ok: false; reason: 'target_policy'; message: string };
 
 export interface SetPasswordAsAdminInput {
   userId: string;
@@ -374,6 +428,7 @@ export interface SetPasswordAsAdminInput {
  */
 export async function setPasswordAsAdmin(
   tenantId: string,
+  provider: MasterKeyProvider,
   input: SetPasswordAsAdminInput,
 ): Promise<SetPasswordAsAdminOutcome> {
   const now = input.now ?? new Date();
@@ -446,6 +501,20 @@ export async function setPasswordAsAdmin(
 
   const mustChange = context.user.kind !== 'service';
 
+  // Must-change travels with it: the administrator knows this password at the
+  // target too.
+  const synced = await pushPasswordToTargets(tenantId, provider, {
+    userId: input.userId,
+    newPassword: input.newPassword,
+    requireChange: mustChange,
+    actorUserId: input.actorUserId,
+    sourceIp: input.sourceIp,
+    trigger: 'admin_set',
+  });
+  if (!synced.ok) {
+    return { ok: false, reason: 'target_policy', message: synced.rejectedBy.message };
+  }
+
   const sessionsRevoked = await withTenant(tenantId, async (tx) => {
     await setPasswordHash(tx, input.userId, hash, { now, mustChange });
     // An administrator setting somebody's password spares nothing: this is a
@@ -471,7 +540,15 @@ export async function setPasswordAsAdmin(
       },
     });
     return revoked;
+  }).catch(async (cause: unknown) => {
+    await recordPasswordSyncDesync(
+      tenantId,
+      { userId: input.userId, actorUserId: input.actorUserId, sourceIp: input.sourceIp },
+      synced.results,
+      cause,
+    );
+    throw cause;
   });
 
-  return { ok: true, sessionsRevoked, mustChange };
+  return { ok: true, sessionsRevoked, mustChange, targets: synced.results };
 }

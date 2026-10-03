@@ -1175,6 +1175,7 @@ const RAW = {
     concurrency: 'none',
     renameEnabled: 'none',
     autoConfirmRenames: 'none',
+    syncPassword: 'none',
     mirrorOrgUnits: 'none',
     orgUnitRootDn: 'none',
     lastRunAt: 'none',

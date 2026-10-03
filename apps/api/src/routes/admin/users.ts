@@ -38,6 +38,7 @@ import {
 } from '@syntra/core';
 import type { TenantClient } from '@syntra/db';
 import { ProblemError } from '../../plugins/problem-json.js';
+import { passwordSyncResponse } from '../password-rejection.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
 
@@ -1081,7 +1082,7 @@ export async function registerAdminUserRoutes(
       const { id } = idParam.parse(request.params);
       const { password } = setUserPasswordRequest.parse(request.body);
 
-      const outcome = await setPasswordAsAdmin(request.tenantId, {
+      const outcome = await setPasswordAsAdmin(request.tenantId, provider, {
         userId: id,
         actorUserId: request.session.userId,
         newPassword: password,
@@ -1089,7 +1090,11 @@ export async function registerAdminUserRoutes(
       });
 
       if (outcome.ok) {
-        return { sessionsRevoked: outcome.sessionsRevoked, mustChange: outcome.mustChange };
+        return {
+          sessionsRevoked: outcome.sessionsRevoked,
+          mustChange: outcome.mustChange,
+          targets: passwordSyncResponse(outcome.targets),
+        };
       }
 
       switch (outcome.reason) {
@@ -1128,6 +1133,8 @@ export async function registerAdminUserRoutes(
             'That password was refused',
             `It is one of this account’s last ${outcome.depth} passwords.`,
           );
+        case 'target_policy':
+          throw new ProblemError(422, 'target-password-policy', 'That password was refused', outcome.message);
       }
     },
   );

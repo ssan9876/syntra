@@ -20,7 +20,11 @@ import {
   endSessions,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
-import { passwordRejectionMessage } from './password-rejection.js';
+import {
+  passwordRejectionMessage,
+  passwordSyncResponse,
+  targetPolicyProblem,
+} from './password-rejection.js';
 import { requireSession, SESSION_COOKIE } from '../plugins/require-session.js';
 import { perTenantRateLimit } from '../plugins/rate-limit.js';
 import { tenantRelyingParty } from './relying-party.js';
@@ -346,7 +350,11 @@ export async function registerAuthRoutes(
       });
 
       if (outcome.ok) {
-        return { ok: true, otherSessionsRevoked: outcome.otherSessionsRevoked };
+        return {
+          ok: true,
+          otherSessionsRevoked: outcome.otherSessionsRevoked,
+          targets: passwordSyncResponse(outcome.targets),
+        };
       }
 
       switch (outcome.reason) {
@@ -398,6 +406,8 @@ export async function registerAuthRoutes(
             'Directory unreachable',
             'Your password is held in the directory. Nothing was changed. Try again shortly.',
           );
+        case 'target_policy':
+          throw targetPolicyProblem(outcome.message);
         case 'weak_password':
           throw new ProblemError(
             422,
@@ -444,7 +454,7 @@ export async function registerAuthRoutes(
     const body = renewPasswordRequest.parse(request.body);
     const { rp } = await relyingPartyFor(request);
 
-    const outcome = await renewExpiredPassword(request.tenantId, {
+    const outcome = await renewExpiredPassword(request.tenantId, provider, {
       attemptToken: body.attemptToken,
       newPassword: body.newPassword,
       sourceIp: request.ip,
@@ -479,6 +489,8 @@ export async function registerAuthRoutes(
             'That is the password that expired. Choose a different one.',
             { errors: [{ path: 'newPassword', message: 'unchanged' }] },
           );
+        case 'target_policy':
+          throw targetPolicyProblem(outcome.message);
         case 'reused':
           throw new ProblemError(
             422,

@@ -13,6 +13,7 @@ import {
 } from '@syntra/ui';
 import { useCan } from '../../session/SessionProvider.js';
 import { ApiError, api } from '../../session/api.js';
+import { passwordSyncProblems, type PasswordSyncTarget } from '../security/password-sync.js';
 import { useApiResource } from './hooks.js';
 import { RecordPanel } from './RecordPanel.js';
 import { DeleteButton } from './DeleteButton.js';
@@ -687,6 +688,7 @@ export function AccountDetailPage() {
                           const result = await api<{
                             sessionsRevoked: number;
                             mustChange?: boolean;
+                            targets?: PasswordSyncTarget[];
                           }>(
                             `/api/admin/users/${data.id}/password`,
                             {
@@ -703,7 +705,9 @@ export function AccountDetailPage() {
                               result.mustChange === false
                                 ? ''
                                 : ' Must change at next sign-in.'
-                            }`,
+                            }${passwordSyncProblems(result.targets)
+                              .map((line) => ` ${line}`)
+                              .join('')}`,
                           );
                           setSettingPassword(false);
                           setNewPassword('');

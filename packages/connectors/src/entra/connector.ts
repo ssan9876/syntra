@@ -3,10 +3,13 @@ import type {
   ConnectionResult,
   ConnectorRight,
   DiscoveredEntitlement,
+  ResetPasswordInput,
   SchemaDescriptor,
   SourceRecord,
   TargetConnector,
+  TargetPasswordReset,
   TargetReadBack,
+  WritebackResult,
   WriteOperation,
   WriteResult,
 } from '../types.js';
@@ -909,3 +912,77 @@ async function performWrite(connection: EntraConnection, op: WriteOperation): Pr
           return revokeMembership(connection, op.entitlementId, op.anchor);
       }
 }
+
+function resetFailed(response: GraphResponse): WritebackResult {
+  const message = graphFailureMessage(response.status, response.body);
+  if (response.status === 401 || response.status === 403) {
+    return {
+      ok: false,
+      failure: 'unauthorized',
+      message: `${message}. Grant admin consent for User-PasswordProfile.ReadWrite.All.`,
+    };
+  }
+  if (response.status === 404) {
+    return { ok: false, failure: 'not_found', message: 'no account at this anchor' };
+  }
+  // Graph refuses a weak or recently used password with a 400 whose message
+  // names the password. Matched, never returned.
+  if (response.status === 400 && /password/i.test(graphErrorMessage(response.body))) {
+    return {
+      ok: false,
+      failure: 'policy',
+      message: 'Microsoft Entra ID refused the new password: it does not meet the tenant password policy',
+    };
+  }
+  return { ok: false, failure: 'transient', message };
+}
+
+/**
+ * `PATCH /users/{id}` with a `passwordProfile`, after a read of
+ * `onPremisesSyncEnabled`: Graph refuses a password for a user synced from
+ * on-premises AD, whose password arrives through password hash sync instead.
+ * That user is `unsupported`, which the caller reports as skipped.
+ *
+ * Needs `User-PasswordProfile.ReadWrite.All`; `User.ReadWrite.All` alone is
+ * refused with 403.
+ */
+export const entraPasswordReset: TargetPasswordReset<Config> = {
+  async resetPassword(raw, input: ResetPasswordInput): Promise<WritebackResult> {
+    const connection = resolveEntraConfig(raw);
+    const path = `/users/${encodeURIComponent(input.anchor)}`;
+    try {
+      const current = await graphRequest(connection, {
+        method: 'GET',
+        path,
+        query: { $select: 'id,onPremisesSyncEnabled' },
+      });
+      if (current.status >= 400) return resetFailed(current);
+      if ((current.body as { onPremisesSyncEnabled?: unknown } | null)?.onPremisesSyncEnabled === true) {
+        return {
+          ok: false,
+          failure: 'unsupported',
+          message: 'account is synced from on-premises Active Directory',
+        };
+      }
+      const response = await graphRequest(connection, {
+        method: 'PATCH',
+        path,
+        body: {
+          passwordProfile: {
+            password: input.newPassword,
+            forceChangePasswordNextSignIn: input.requireChange,
+          },
+        },
+      });
+      if (response.status >= 400) return resetFailed(response);
+      return { ok: true, message: 'password set' };
+    } catch (cause) {
+      const result = thrown(cause);
+      return {
+        ok: false,
+        failure: result.failure === 'unauthorized' ? 'unauthorized' : 'transient',
+        message: result.message,
+      };
+    }
+  },
+};

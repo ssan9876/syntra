@@ -30,6 +30,8 @@ export interface Target {
   autoConfirmRenames?: boolean;
   /** Mirror the org-unit tree as OUs. Absent from an older API: off. */
   mirrorOrgUnits?: boolean;
+  /** Push new Syntra passwords to this target. Absent from an older API: off. */
+  syncPassword?: boolean;
   /** Where the mirrored tree hangs; null means the base DN. */
   orgUnitRootDn?: string | null;
   /**
@@ -114,6 +116,7 @@ export interface Form {
   enabled: boolean;
   autoApply: boolean;
   autoConfirmRenames: boolean;
+  syncPassword: boolean;
   mirrorOrgUnits: boolean;
   orgUnitRootDn: string;
   enforcementMode: EnforcementMode;
@@ -162,6 +165,7 @@ export const BLANK: Form = {
   enabled: true,
   autoApply: false,
   autoConfirmRenames: false,
+  syncPassword: false,
   mirrorOrgUnits: false,
   orgUnitRootDn: '',
   enforcementMode: 'additive',
@@ -386,6 +390,7 @@ export function formFrom(target: Target): Form {
     enabled: target.enabled,
     autoApply: target.autoApply,
     autoConfirmRenames: target.autoConfirmRenames ?? false,
+    syncPassword: target.syncPassword ?? false,
     mirrorOrgUnits: target.mirrorOrgUnits ?? false,
     orgUnitRootDn: target.orgUnitRootDn ?? '',
     enforcementMode: target.enforcementMode,

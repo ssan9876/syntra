@@ -459,7 +459,7 @@ describe('setPasswordAsAdmin', () => {
   }
 
   const setIt = async (actorUserId: string, newPassword = ADMIN_SET) =>
-    setPasswordAsAdmin(tenantId, {
+    setPasswordAsAdmin(tenantId, provider, {
       userId,
       actorUserId,
       newPassword,
@@ -652,7 +652,7 @@ describe('setPasswordAsAdmin', () => {
   it('answers not_found for an account that is not there', async () => {
     const actor = await seedActor();
 
-    const outcome = await setPasswordAsAdmin(tenantId, {
+    const outcome = await setPasswordAsAdmin(tenantId, provider, {
       userId: crypto.randomUUID(),
       actorUserId: actor,
       newPassword: ADMIN_SET,
