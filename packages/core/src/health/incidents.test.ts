@@ -289,6 +289,32 @@ describe('listIncidents', () => {
     expect((await incidents()).find((i) => i.kind === 'provision_run_failed')!.acknowledged).toBeNull();
   });
 
+  it('reports mail going to a local test server as a condition anyone may acknowledge', async () => {
+    const mailSink = {
+      server: 'smtp://localhost:1025',
+      message: 'Mail goes to smtp://localhost:1025, a local test server. Set SMTP_URL to a real mail server.',
+    };
+    const list = () => withTenant(tenantId, (tx) => listIncidents(tx, NOW, { mailSink }));
+    const found = (await list()).find((i) => i.kind === 'mail_to_test_server')!;
+    expect(found).toMatchObject({
+      severity: 'critical',
+      title: 'Mail goes to a test server',
+      detail: 'SMTP_URL is smtp://localhost:1025. Set it to a real mail server.',
+      href: '/admin/settings?tab=email',
+      resolvable: false,
+      acknowledged: null,
+    });
+
+    const user = await withTenant(tenantId, (tx) =>
+      tx.user.create({ data: { tenantId, login: 'ops', email: 'ops@acme.test', displayName: 'Ops' } }),
+    );
+    await withTenant(tenantId, (tx) => acknowledgeIncident(tx, tenantId, 'mail_to_test_server', user.id, 'moving to the relay', NOW));
+    expect((await list()).find((i) => i.kind === 'mail_to_test_server')!.acknowledged).toMatchObject({ note: 'moving to the relay' });
+
+    // Fixed: SMTP_URL changed, so the route passes nothing.
+    expect(await kinds()).not.toContain('mail_to_test_server');
+  });
+
   it('offers no resolution for a condition, which clears when fixed', async () => {
     await aTarget({ name: 'Samba AD', schedule: '0 * * * *', consecutiveSkippedRuns: 2, lastSkippedAt: daysAgo(0) });
     const found = (await incidents()).find((i) => i.kind === 'target_runs_skipped')!;

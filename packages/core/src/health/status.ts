@@ -2,6 +2,7 @@ import { migrationState, prisma, TENANT_DELETED_STATUS, withTenant } from '@synt
 import { configurationFingerprint } from '../lifecycle/management.js';
 import { inspectJobHealth, jobHealthCounts, type JobHealthCount, type JobHealthFindingKind, type QueueInspector } from '../jobs/job-health.js';
 import type { Scheduler } from '../jobs/scheduler.js';
+import type { MailSinkWarning } from '../notify/mail-check.js';
 import type { Transport } from '../notify/notification-service.js';
 import { externalWriteStopActive } from '../provision/target-write-stop.js';
 import { tenantWriteStopActive } from '../provision/tenant-write-stop.js';
@@ -52,6 +53,8 @@ export interface StatusDeps {
   /** Whether this process's scheduler started. Absent: unknown. */
   schedulerRunning?: () => boolean;
   transport?: Transport;
+  /** `mailSinkWarning(config)`: mail goes to a local test server. */
+  mailSink?: MailSinkWarning | null;
   /** Tests only. */
   timeoutMs?: number;
 }
@@ -129,17 +132,25 @@ export async function componentHealth(deps: StatusDeps): Promise<StatusComponent
     components.push({ name: 'key_provider', state: 'unavailable', detail: 'Key provider is not responding. New secrets cannot be saved, and connector credentials stop working as cached keys expire.' });
   }
 
+  let smtp: StatusComponent;
   if (!deps.transport?.verify) {
-    components.push({ name: 'smtp', state: 'unknown', detail: 'Mail server is not checked in this deployment.' });
+    smtp = { name: 'smtp', state: 'unknown', detail: 'Mail server is not checked in this deployment.' };
   } else {
     const verify = deps.transport.verify.bind(deps.transport);
     try {
       await within(ms, verify);
-      components.push({ name: 'smtp', state: 'operational', detail: 'Mail server is accepting connections.' });
+      smtp = { name: 'smtp', state: 'operational', detail: 'Mail server is accepting connections.' };
     } catch {
-      components.push({ name: 'smtp', state: 'unavailable', detail: 'Mail server is not accepting connections. Emails, including sign-in codes, are delayed.' });
+      smtp = { name: 'smtp', state: 'unavailable', detail: 'Mail server is not accepting connections. Emails, including sign-in codes, are delayed.' };
     }
   }
+  // A local mail catcher accepts every connection and delivers nothing, so
+  // `verify` passing says nothing here. No host in the detail: every tenant
+  // sees this list.
+  if (deps.mailSink && smtp.state !== 'unavailable') {
+    smtp = { name: 'smtp', state: 'degraded', detail: 'Mail goes to a local test server. No email reaches its recipient.' };
+  }
+  components.push(smtp);
   return components;
 }
 

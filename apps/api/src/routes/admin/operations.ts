@@ -10,6 +10,7 @@ import {
   repairJob,
   tenantStatus,
   type DeploymentStatus,
+  type MailSinkWarning,
   type MasterKeyProvider,
   type Scheduler,
   type Transport,
@@ -39,6 +40,7 @@ export async function registerAdminOperationsRoutes(
   options: {
     keyProvider: MasterKeyProvider;
     transport?: Transport;
+    mailSink?: MailSinkWarning | null;
     scheduler?: () => Scheduler | null;
     webRoot?: string | undefined;
   },
@@ -50,6 +52,7 @@ export async function registerAdminOperationsRoutes(
     provider: options.keyProvider,
     ...(schedulerRunning ? { schedulerRunning } : {}),
     ...(options.transport ? { transport: options.transport } : {}),
+    mailSink: options.mailSink ?? null,
   });
 
   // The operator view walks every tenant; fifteen seconds of cache keeps a
@@ -113,6 +116,7 @@ export async function registerAdminOperationsRoutes(
         provider: options.keyProvider,
         ...(schedulerRunning ? { schedulerRunning } : {}),
         ...(options.transport ? { transport: options.transport } : {}),
+        mailSink: options.mailSink ?? null,
         ...(options.scheduler ? { scheduler: options.scheduler } : {}),
         webRoot: options.webRoot,
       });

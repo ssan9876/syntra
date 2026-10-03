@@ -1666,7 +1666,12 @@ Two status views, split by audience:
 Component checks are cached for 15 seconds per process, so an open status page
 cannot load the KMS or the mail server. Mail is checked with an SMTP `verify`
 (connect and authenticate; nothing is sent); a transport that cannot be
-checked reports `unknown`.
+checked reports `unknown`. A local test server such as MailDev passes `verify`
+and delivers nothing, so when `SMTP_URL` names one on an install whose
+`PUBLIC_URL` is not loopback, mail is reported **Degraded** (*Mail goes to a
+local test server*) and the `mail_to_test_server` incident is raised; the
+conditions are in [Configuration](configure.md#outgoing-mail). To check that
+mail actually arrives, use **Settings → Email → Send test email**.
 
 ## Exports
 
@@ -2779,7 +2784,8 @@ syntra-backup verify <name>` does the restore-count-drop cycle for you.)
 To run an API against it: a copy of `shared/.env` with `DATABASE_URL` naming
 `syntra_rehearsal`, `PORT=3999`, the **same** `MASTER_KEY`, a `PUBLIC_URL`
 nothing real resolves to, and `SMTP_URL` pointed at a sink so it cannot mail
-anybody. **Clear every target's schedule first** or the rehearsal runs real
+anybody (the rehearsal then shows the `mail_to_test_server` incident, which is
+the point). **Clear every target's schedule first** or the rehearsal runs real
 provisioning against real directories. The safest rehearsal starts the API
 and reads. Check readiness on 3999, reconcile, then stop the unit, `dropdb
 syntra_rehearsal` and remove the copy. Write down the date, the backup, the
@@ -3229,17 +3235,17 @@ old value 401. Unsetting it unregisters the route (404).
 
 #### Outgoing mail credentials
 
-**`SMTP_URL`:** replace the credential, restart, then cause one mail — a
-password reset for a test account, or assign a lifecycle operation to
-yourself. A `notification_undelivered` incident means the outbox gave up after
-five attempts; the outbox is the test.
+**`SMTP_URL`:** replace the credential, restart, then **Settings → Email →
+Send test email** (`deployment.manage`). It mails your own address and shows
+the server's answer: `Test email sent to …`, or the error, such as `Invalid
+login: 535 …` for a credential the server refused. A `notification_undelivered`
+incident means the outbox gave up on real mail after five attempts.
 
 **`MAIL_GRAPH_CLIENT_SECRET`** (`MAIL_TRANSPORT=graph`): an app registration
 can hold two client secrets at once. Add a new one in Entra (**Certificates &
 secrets**; copy the **value**, not the id), replace the variable (or the
 Secret key `secretKeys.mailGraphClientSecret` names), restart — the Graph
-token is cached per process — then check **Operations → Service status**'s
-mail check (it acquires a token and sends nothing) and cause one mail.
+token is cached per process — then **Settings → Email → Send test email**.
 `invalid_client` / `AADSTS7000215` means the value was copied wrong. Then
 delete the old secret.
 

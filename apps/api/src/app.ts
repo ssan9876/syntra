@@ -11,6 +11,7 @@ import {
   onSigningKeysChanged,
   readiness,
   redactReport,
+  mailSinkWarning,
   mailTransport,
   type Config,
   type Scheduler,
@@ -55,6 +56,7 @@ import { registerAdminOperationsRoutes } from './routes/admin/operations.js';
 import { registerAdminExportRoutes } from './routes/admin/exports.js';
 import { registerAdminPrivacyRoutes } from './routes/admin/privacy.js';
 import { registerAdminIncidentRoutes } from './routes/admin/incidents.js';
+import { registerAdminMailRoutes } from './routes/admin/mail.js';
 import { registerAdminEmailDomainRoutes } from './routes/admin/email-domains.js';
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
@@ -324,6 +326,9 @@ export async function buildApp(
 
   // The one mail transport every route and job in this process shares.
   const transport = options.transport ?? mailTransport(config);
+  // From the configuration, not the transport: a test's memory transport
+  // stands in for the same SMTP_URL.
+  const mailSink = mailSinkWarning(config);
 
   await app.register(registerAuthRoutes, {
     prefix: '/api/auth',
@@ -428,8 +433,11 @@ export async function buildApp(
   });
   await app.register(registerAdminIncidentRoutes, {
     prefix: '/api/admin',
+    mailSink,
     ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
   });
+  // Outgoing mail as configured, and the console's test send.
+  await app.register(registerAdminMailRoutes, { prefix: '/api/admin', mail: config.mail, transport, mailSink });
   await app.register(registerAdminUserRoutes, {
     prefix: '/api/admin',
     keyProvider,
@@ -496,6 +504,7 @@ export async function buildApp(
     prefix: '/api/admin',
     keyProvider,
     transport,
+    mailSink,
     webRoot: config.webRoot ?? undefined,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });

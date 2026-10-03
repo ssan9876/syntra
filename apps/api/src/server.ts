@@ -1,5 +1,5 @@
 import { prisma } from '@syntra/db';
-import { buildInfo, keyManagementWarnings, loadConfig, masterKeyProviderFor } from '@syntra/core';
+import { buildInfo, keyManagementWarnings, loadConfig, mailSinkWarning, masterKeyProviderFor } from '@syntra/core';
 import { setOperationalLog } from '@syntra/connectors';
 import { startTelemetry } from './telemetry.js';
 import { buildApp } from './app.js';
@@ -68,6 +68,10 @@ void recovery.start();
 // check wraps and unwraps a random canary and reports only pass or the cause.
 app.log.info({ provider: config.keyManagement.provider }, 'master-key provider configured');
 for (const warning of keyManagementWarnings(config.keyManagement)) app.log.warn(warning);
+// MailDev and its peers accept every message and deliver none, so nothing
+// else in the log would ever say that mail is going nowhere.
+const mailSink = mailSinkWarning(config);
+if (mailSink) app.log.warn({ smtpServer: mailSink.server }, `mail not delivered: ${mailSink.message}`);
 void masterKeyProviderFor(config)
   .check()
   .then(

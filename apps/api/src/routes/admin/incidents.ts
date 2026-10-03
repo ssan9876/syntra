@@ -11,6 +11,7 @@ import {
   recordEvent,
   resolveIncident,
   type IncidentKind,
+  type MailSinkWarning,
   type Permission,
 } from '@syntra/core';
 import { ProblemError } from '../../plugins/problem-json.js';
@@ -49,7 +50,7 @@ const CHANGE_APPROVER_PERMISSIONS: Permission[] = [
  */
 export async function registerAdminIncidentRoutes(
   app: FastifyInstance,
-  options: { schedulerRunning?: () => boolean } = {},
+  options: { schedulerRunning?: () => boolean; mailSink?: MailSinkWarning | null } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -58,7 +59,7 @@ export async function registerAdminIncidentRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
     async (request) => {
       const now = new Date();
-      const incidents = await request.db((tx) => listIncidents(tx, now));
+      const incidents = await request.db((tx) => listIncidents(tx, now, { mailSink: options.mailSink ?? null }));
       // Names for whoever acknowledged, read once. An id on screen is
       // something the reader has to go and look up.
       const ackBy = [

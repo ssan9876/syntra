@@ -113,6 +113,37 @@ mail server accepts, and has to be fixed in the directory, because the next
 sync rewrites it — and **the links inside it** come from `PUBLIC_URL`, which
 must be the externally reachable name.
 
+**A local test server on a real install is reported.** When `SMTP_URL` points
+at loopback (`localhost`, `127.0.0.1`, `::1`), at port `1025`, or at a host
+named `maildev`, `mailhog`, `mailpit` or `smtp4dev`, and `PUBLIC_URL` is not
+itself loopback, Syntra treats the mail as going nowhere:
+
+- the API logs `mail not delivered: Mail goes to smtp://localhost:1025, a local
+  test server. Set SMTP_URL to a real mail server.` at start, with the server in
+  `smtpServer`;
+- **Activity → Attention** and the Overview's **Needs you** list the
+  `mail_to_test_server` incident (*Mail goes to a test server*). It can be
+  acknowledged, not resolved, and clears when `SMTP_URL` changes and the API
+  restarts;
+- the status page reports **Outbound mail** as *Degraded*, so the Overview
+  header reads *Degraded*;
+- **Settings → Email** shows the same sentence above the test button.
+
+A test server is still what a development install with a loopback `PUBLIC_URL`
+(`http://localhost:3000`) should use, and none of the above appears there.
+`/health/ready` does not report it: readiness has no warning level, and an
+install that cannot send mail can still serve sign-ins.
+
+**Check delivery from the console** with **Settings → Email → Send test email**
+(`POST /api/admin/mail/test`, `deployment.manage`). It sends one message to the
+signed-in administrator's own address through the configured transport, SMTP or
+Graph, and shows either `Test email sent to <address> through <server>.` or the
+server's own error, for example `Email to anna@contoso.com was not sent through
+smtp://mail.contoso.com:587: Invalid login: 535 5.7.8 Authentication failed`.
+It waits up to 30 seconds, allows 5 sends a minute per address, and is audited
+as `notify.test_email` with the server and, on failure, the error. The server is
+shown as scheme, host and port; the credential in `SMTP_URL` never is.
+
 With `MAIL_TRANSPORT=graph` the API refuses to start unless all four `MAIL_GRAPH_*`
 variables are set, and names every missing one. The status page's mail check
 fetches a token and sends nothing. The container path passes all of them
@@ -2126,6 +2157,7 @@ list. This slice adds:
 | `mfa.removed` | A factor was removed, carrying how many recovery codes went with it |
 | `mfa.recovery_codes_issued` | A fresh set was minted; the old set stopped working |
 | `notify.delivery_failed` | **A notification could not be sent.** The factor-added mail is one of only two things making "a stolen password can enrol a factor" an acceptable trade, so this is the event that says a control has stopped working. Alert on it |
+| `notify.test_email` | An administrator pressed **Send test email**. `success` or `failure`, with the server and, on failure, its error |
 | `application.launch` | Somebody entered an application through the portal, carrying whether it was a bookmark, a SAML application or an OIDC one, and for SAML whether the launch was SP- or IdP-initiated (`samlFlow`) |
 | `saml.assertion_issued` | An assertion was issued to a service provider, naming it, the ACS URL it went to and the factor behind the session |
 | `saml.acs_refused` | A request named an assertion consumer service URL that is not on the application's allowlist. **Somebody is probing, or a service provider changed its address without telling anyone** |

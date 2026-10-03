@@ -57,6 +57,23 @@ describe('componentHealth', () => {
     expect(unchecked.find((c) => c.name === 'queue')?.state).toBe('unknown');
     expect(unchecked.find((c) => c.name === 'key_provider')?.state).toBe('operational');
   });
+
+  it('reports mail to a local test server as degraded, without naming it', async () => {
+    const mailSink = { server: 'smtp://localhost:1025', message: 'Mail goes to smtp://localhost:1025, a local test server.' };
+    const answering = { send: async () => {}, verify: async () => {} };
+    const components = await componentHealth({ provider, transport: answering, mailSink });
+    const smtp = components.find((c) => c.name === 'smtp')!;
+    expect(smtp).toEqual({
+      name: 'smtp',
+      state: 'degraded',
+      detail: 'Mail goes to a local test server. No email reaches its recipient.',
+    });
+    expect(JSON.stringify(components)).not.toContain('localhost:1025');
+
+    // A catcher that is not even answering is worse than one that is.
+    const down = { send: async () => {}, verify: async () => { throw new Error('ECONNREFUSED'); } };
+    expect((await componentHealth({ provider, transport: down, mailSink })).find((c) => c.name === 'smtp')?.state).toBe('unavailable');
+  });
 });
 
 describe('tenantStatus', () => {
