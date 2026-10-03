@@ -18,6 +18,8 @@ export interface SamlConfigRecord {
   spCertificates: string[];
   wantAuthnRequestsSigned: boolean;
   encryptAssertions: boolean;
+  /** Sign the whole Response as well as the Assertion. */
+  signResponse: boolean;
   encryptionCertificate: string | null;
   sloUrl: string | null;
   sloBinding: SamlBinding;
@@ -54,9 +56,11 @@ export interface SamlConfigRecord {
  */
 export type SamlConfigInput = Omit<
   SamlConfigRecord,
-  'id' | 'applicationId' | 'wantAuthnRequestsSigned' | 'wsFedEnabled'
+  'id' | 'applicationId' | 'wantAuthnRequestsSigned' | 'wsFedEnabled' | 'signResponse'
 > & {
   wantAuthnRequestsSigned?: boolean | undefined;
+  /** Optional, defaulting to false: only the Assertion is signed. */
+  signResponse?: boolean | undefined;
   /**
    * Optional, defaulting to FALSE.
    *
@@ -96,6 +100,7 @@ const toRecord = (row: Record<string, unknown>): SamlConfigRecord => ({
   spCertificates: row.spCertificates as string[],
   wantAuthnRequestsSigned: row.wantAuthnRequestsSigned as boolean,
   encryptAssertions: row.encryptAssertions as boolean,
+  signResponse: row.signResponse as boolean,
   encryptionCertificate: (row.encryptionCertificate as string | null) ?? null,
   sloUrl: (row.sloUrl as string | null) ?? null,
   sloBinding: asBinding(row.sloBinding as string),
@@ -118,6 +123,7 @@ export async function upsertSamlConfig(
     wantAuthnRequestsSigned:
       input.wantAuthnRequestsSigned ?? REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT,
     wsFedEnabled: input.wsFedEnabled ?? false,
+    signResponse: input.signResponse ?? false,
   };
   const row = await tx.samlConfig.upsert({
     where: { applicationId },

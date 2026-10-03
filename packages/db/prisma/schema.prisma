@@ -1595,6 +1595,9 @@ model SamlConfig {
   /// with a message naming this setting.
   wantAuthnRequestsSigned Boolean     @default(true)
   encryptAssertions       Boolean     @default(false)
+  /// Sign the whole Response as well as the Assertion. Some service
+  /// providers (Mattermost) refuse a Response whose only signature is inside.
+  signResponse            Boolean     @default(false)
   /// PEM certificate whose public key wraps the assertion's data key.
   encryptionCertificate   String?
   sloUrl                  String?

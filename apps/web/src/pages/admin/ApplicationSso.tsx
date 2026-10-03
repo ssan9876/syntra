@@ -46,6 +46,7 @@ interface SamlConfig {
   spCertificates: string[];
   wantAuthnRequestsSigned: boolean;
   encryptAssertions: boolean;
+  signResponse: boolean;
   encryptionCertificate: string | null;
   sloUrl: string | null;
   sloBinding: string;
@@ -243,6 +244,8 @@ function SamlPanel({
     nameIdFormat: config.nameIdFormat,
     spCertificates: linesOf(config.spCertificates),
     wantAuthnRequestsSigned: config.wantAuthnRequestsSigned,
+    // Absent from a server that predates the setting: it was off there.
+    signResponse: config.signResponse ?? false,
     allowIdpInitiated: config.allowIdpInitiated,
     wsFedEnabled: config.wsFedEnabled,
     sloUrl: config.sloUrl ?? '',
@@ -266,6 +269,7 @@ function SamlPanel({
     JSON.stringify(certificatesOf(form.spCertificates)) !==
       JSON.stringify(certificatesOf(initial.spCertificates)) ||
     form.wantAuthnRequestsSigned !== initial.wantAuthnRequestsSigned ||
+    form.signResponse !== initial.signResponse ||
     form.allowIdpInitiated !== initial.allowIdpInitiated ||
     form.wsFedEnabled !== initial.wsFedEnabled ||
     form.sloUrl.trim() !== initial.sloUrl ||
@@ -344,6 +348,7 @@ function SamlPanel({
           nameIdFormat: form.nameIdFormat,
           spCertificates: certificatesOf(form.spCertificates),
           wantAuthnRequestsSigned: form.wantAuthnRequestsSigned,
+          signResponse: form.signResponse,
           allowIdpInitiated: form.allowIdpInitiated,
           wsFedEnabled: form.wsFedEnabled,
           sloUrl: form.sloUrl.trim() === '' ? null : form.sloUrl.trim(),
@@ -499,6 +504,12 @@ function SamlPanel({
               checked={form.wantAuthnRequestsSigned}
               onChange={(v) => set('wantAuthnRequestsSigned', v)}
               label="Require the service provider to sign its requests"
+            />
+            <Check
+              className="sm:col-span-2"
+              checked={form.signResponse}
+              onChange={(v) => set('signResponse', v)}
+              label="Sign the whole response, not only the assertion"
             />
           </FormSection>
 
