@@ -294,4 +294,54 @@ describe('GroupDetailPage', () => {
     const back = await screen.findByRole('link', { name: /back to groups/i });
     expect(back).toHaveAttribute('href', '/admin/groups');
   });
+  describe('membership rule', () => {
+    const RULE = { field: 'contract.department', op: 'equals', value: 'Nursing' };
+
+    it('shows the rule in words and marks the members it added', async () => {
+      mockApi({ ...GROUP, membershipRule: RULE, ruleEvaluatedAt: '2026-10-01T10:00:00Z' }, {
+        '/members': () =>
+          json({ users: [{ ...MEMBERS[0], membershipOrigin: 'rule' }] }),
+      });
+      renderPage();
+
+      expect(await screen.findByText('Department is Nursing')).toBeInTheDocument();
+      expect(await screen.findByText('Change the rule to remove')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Remove from group' })).toBeNull();
+    });
+
+    it('previews a new rule before saving it', async () => {
+      const fetchSpy = mockApi(GROUP, {
+        '/rule/preview': () =>
+          json({
+            add: { count: 1, users: [{ id: 'u2', login: 'jdoe', displayName: 'J Doe' }] },
+            remove: { count: 0, users: [] },
+            keep: { count: 0 },
+          }),
+        '/rule': () => json({ group: GROUP, added: 1, removed: 0 }),
+      });
+      renderPage();
+
+      await userEvent.click(await screen.findByRole('button', { name: 'Add rule' }));
+      await userEvent.type(screen.getByLabelText('Value'), 'Nursing');
+      await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+      expect(await screen.findByText('Adds 1')).toBeInTheDocument();
+      expect(screen.getByText(': J Doe')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Save rule' }));
+      await waitFor(() => {
+        const put = fetchSpy.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'PUT');
+        expect(JSON.parse(String((put![1] as RequestInit).body))).toEqual({
+          rule: { all: [{ field: 'contract.department', op: 'equals', value: 'Nursing' }] },
+        });
+      });
+    });
+
+    it('is not offered on a synced group', async () => {
+      mockApi({ ...GROUP, sourceId: 's1' });
+      renderPage();
+
+      await screen.findByText('Corporate LDAP');
+      expect(screen.queryByRole('button', { name: 'Add rule' })).toBeNull();
+    });
+  });
 });

@@ -156,6 +156,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261112000000_target_delete_after_days',
   '20261113000000_person_purge_policy',
   '20261114000000_saml_sign_response',
+  '20261115000000_group_membership_rules',
 ];
 
 /**

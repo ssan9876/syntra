@@ -4,6 +4,7 @@ import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { resolveApplicationIdsForUser } from '../access/resolve.js';
 import { recordEvent } from '../audit/audit-service.js';
 import { collectTenant, foldIdentifier, resolveApplicationPaths } from './collect.js';
+import { attributionsFor, hasLiveRuleAttribution, summariseAttributions } from './attribute.js';
 
 const NOW = new Date('2026-06-15T09:00:00Z');
 const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
@@ -561,6 +562,31 @@ describe('the access Syntra made', () => {
       expect.objectContaining({ administratorName: 'Seth Sander', auditEvent: expect.objectContaining({ action: 'group.addMember' }) }),
     ]);
     expect(role.attribution.directAssignments[0]!.administratorName).toBe('Seth Sander');
+  });
+
+  it("credits a member the group's rule added to that rule, live while the rule is set", async () => {
+    const seeded = await withTenant(tenantId, async (tx) => {
+      const person = await tx.person.create({ data: { tenantId, givenName: 'Anna', familyName: 'Novak' } });
+      const user = await tx.user.create({
+        data: { tenantId, login: 'anna', email: 'anna@a.test', displayName: 'Anna Novak', personId: person.id },
+      });
+      const group = await tx.group.create({
+        data: { tenantId, name: 'Finance', membershipRule: { field: 'contract.department', op: 'equals', value: 'Finance' } },
+      });
+      await tx.groupMembership.create({ data: { tenantId, groupId: group.id, userId: user.id, origin: 'rule' } });
+      return { personId: person.id, groupId: group.id };
+    });
+
+    const collected = await collectTenant(tenantId, { asOf: NOW });
+    const membership = collected.holdings.find(
+      (h) => h.resourceKind === 'syntraGroup' && h.subject.kind === 'person' && h.subject.personId === seeded.personId,
+    )!;
+    expect(membership.attribution.rules).toEqual([
+      expect.objectContaining({ ruleId: seeded.groupId, ruleName: 'Finance', ruleEnabled: true, groupRule: true }),
+    ]);
+    const drafts = attributionsFor(membership.attribution, NOW);
+    expect(hasLiveRuleAttribution(drafts)).toBe(true);
+    expect(summariseAttributions(drafts)).toContain('the membership rule of the group "Finance" matches them');
   });
 
   it('leaves a login and a membership nobody recorded making without a manual attribution', async () => {

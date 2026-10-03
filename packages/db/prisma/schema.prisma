@@ -429,6 +429,16 @@ model Group {
   sourceAnchor String?
   status       String           @default("active")
   statusReason String?
+  /// A condition over person and contract attributes (the BusinessRule
+  /// grammar). Null for a group whose members are added by hand or by sync.
+  /// Refused on a source-owned group: the source owns its membership.
+  membershipRule  Json?
+  /// When the rule was last applied to the membership.
+  ruleEvaluatedAt DateTime?
+  /// Set while the last pass was held for removing too many members, with how
+  /// many it would have removed. Cleared by the next pass that applies.
+  ruleHeldAt          DateTime?
+  ruleHeldRemoveCount Int?
 
   memberships GroupMembership[]
 
@@ -445,6 +455,10 @@ model GroupMembership {
   userId   String @db.Uuid
   group    Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 'direct' or 'rule'. A group's membership rule adds and removes only
+  /// 'rule' rows; a direct member is never removed by it. CHECK-constrained in
+  /// migration `20261115000000_group_membership_rules`.
+  origin   String @default("direct")
 
   @@unique([groupId, userId])
   @@index([tenantId])

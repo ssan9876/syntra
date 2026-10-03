@@ -226,7 +226,7 @@ Linked to a data subject by user: `userId`. Erasure: **retain** -- Identifiers o
 | `groupId` | operational | retained |  |
 | `userId` | identity | retained |  |
 
-Not personal data: `tenantId`.
+Not personal data: `tenantId`, `origin`.
 
 #### `RoleAssignment`
 
@@ -2300,7 +2300,7 @@ No personal data. Columns: `id`, `tenantId`, `sourceKind`, `sourceId`, `freshnes
 
 #### `Group`
 
-No personal data. Columns: `id`, `tenantId`, `name`, `description`, `sourceId`, `sourceAnchor`, `status`, `statusReason`.
+No personal data. Columns: `id`, `tenantId`, `name`, `description`, `sourceId`, `sourceAnchor`, `status`, `statusReason`, `membershipRule`, `ruleEvaluatedAt`, `ruleHeldAt`, `ruleHeldRemoveCount`.
 
 #### `IdentityReferenceValue`
 

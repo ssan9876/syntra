@@ -91,6 +91,17 @@ export const FIELDS = [
   'person.status',
 ] as const;
 
+/** On-screen names for the condition fields. */
+export const FIELD_LABELS: Record<(typeof FIELDS)[number], string> = {
+  'contract.department': 'Department',
+  'contract.jobTitle': 'Job title',
+  'contract.costCentre': 'Cost centre',
+  'contract.employer': 'Employer',
+  'contract.location': 'Location',
+  'contract.fte': 'FTE',
+  'person.status': 'Person status',
+};
+
 /**
  * The closed operator set, and which of them take what.
  *
@@ -272,7 +283,8 @@ export function describeCondition(raw: unknown): string {
   if (node.not !== undefined) return `NOT (${describeCondition(node.not)})`;
   const label = OPERATORS.find((o) => o.value === node.op)?.label ?? node.op;
   const value = Array.isArray(node.value) ? node.value.join(', ') : node.value;
-  return `${node.field} ${label}${value === undefined ? '' : ` ${String(value)}`}`;
+  const field = FIELD_LABELS[node.field as (typeof FIELDS)[number]] ?? node.field;
+  return `${field} ${label}${value === undefined ? '' : ` ${String(value)}`}`;
 }
 
 const describe = (rule: StoredRule) => describeCondition(rule.condition);
