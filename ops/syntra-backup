@@ -6,6 +6,7 @@
 #   syntra-backup verify [name]       prove one restores, into a scratch database
 #   syntra-backup restore <name>      put one back
 #   syntra-backup list                what is here, and whether it can be restored
+#   syntra-backup copy [name]         copy one off this host with SYNTRA_BACKUP_COPY_COMMAND
 #
 # Three things about this tool are not obvious and are the whole point.
 #
@@ -46,6 +47,10 @@ MASTER_KEY="${SYNTRA_MASTER_KEY:-}"
 # local. See external_key_reference.
 KEY_PROVIDER="${SYNTRA_MASTER_KEY_PROVIDER:-}"
 KEY_REFERENCE="${SYNTRA_KEY_REFERENCE:-}"
+# A shell command that copies a finished backup off this host, run with the
+# backup directory as $1. From the environment, or SYNTRA_BACKUP_COPY_COMMAND
+# in shared/.env. Unset: backups stay on this host only. See copy_backup.
+COPY_COMMAND="${SYNTRA_BACKUP_COPY_COMMAND:-}"
 
 # A fixed, non-secret salt. It exists so a fingerprint cannot be matched
 # against a precomputed table of common or leaked keys. It is not itself a
@@ -225,6 +230,39 @@ resolve_environment() {
   [ -n "$MASTER_KEY" ] || MASTER_KEY=$(env_value MASTER_KEY "$SHARED/.env")
   [ -n "$KEY_PROVIDER" ] || KEY_PROVIDER=$(env_value MASTER_KEY_PROVIDER "$SHARED/.env")
   [ -n "$KEY_REFERENCE" ] || KEY_REFERENCE=$(external_key_reference "$KEY_PROVIDER")
+
+  resolve_copy_command
+}
+
+resolve_copy_command() {
+  [ -n "$COPY_COMMAND" ] || COPY_COMMAND=$(env_value SYNTRA_BACKUP_COPY_COMMAND "$SHARED/.env")
+}
+
+# Runs COPY_COMMAND for the backup directory $1, and fails the run if it fails.
+#
+# Through `sh -c`, with the directory as $1 and as SYNTRA_BACKUP_PATH, and the
+# backup's name as SYNTRA_BACKUP_NAME, so a one-line rclone, rsync or `aws s3`
+# command can name its destination. stdin is /dev/null: under a timer there is
+# nobody to answer a prompt, and a command waiting for one would hold the unit
+# until its timeout.
+#
+# The command does not see shared/.env: nothing here is exported from it. A
+# copy that needs credentials gets them from its own configuration.
+#
+# A failure exits non-zero, which fails syntra-backup.service and fires its
+# OnFailure= handler. The local backup is complete by then and stays.
+copy_backup() {
+  local dir="$1" name code
+  name=$(basename "$dir")
+  [ -n "$COPY_COMMAND" ] || return 0
+  log "copying $name off this host"
+  if SYNTRA_BACKUP_PATH="$dir" SYNTRA_BACKUP_NAME="$name" \
+       sh -c "$COPY_COMMAND" syntra-backup-copy "$dir" < /dev/null; then
+    log "copied $name"
+  else
+    code=$?
+    die "copy of $name failed: SYNTRA_BACKUP_COPY_COMMAND exited $code. The backup is kept at $dir; retry with: syntra-backup copy $name"
+  fi
 }
 
 # Which external key wraps this deployment's data keys, as a string -- or
@@ -395,7 +433,24 @@ cmd_create() {
   trap - EXIT
   log "wrote $BACKUPS/$name -- $bytes bytes, $sections table(s) of data"
 
+  # Pruned before the copy, so a copy that keeps failing does not also stop
+  # local retention and fill the disk.
   prune_backups
+  copy_backup "$BACKUPS/$name"
+}
+
+# Copies an existing backup with SYNTRA_BACKUP_COPY_COMMAND: to retry one whose
+# copy failed, or to try the command out.
+cmd_copy() {
+  resolve_copy_command
+  [ -n "$COPY_COMMAND" ] \
+    || die "no SYNTRA_BACKUP_COPY_COMMAND in the environment or in $SHARED/.env"
+  local name="${1:-latest}"
+  [ "$name" = latest ] && name=$(latest_backup)
+  [ -n "$name" ] || die "there are no backups in $BACKUPS"
+  case "$name" in *.partial) die "$name is an interrupted backup, not a backup" ;; esac
+  [ -d "$BACKUPS/$name" ] || die "no such backup: $name"
+  copy_backup "$BACKUPS/$name"
 }
 
 latest_backup() {
@@ -603,9 +658,12 @@ syntra-backup -- backups that can be told apart from things shaped like backups
   syntra-backup verify [name]        restore one into a scratch database, then drop it
   syntra-backup restore <name> --yes replace the live database with one
   syntra-backup list                 what is here, and whether it can be restored
+  syntra-backup copy [name]          run SYNTRA_BACKUP_COPY_COMMAND for one (default: latest)
 
-  SYNTRA_BACKUP_DIR   where they live (default /opt/syntra/backups)
-  SYNTRA_BACKUP_KEEP  how many to keep (default 7)
+  SYNTRA_BACKUP_DIR           where they live (default /opt/syntra/backups)
+  SYNTRA_BACKUP_KEEP          how many to keep (default 7)
+  SYNTRA_BACKUP_COPY_COMMAND  shell command run after each create, backup directory as $1
+                              (environment or shared/.env; unset: no copy)
 USAGE
 }
 
@@ -617,6 +675,7 @@ main() {
     verify)  cmd_verify "$@" ;;
     restore) cmd_restore "$@" ;;
     list)    cmd_list "$@" ;;
+    copy)    cmd_copy "$@" ;;
     help|--help|-h) usage ;;
     # Never defaults to `create`. A tool whose bare invocation writes something
     # is a tool that writes something by accident.

@@ -94,8 +94,11 @@ Three things follow, and they are the whole design:
    `/opt/syntra/shared/`, points `current` at the release, rewrites `WEB_ROOT`
    and the systemd unit's working directory to follow it, installs
    `syntra-update` and `syntra-backup` into `/opt/syntra/bin`, and installs
-   the backup units (left disabled; see [Backups](#backups)). It expects an
-   existing configured systemd install and refuses to run twice. **The old
+   the backup units (left disabled; see [Backups](#backups)); every
+   successful update refreshes the two tools and the units from the new
+   release. It also reports whether `PG_CONTAINER` is set and whether that
+   container runs from the development stack. It expects an existing
+   configured systemd install and refuses to run twice. **The old
    tree is left exactly where it is**, so recovery is restoring
    `syntra.service.pre-release-layout` and restarting.
 2. **A release token.** A fine-grained GitHub token, **read-only**, scoped to
@@ -159,6 +162,9 @@ What an update does, in order:
    survive), relinks the previous release, restarts, and writes `rolled_back`.
    If the restore itself leaves an empty database it writes `failed` and
    leaves the service **stopped**, with the dump's path in the message.
+7. Once ready: prunes old releases, dumps and downloads, then installs the
+   new release's `syntra-update` and `syntra-backup` into `/opt/syntra/bin`
+   and refreshes the backup units (below).
 
 Signing in stops working for about a minute. Sessions already open survive.
 
@@ -171,6 +177,38 @@ Things worth knowing before you need them:
   not in it.
 - **Three releases and three dumps are kept.** The one you are running is
   never pruned. These dumps are the updater's, not your backup schedule.
+- **Two downloads are kept.** `/opt/syntra/var` keeps the
+  `syntra-<version>.tar.gz` and `.sha256` of the running release and the one
+  it replaced; older ones are deleted after each successful update, and the
+  journal says how many and how much:
+  `removed 60 old download file(s) from /opt/syntra/var, 94 MB; kept v1.5.0 and v1.4.0`.
+- **The backup units follow the release.** After each successful update the
+  updater compares the release's `ops/systemd/syntra-backup*.service` and
+  `.timer` files (the backup, the verify and the `syntra-backup-failed@`
+  handler) with `/etc/systemd/system`, installs those that differ or are
+  missing, and runs `systemctl daemon-reload` if it changed any. It never
+  touches `syntra.service`, and never enables, disables, starts or stops
+  anything. A replaced file is kept in `/opt/syntra/var/replaced-units/`.
+  **Put local changes in a drop-in** (`systemctl edit syntra-backup.timer`),
+  which the refresh leaves alone; an edit made in the unit file itself is
+  replaced at the next update that changes that file. The journal names each
+  unit:
+  `unit syntra-backup-failed@.service installed from v1.5.0`, then
+  `units from v1.5.0: 1 installed, 2 updated, 2 unchanged, 0 failed`.
+  An install under a root other than `/opt/syntra` skips the refresh unless
+  `SYNTRA_UNIT_DIR` names the unit directory, because the shipped units name
+  `/opt/syntra/bin/syntra-backup`.
+- **An update is run by the updater already installed**, so the update that
+  first brings these two steps is run by one that has neither. To catch up
+  once, by hand, after it:
+
+  ```bash
+  install -m 0755 /opt/syntra/current/ops/syntra-backup /opt/syntra/bin/syntra-backup
+  install -m 0644 /opt/syntra/current/ops/systemd/syntra-backup*.service \
+                  /opt/syntra/current/ops/systemd/syntra-backup*.timer /etc/systemd/system/
+  systemctl daemon-reload
+  ls /opt/syntra/var/syntra-*.tar.gz*      # delete all but the running and previous versions
+  ```
 
 **A refused update leaves the status alone.** `syntra-update` writes
 `var/update.status`, which is what the console shows. Anything it refuses
@@ -230,25 +268,21 @@ WantedBy=multi-user.target
 systemd follows the `current` symlink at every start, so a swap under it
 needs no unit change.
 
-**If Postgres runs in Docker on the same host, make the API wait for it.**
-`infra/docker-compose.yml` is a development file with no restart policies, so
-after a reboot nothing comes back unless a unit brings it up; and "the
-container has started" is not "PostgreSQL is accepting connections". The API
-tolerates a missing database by starting anyway with no jobs scheduled — a
-quiet failure — so catch it in the unit. A oneshot `syntra-infra.service`
-(`Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=/usr/bin/docker compose -f
-infra/docker-compose.yml up -d`) owns the containers, and a drop-in on the
-API waits for the database:
+**Make the API wait for the database.** The API tolerates a missing database
+by starting anyway with no jobs scheduled, so catch it in the unit.
+PostgreSQL runs from `ops/postgres/docker-compose.yml` under
+`syntra-postgres.service`, which returns once `pg_isready` passes, and a
+drop-in orders the API after it:
 
 ```ini
-# /etc/systemd/system/syntra.service.d/10-wait-for-postgres.conf
+# /etc/systemd/system/syntra.service.d/10-postgres.conf
 [Unit]
-After=syntra-infra.service
-Requires=syntra-infra.service
-
-[Service]
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do docker exec <PG_CONTAINER> pg_isready -U syntra -d syntra >/dev/null 2>&1 && exit 0; sleep 2; done; echo "postgres never became ready" >&2; exit 1'
+After=syntra-postgres.service
+Requires=syntra-postgres.service
 ```
+
+Setting both up is [The database](install.md#the-database) in the install
+guide.
 
 A private CA for LDAPS goes in a second drop-in as
 `Environment=NODE_EXTRA_CA_CERTS=…` — see
@@ -259,6 +293,49 @@ rather than assuming it, and check the boot was clean:
 systemctl reboot
 journalctl -u syntra -b | grep -ciE "scheduler failed|ECONNREFUSED"   # expect 0
 ```
+
+### Moving the database off the development stack
+
+`infra/docker-compose.yml` is the development and CI fixture stack: port 5432
+on every interface, the password `syntra`, no restart policy, data in an
+anonymous volume, and OpenLDAP, Samba, SFTP and MailDev beside the database.
+`syntra-install` says so when the container in `PG_CONTAINER` runs from it.
+The move is a backup, a new container and a restore, with the service stopped
+throughout:
+
+1. **Set up the new database** as in [The database](install.md#the-database),
+   up to and including the files in `/opt/syntra/postgres`, but do not start
+   it yet: the old container holds port 5432. Use new passwords.
+2. **Stop Syntra and take a final backup** from the old container:
+
+   ```bash
+   systemctl stop syntra
+   /opt/syntra/bin/syntra-backup create
+   /opt/syntra/bin/syntra-backup verify
+   ```
+
+3. **Stop the old stack** without removing it, so it is still there to go
+   back to: `docker compose -f <old checkout>/infra/docker-compose.yml stop`.
+4. **Start the new one:** `systemctl enable --now syntra-postgres`. Its first
+   start runs `initdb/01-app-role.sh`, which creates `syntra_app`; the restore
+   needs that role to exist.
+5. **Point Syntra at it.** In `/opt/syntra/shared/.env`, set `PG_CONTAINER`
+   to the new container's name and change the passwords in `DATABASE_URL`,
+   `SHADOW_DATABASE_URL` and `SUPERUSER_DATABASE_URL` to the new ones.
+6. **Restore into it.** `restore` reads `.env`, so it now targets the new
+   container, and it starts `syntra` when the rows have arrived:
+
+   ```bash
+   /opt/syntra/bin/syntra-backup list                  # the backup from step 2, KEY ok
+   /opt/syntra/bin/syntra-backup restore <name> --yes
+   ```
+
+7. **Add the drop-in** above, reboot once and check the boot was clean.
+
+To go back: stop `syntra` and `syntra-postgres`, restore the old values in
+`.env`, start the old stack and then `syntra`. Once you are satisfied, remove
+it with `docker compose -f <old checkout>/infra/docker-compose.yml down -v`,
+which also deletes its data.
 
 ## Backups
 
@@ -281,6 +358,7 @@ syntra-backup create               take one
 syntra-backup verify [name]        prove one restores, then throw the copy away
 syntra-backup restore <name> --yes replace the live database with one
 syntra-backup list                 what is here, and whether it can be restored
+syntra-backup copy [name]          copy one off this host (default: the newest)
 ```
 
 Backups land in `/opt/syntra/backups`, one directory each, holding a
@@ -338,9 +416,9 @@ journalctl -u syntra-backup.service -n 50 --no-pager
 
 You should not have to remember to ask. Both units carry
 `OnFailure=syntra-backup-failed@%n.service`, a handler installed alongside them
-by `syntra-install`, which writes to the journal at **error** priority naming
-the unit that failed, the command to read its log, and the fact that there is
-now no recovery point newer than the last successful run:
+by `syntra-install` (and by the next update, on an install that predates it),
+which writes to the journal at **error** priority naming the unit that failed,
+the command to read its log and the command to list what is on disk:
 
 ```bash
 journalctl -p err -t syntra-backup --since -7d --no-pager
@@ -378,10 +456,49 @@ shows its key column as `unknown`. Unknown never counts as a match.
 
 ### Getting them off the host
 
-Not this tool's job, deliberately. `rsync`, `restic` and every object-store
-client already do it better than a shell script bolted onto this one would.
-Each backup is a self-contained directory with a stable, sortable name; point
-something at `/opt/syntra/backups` and it will do the right thing.
+A backup on the database's own host is lost with the host. Set
+`SYNTRA_BACKUP_COPY_COMMAND` and every `create` runs it once the backup is
+complete, through `/bin/sh`, with the backup directory as `$1` and in
+`SYNTRA_BACKUP_PATH`, and its name in `SYNTRA_BACKUP_NAME`. Put it in
+`/opt/syntra/shared/.env`, where the timer and a run by hand both read it
+(the tool reads the line; it does not source the file), or in the
+environment, which wins:
+
+```ini
+# rclone, to any remote `rclone config` has set up
+SYNTRA_BACKUP_COPY_COMMAND=rclone copy "$1" "offsite:syntra-backups/$SYNTRA_BACKUP_NAME"
+
+# rsync over SSH, with a key in /root/.ssh
+SYNTRA_BACKUP_COPY_COMMAND=rsync -a "$1" backup@vault.example.com:/srv/syntra-backups/
+
+# S3, with credentials from /root/.aws or an instance role
+SYNTRA_BACKUP_COPY_COMMAND=aws s3 cp --recursive "$1" "s3://example-syntra-backups/$SYNTRA_BACKUP_NAME/"
+```
+
+For anything longer, point it at a script of your own:
+`SYNTRA_BACKUP_COPY_COMMAND=/usr/local/sbin/syntra-offsite "$1"`.
+
+- **It runs as root**, from `syntra-backup.service`, with no stdin, and does
+  not see `MASTER_KEY` or anything else in `shared/.env`. Credentials for the
+  destination come from the copy tool's own configuration.
+- **A failed copy fails the run.** The local backup is complete and kept, the
+  unit fails, and `OnFailure=` reports it as above. The journal has the
+  command's own error output, then:
+  `copy of syntra-20261003T021104Z failed: SYNTRA_BACKUP_COPY_COMMAND exited 23. The backup is kept at /opt/syntra/backups/syntra-20261003T021104Z; retry with: syntra-backup copy syntra-20261003T021104Z`.
+- **`syntra-backup copy [name]`** runs the command for one existing backup.
+  Use it to try the command before the first night, and to retry a failed
+  copy.
+- **The copy counts against the unit's 30-minute `TimeoutStartSec`**, together
+  with the dump. Raise it in a drop-in (`systemctl edit
+  syntra-backup.service`) if uploads take longer.
+- **Retention at the destination is yours.** `SYNTRA_BACKUP_KEEP` prunes this
+  host only; the command copies, and nothing deletes old copies remotely.
+  Set a lifecycle rule on the bucket, or prune in your own script.
+- **`MASTER_KEY` is not in a backup.** A backup directory holds
+  `database.dump` and `manifest.json`; the manifest has only a salted
+  fingerprint of the key. Restoring on another host needs the key as well, so
+  keep it somewhere that survives this host and is separate from the backups:
+  a password manager or a secrets vault, not the same bucket.
 
 There is no point-in-time recovery here. That needs WAL archiving, which is
 a different feature with different operational requirements, and `pg_dump`
@@ -2558,11 +2675,13 @@ container, and stops the `syntra` unit to restore — other shapes are
 row-level security (the tool uses the user in `SUPERUSER_DATABASE_URL`,
 otherwise a role named after the database — a dump taken as `syntra_app` is a
 valid archive of no rows, and the tool refuses it); disk for
-`SYNTRA_BACKUP_KEEP` copies; and `MASTER_KEY` kept somewhere other than this
-host. For a host whose `shared/.env` is not the source of truth the tool
-honours `SYNTRA_ROOT`, `SYNTRA_SERVICE`, `SYNTRA_PG_CONTAINER`,
-`SYNTRA_PG_ROLE`, `SYNTRA_PG_DB`, `SYNTRA_DATABASE_URL`,
-`SYNTRA_SUPERUSER_DATABASE_URL` and `SYNTRA_MASTER_KEY`.
+`SYNTRA_BACKUP_KEEP` copies; a copy off the host
+(`SYNTRA_BACKUP_COPY_COMMAND`, [Getting them off the host](#getting-them-off-the-host));
+and `MASTER_KEY` kept somewhere other than this host and its backups. For a
+host whose `shared/.env` is not the source of truth the tool honours
+`SYNTRA_ROOT`, `SYNTRA_SERVICE`, `SYNTRA_PG_CONTAINER`, `SYNTRA_PG_ROLE`,
+`SYNTRA_PG_DB`, `SYNTRA_DATABASE_URL`, `SYNTRA_SUPERUSER_DATABASE_URL`,
+`SYNTRA_MASTER_KEY` and `SYNTRA_BACKUP_COPY_COMMAND`.
 
 #### Taking and proving a backup
 

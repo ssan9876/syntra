@@ -202,6 +202,36 @@ else
   say "  (no ops/syntra-backup in this tree -- deploy a release that has one)"
 fi
 
+# WHERE THE DATABASE RUNS. Nothing here moves it -- that is a dump and a
+# restore, by hand -- but the two problems found on a converted install are
+# both visible from here: PG_CONTAINER unset, which syntra-backup refuses to
+# run without, and PostgreSQL running from the development fixture stack.
+say "checking the database container"
+PG_NAME=$(env_value PG_CONTAINER "$SRC/.env")
+if [ -z "$PG_NAME" ]; then
+  say "  PG_CONTAINER is not set in .env; syntra-backup will not run until it is. syntra-update uses infra-postgres-1."
+  PG_NAME=infra-postgres-1
+fi
+PG_COMPOSE=""
+if command -v docker >/dev/null 2>&1; then
+  PG_COMPOSE=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' "$PG_NAME" 2>/dev/null || true)
+fi
+case "$PG_COMPOSE" in
+  *infra/docker-compose.yml*)
+    say "  $PG_NAME runs from the development stack ($PG_COMPOSE): port 5432 on every interface, password syntra, no restart policy."
+    say "  Move it to ops/postgres/docker-compose.yml: see docs/install.md, \"The database\"."
+    ;;
+  "")
+    say "  container $PG_NAME not found; set PG_CONTAINER in $ROOT/shared/.env to the database's container."
+    ;;
+  "<no value>")
+    say "  $PG_NAME is not a Compose container; ops/postgres/docker-compose.yml is the supported setup."
+    ;;
+  *)
+    say "  $PG_NAME runs from $PG_COMPOSE"
+    ;;
+esac
+
 say "rewriting $UNIT"
 run cp -a "$UNIT" "$UNIT.pre-release-layout"
 # Both substitutions below are known to have something to match: the checks

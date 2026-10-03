@@ -36,6 +36,10 @@ Type=oneshot
 # which a unit file spells `%%`, next to specifiers like `%i` that must NOT be
 # doubled. That is a line nobody can read correctly twice, in a unit whose
 # entire job is to be reliable on the one night everything else went wrong.
-ExecStart=/bin/sh -c '{ echo "BACKUP FAILED: %i did not complete. No new backup was taken."; echo "  what happened:   journalctl -u %i -n 50 --no-pager"; echo "  what is on disk: /opt/syntra/bin/syntra-backup list"; echo "Until this is fixed there is no recovery point newer than the last successful run."; } | systemd-cat -t syntra-backup -p err'
+#
+# Not "no new backup was taken": with SYNTRA_BACKUP_COPY_COMMAND set, a run
+# whose copy failed has written a complete local backup and failed anyway. The
+# unit's own log, the first command below, says which of the two it was.
+ExecStart=/bin/sh -c '{ echo "BACKUP FAILED: %i did not complete."; echo "  what happened:   journalctl -u %i -n 50 --no-pager"; echo "  what is on disk: /opt/syntra/bin/syntra-backup list"; } | systemd-cat -t syntra-backup -p err'
 
 User=root

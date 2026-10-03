@@ -272,6 +272,8 @@ API alone as the entire deployment, from TypeScript source through `tsx`
 rather than either Docker image. Choose it over the container path when you
 would rather manage one process under systemd than a Compose stack.
 
+Start the database first: [The database](#the-database), below. Then:
+
 ```bash
 pnpm install && pnpm db:generate && pnpm db:migrate
 pnpm build                                  # vite build -> apps/web/dist
@@ -317,18 +319,79 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-**Order it after the database, and mean *accepting connections*.** An API
-that starts before PostgreSQL answers does not crash: it starts anyway and
-logs *no directory sources were scheduled*, and nothing runs until the next
-restart. If PostgreSQL runs on the same host under Docker, the development
-compose file brings it up with no restart policy, so after a reboot nothing
-comes back unless a unit starts it. Give `syntra.service` an `After=` and
-`Requires=` on whatever runs the database, and an `ExecStartPre=` that waits
-for `pg_isready` to succeed. Then reboot once and check the boot was clean:
+### The database
+
+PostgreSQL 16 in Docker, from `ops/postgres/docker-compose.yml`: the database
+alone, published on `127.0.0.1:5432` only, `restart: unless-stopped`, a
+`pg_isready` healthcheck and a named volume, `syntra-postgres-data`. The
+passwords come from an env file and have no default.
+
+Do not use `infra/docker-compose.yml` here. It is the development and CI
+fixture stack: port 5432 on every interface, the password `syntra`, no restart
+policy, and OpenLDAP, Samba, SFTP and MailDev beside the database.
+
+Copy the compose file and the role script to a directory of their own, so an
+update never changes the container that holds the data:
+
+```bash
+install -d -m 0700 /opt/syntra/postgres
+cp ops/postgres/docker-compose.yml /opt/syntra/postgres/
+cp -r infra/initdb /opt/syntra/postgres/initdb       # creates syntra_app on first start
+install -m 0600 /dev/null /opt/syntra/postgres/.env
+cat > /opt/syntra/postgres/.env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 32)
+SYNTRA_APP_PASSWORD=$(openssl rand -hex 32)
+PG_CONTAINER=syntra-postgres
+EOF
+
+cp ops/postgres/syntra-postgres.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now syntra-postgres
+```
+
+On the release layout the files are under `/opt/syntra/current/` instead.
+Compose reads `/opt/syntra/postgres/.env` by itself, so `docker compose ps` and
+`docker compose logs` work from that directory. `.env` beside Syntra (or
+`/opt/syntra/shared/.env` on the release layout) then names the same database,
+role passwords and container:
+
+```ini
+DATABASE_URL=postgresql://syntra_app:<SYNTRA_APP_PASSWORD>@127.0.0.1:5432/syntra
+SHADOW_DATABASE_URL=postgresql://syntra_app:<SYNTRA_APP_PASSWORD>@127.0.0.1:5432/syntra_shadow
+SUPERUSER_DATABASE_URL=postgresql://syntra:<POSTGRES_PASSWORD>@127.0.0.1:5432/syntra
+PG_CONTAINER=syntra-postgres
+```
+
+`PG_CONTAINER` is the container `syntra-update` and `syntra-backup` run
+`pg_dump` in. It must match the compose file's container name, which is
+`PG_CONTAINER` in `/opt/syntra/postgres/.env` (default `syntra-postgres`). An
+install that relied on the old default, `infra-postgres-1`, can set that name
+in both files instead.
+
+**Order the API after the database.** An API that starts before PostgreSQL
+answers does not crash: it starts anyway and logs *no directory sources were
+scheduled*, and nothing runs until the next restart. `syntra-postgres.service`
+runs `docker compose up -d --wait`, which returns once the healthcheck passes,
+so a drop-in on `syntra.service` is enough:
+
+```ini
+# /etc/systemd/system/syntra.service.d/10-postgres.conf
+[Unit]
+After=syntra-postgres.service
+Requires=syntra-postgres.service
+```
+
+Then reboot once and check the boot was clean:
 
 ```bash
 journalctl -u syntra -b | grep -ciE "scheduler failed|ECONNREFUSED"   # expect 0
 ```
+
+An install already running PostgreSQL from `infra/docker-compose.yml` moves
+with a backup and a restore:
+[Moving the database off the development stack](operate.md#moving-the-database-off-the-development-stack).
+
+### Converting to the release layout
 
 To update such an install from the console, convert it once to the release
 layout with `ops/syntra-install` (`--dry-run` first says what it will do):

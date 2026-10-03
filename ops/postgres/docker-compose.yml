@@ -1,0 +1,69 @@
+# PostgreSQL for the single-process install (the release layout under
+# /opt/syntra). The database and nothing else.
+#
+# NOT infra/docker-compose.yml. That is the development and CI fixture stack:
+# it publishes 5432 on every interface with the password `syntra`, has no
+# restart policy, keeps the data in an anonymous volume, and brings up
+# OpenLDAP, Samba, SFTP and MailDev beside the database.
+#
+# Copied out of the release, once, to a directory of its own -- docs/install.md,
+# "The database" -- so an update never changes the definition of the container
+# that holds the data:
+#
+#   /opt/syntra/postgres/docker-compose.yml   this file
+#   /opt/syntra/postgres/initdb/              infra/initdb, creates syntra_app
+#   /opt/syntra/postgres/.env                 the passwords, mode 0600
+#
+# Compose reads `.env` beside this file on its own, so every `docker compose`
+# command run in that directory sees the same values. There is no default
+# password: an unset one stops `docker compose up` with the variable named.
+#
+#   cd /opt/syntra/postgres && docker compose up -d --wait
+#
+# ops/postgres/syntra-postgres.service runs exactly that at boot.
+
+# A fixed project name: the volume below is named after it, and a project
+# named after whichever directory this was run from is a different, empty
+# database the day somebody runs it from somewhere else.
+name: syntra-postgres
+
+services:
+  postgres:
+    image: postgres:16
+    # What syntra-update and syntra-backup `docker exec` into. They read the
+    # name from PG_CONTAINER in /opt/syntra/shared/.env and fall back to
+    # `infra-postgres-1` (syntra-update) or refuse (syntra-backup) -- so the
+    # same name goes in both files. Setting PG_CONTAINER=infra-postgres-1 here
+    # keeps an install that never set it working unchanged, once the old
+    # container is removed.
+    container_name: ${PG_CONTAINER:-syntra-postgres}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: syntra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/syntra/postgres/.env}
+      POSTGRES_DB: syntra
+      # Read by initdb/01-app-role.sh on first start, which creates the
+      # NOSUPERUSER NOBYPASSRLS role DATABASE_URL connects as.
+      SYNTRA_APP_PASSWORD: ${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD in /opt/syntra/postgres/.env}
+    # Loopback only. The API runs on this host and connects to 127.0.0.1;
+    # nothing else has a reason to reach the database.
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - data:/var/lib/postgresql/data
+      # Runs once, on an empty data directory.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U syntra -d syntra']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+    # Docker's default is 10 s before SIGKILL. A database killed mid-checkpoint
+    # recovers, but takes longer to start than one that shut down.
+    stop_grace_period: 60s
+
+volumes:
+  data:
+    # Named outright, so `docker volume ls` says what it is.
+    name: syntra-postgres-data

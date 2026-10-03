@@ -263,7 +263,9 @@ ever runs on, including the one somebody puts on a network "just to have a look"
 `PG_CONTAINER` configure the in-console updater. `PG_CONTAINER` names the
 PostgreSQL container the pre-migration dump is taken through; `syntra-update`
 falls back to `infra-postgres-1`, and `syntra-backup` refuses to run without
-it. See [Operating Syntra](operate.md#upgrades) for what they do and how
+it. With `ops/postgres/docker-compose.yml` it is `syntra-postgres` unless that
+file's own `.env` names another (see
+[The database](install.md#the-database)). See [Operating Syntra](operate.md#upgrades) for what they do and how
 upgrades work.
 
 ### Metrics
