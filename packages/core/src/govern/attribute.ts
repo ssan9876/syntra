@@ -43,6 +43,11 @@ export interface RuleFact {
    * today: that is when Provision would create the account again.
    */
   grantsAccount?: boolean;
+  /**
+   * Set when the rule is a Syntra group's membership rule rather than a
+   * BusinessRule: `ruleId` is then the group's id and `contractId` is empty.
+   */
+  groupRule?: boolean;
 }
 
 /**
@@ -163,7 +168,7 @@ export function attributionsFor(
   for (const rule of input.rules) {
     drafts.push({
       kind: 'business_rule',
-      refType: 'BusinessRule',
+      refType: rule.groupRule === true ? 'Group' : 'BusinessRule',
       refId: rule.ruleId,
       detail: {
         ruleId: rule.ruleId,
@@ -173,6 +178,7 @@ export function attributionsFor(
         jobTitle: rule.jobTitle,
         ruleEnabled: rule.ruleEnabled,
         ...(rule.grantsAccount === true ? { grantsAccount: true } : {}),
+        ...(rule.groupRule === true ? { groupRule: true } : {}),
       },
       resolvedAt,
     });
@@ -413,7 +419,9 @@ export function summariseAttributions(drafts: readonly AttributionDraft[]): stri
   for (const draft of drafts) {
     switch (draft.kind) {
       case 'business_rule':
-        if (draft.refType === 'ProvisionAction') {
+        if (draft.detail['groupRule'] === true) {
+          parts.push(`the membership rule of the group "${String(draft.detail['ruleName'])}" matches them`);
+        } else if (draft.refType === 'ProvisionAction') {
           parts.push('Provision created the account, and no enabled rule requires it today');
         } else if (draft.detail['grantsAccount'] === true) {
           parts.push(`the business rule "${String(draft.detail['ruleName'])}" requires their account`);

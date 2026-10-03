@@ -370,12 +370,17 @@ const RAW = {
     sourceAnchor: 'none',
     status: 'none',
     statusReason: 'none',
+    membershipRule: 'none',
+    ruleEvaluatedAt: 'none',
+    ruleHeldAt: 'none',
+    ruleHeldRemoveCount: 'none',
   }),
   GroupMembership: table('directory', {
     id: 'identity',
     tenantId: 'none',
     groupId: 'operational',
     userId: 'identity',
+    origin: 'none',
   }, {
     links: {user: ['userId']},
     erasure: 'retain',

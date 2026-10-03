@@ -462,7 +462,17 @@ export async function collectTenant(
       select: {
         userId: true,
         groupId: true,
-        group: { select: { name: true, sourceId: true, sourceAnchor: true, source: { select: { name: true } } } },
+        origin: true,
+        group: {
+          select: {
+            name: true,
+            status: true,
+            membershipRule: true,
+            sourceId: true,
+            sourceAnchor: true,
+            source: { select: { name: true } },
+          },
+        },
       },
     }),
   );
@@ -486,6 +496,23 @@ export async function collectTenant(
       observedVia: 'syntra',
       attribution: {
         ...EMPTY_ATTRIBUTION_INPUT,
+        // A member the group's rule added. Live while the rule is set and the
+        // group active: the next pass would add them back, so revoking it
+        // means changing the rule.
+        rules:
+          m.origin === 'rule'
+            ? [
+                {
+                  ruleId: m.groupId,
+                  ruleName: m.group.name,
+                  contractId: '',
+                  department: null,
+                  jobTitle: null,
+                  ruleEnabled: m.group.membershipRule !== null && m.group.status === 'active',
+                  groupRule: true,
+                },
+              ]
+            : [],
         manual: manualFor(made.memberships.get(`${m.groupId}|${m.userId}`)),
         ...(m.group.sourceId === null
           ? {}
