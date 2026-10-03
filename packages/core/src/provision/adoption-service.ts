@@ -132,7 +132,25 @@ interface Candidate {
   anchor: string;
   dn: string;
   attributes: Record<string, string[]>;
+  /** The account's own correlation key, as the target holds it. */
+  correlationKey: string;
+  /**
+   * `name` when the account carries the conflicted key; `email` when nothing
+   * did and the one account holding the person's business email was taken
+   * instead. See `findCandidate`.
+   */
+  matchedBy: 'name' | 'email';
 }
+
+export class CorrelationKeyTakenError extends Error {
+  constructor(readonly correlationKey: string) {
+    super(`Account ${correlationKey} already belongs to another person on this target.`);
+    this.name = 'CorrelationKeyTakenError';
+  }
+}
+
+/** The record attributes a target's email address is read into. */
+const EMAIL_ATTRIBUTES = ['mail', 'email'];
 
 /** The row to adopt, plus the target details the read needs. */
 async function conflictedAccount(
@@ -151,7 +169,11 @@ async function conflictedAccount(
       where: { id: targetSystemId },
       select: { type: true, config: true },
     });
-    return { account, target };
+    const person = await tx.person.findUniqueOrThrow({
+      where: { id: personId },
+      select: { businessEmail: true },
+    });
+    return { account, target, businessEmail: person.businessEmail };
   });
 }
 
@@ -174,6 +196,7 @@ async function findCandidate(
   targetSystemId: string,
   type: string,
   correlationKey: string,
+  businessEmail: string | null,
   override: TargetConnector<never> | undefined,
 ): Promise<Candidate | null> {
   const config = await withTenant(tenantId, (tx) =>
@@ -184,12 +207,22 @@ async function findCandidate(
     targetConnectorFor(type)) as unknown as TargetConnector<unknown>;
 
   const wanted = correlationKey.trim().toLowerCase();
+  const email = businessEmail?.trim().toLowerCase() || null;
+  const byEmail: Candidate[] = [];
   for await (const record of connector.read(config as never)) {
-    const key = observedCorrelationKey(type, config, record).trim().toLowerCase();
-    if (key !== wanted) continue;
-    return { anchor: record.anchor, dn: record.dn, attributes: record.attributes };
+    const key = observedCorrelationKey(type, config, record).trim();
+    const candidate = { anchor: record.anchor, dn: record.dn, attributes: record.attributes, correlationKey: key };
+    if (key.toLowerCase() === wanted) return { ...candidate, matchedBy: 'name' };
+    const emails = EMAIL_ATTRIBUTES.flatMap((name) => record.attributes[name] ?? []);
+    if (email !== null && key !== '' && emails.some((value) => value.trim().toLowerCase() === email)) {
+      byEmail.push({ ...candidate, matchedBy: 'email' });
+    }
   }
-  return null;
+  // A create refused because the EMAIL is taken (Mattermost, most REST
+  // targets) reserves a name nobody holds, so nothing carries the key. The
+  // account in the way is the one with the person's business email -- when
+  // there is exactly one. Two is ambiguous, and an administrator picks.
+  return byEmail.length === 1 ? byEmail[0]! : null;
 }
 
 /**
@@ -206,13 +239,18 @@ export async function adoptionCandidate(
   targetSystemId: string,
   connector?: TargetConnector<never>,
 ): Promise<Candidate> {
-  const { account, target } = await conflictedAccount(tenantId, personId, targetSystemId);
+  const { account, target, businessEmail } = await conflictedAccount(
+    tenantId,
+    personId,
+    targetSystemId,
+  );
   const candidate = await findCandidate(
     tenantId,
     provider,
     targetSystemId,
     target.type,
     account.correlationKey,
+    businessEmail,
     connector,
   );
   if (candidate === null) {
@@ -229,7 +267,7 @@ export async function adoptAccount(
   provider: MasterKeyProvider,
   input: AdoptAccountInput,
 ): Promise<AdoptAccountResult> {
-  const { account, target } = await conflictedAccount(
+  const { account, target, businessEmail } = await conflictedAccount(
     tenantId,
     input.personId,
     input.targetSystemId,
@@ -241,6 +279,7 @@ export async function adoptAccount(
     input.targetSystemId,
     target.type,
     account.correlationKey,
+    businessEmail,
     input.connector,
   );
 
@@ -286,9 +325,31 @@ export async function adoptAccount(
     if (held !== null && held.id !== account.id) {
       throw new AnchorAlreadyBoundError(candidate.anchor);
     }
+    // Found by email, the account goes by its own name, and the row takes it:
+    // left at the reserved name, the next run would propose renaming the
+    // person's existing account to it.
+    const renamed =
+      candidate.matchedBy === 'email' &&
+      candidate.correlationKey.toLowerCase() !== account.correlationKey.toLowerCase();
+    if (renamed) {
+      const taken = await tx.targetAccount.findFirst({
+        where: {
+          targetSystemId: input.targetSystemId,
+          correlationKey: { equals: candidate.correlationKey, mode: 'insensitive' },
+          id: { not: account.id },
+        },
+        select: { id: true },
+      });
+      if (taken !== null) throw new CorrelationKeyTakenError(candidate.correlationKey);
+    }
     await tx.targetAccount.update({
       where: { id: account.id },
-      data: { anchor: candidate.anchor, status: 'active', statusReason: null },
+      data: {
+        anchor: candidate.anchor,
+        status: 'active',
+        statusReason: null,
+        ...(renamed ? { correlationKey: candidate.correlationKey } : {}),
+      },
     });
     await recordEvent(tx, {
       actorUserId: input.actorUserId,
@@ -301,7 +362,8 @@ export async function adoptAccount(
         adopted: true,
         anchor: candidate.anchor,
         dn: candidate.dn,
-        correlationKey: account.correlationKey,
+        correlationKey: candidate.matchedBy === 'email' ? candidate.correlationKey : account.correlationKey,
+        matchedBy: candidate.matchedBy,
         reason: input.reason,
       },
     });

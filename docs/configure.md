@@ -1296,7 +1296,15 @@ password requirements (**System Console → Authentication → Password**).
 
 **Refusals.** A username or email already in use is `400` with
 `An account with that username already exists.`, reported as a conflict with
-Mattermost's own message. Mattermost's API rate limit, when on, answers `429`;
+Mattermost's own message.
+
+**People who already have an account.** Syntra never takes an existing
+Mattermost user over on its own: the user's name is reserved, Syntra asks for
+the next free one (`ssander2`), and Mattermost refuses it because the email is
+taken. **Adopt** on the person's account then finds the existing user by the
+person's business email (exactly one match, read from `mail`) and binds it
+under its own name, so no rename follows. Two users with the same email are
+refused; pick by hand. Mattermost's API rate limit, when on, answers `429`;
 reads wait and retry, writes are retried by the run.
 
 **Single sign-on.** For SAML sign-in (a Mattermost Enterprise feature), change

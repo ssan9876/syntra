@@ -7,9 +7,11 @@ import { createTarget } from './target-service.js';
 import {
   AnchorAlreadyBoundError,
   CandidateNotVisibleError,
+  CorrelationKeyTakenError,
   NoAccountToAdoptError,
   NotInConflictError,
   adoptAccount,
+  adoptionCandidate,
 } from './adoption-service.js';
 
 const provider = localMasterKeyProvider(Buffer.alloc(32, 7));
@@ -402,5 +404,83 @@ describe('adoptAccount — when no candidate is visible', () => {
 
     expect(result.adopted).toBe(true);
     expect(result.anchor).toBe(anchor);
+  });
+});
+
+describe('adoptAccount — an email already in use', () => {
+  // Mattermost refuses a create whose EMAIL is taken: the person's existing
+  // account (`anovak`) reserved its own name, the run asked for `anna.novak`,
+  // and nothing at the target is called that.
+  const withEmail = async (email: string | null) =>
+    withTenant(tenantId, (tx) =>
+      tx.person.update({ where: { id: personId }, data: { businessEmail: email } }),
+    );
+  const seedWithMail = (key: string, mail: string) => {
+    const anchor = target.seedForeignObject(key);
+    target.objects.get(anchor)!.attributes = { mail: [mail] };
+    return anchor;
+  };
+  const adopt = () =>
+    adoptAccount(tenantId, provider, {
+      personId,
+      targetSystemId: targetId,
+      reason: 'her existing account',
+      actorUserId: adminUserId,
+      sourceIp: null,
+      connector: target as never,
+    });
+
+  it('offers the one account holding the person’s business email, and says how it was found', async () => {
+    await withEmail('Anna.Novak@acme.test');
+    const anchor = seedWithMail('anovak', 'anna.novak@acme.test');
+
+    const candidate = await adoptionCandidate(tenantId, provider, personId, targetId, target as never);
+
+    expect(candidate).toMatchObject({ anchor, correlationKey: 'anovak', matchedBy: 'email' });
+  });
+
+  it('adopts it under its own name, so no rename is proposed', async () => {
+    await withEmail('anna.novak@acme.test');
+    const anchor = seedWithMail('anovak', 'anna.novak@acme.test');
+
+    expect(await adopt()).toMatchObject({ adopted: true, anchor });
+
+    const after = await accountOf(personId);
+    expect(after).toMatchObject({ anchor, status: 'active', correlationKey: 'anovak' });
+    const [event] = await adoptedEvents();
+    expect(event?.payload).toMatchObject({ correlationKey: 'anovak', matchedBy: 'email' });
+  });
+
+  it('prefers the account carrying the name over one matching by email', async () => {
+    await withEmail('anna.novak@acme.test');
+    seedWithMail('anovak', 'anna.novak@acme.test');
+    const named = target.seedForeignObject('anna.novak');
+
+    expect(await adopt()).toMatchObject({ anchor: named });
+    expect((await accountOf(personId)).correlationKey).toBe('anna.novak');
+  });
+
+  it('refuses when two accounts hold the email', async () => {
+    await withEmail('anna.novak@acme.test');
+    seedWithMail('anovak', 'anna.novak@acme.test');
+    seedWithMail('anovak-old', 'anna.novak@acme.test');
+
+    await expect(adopt()).rejects.toBeInstanceOf(CandidateNotVisibleError);
+  });
+
+  it('does not look by email for a person with none', async () => {
+    await withEmail(null);
+    seedWithMail('anovak', '');
+
+    await expect(adopt()).rejects.toBeInstanceOf(CandidateNotVisibleError);
+  });
+
+  it('refuses a name another person’s account already has', async () => {
+    await withEmail('anna.novak@acme.test');
+    seedWithMail('anovak', 'anna.novak@acme.test');
+    await seedConflicted('Andrew', 'Novak', 'anovak');
+
+    await expect(adopt()).rejects.toBeInstanceOf(CorrelationKeyTakenError);
+    expect((await accountOf(personId)).status).toBe('conflict');
   });
 });

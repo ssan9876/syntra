@@ -30,6 +30,7 @@ import {
   NoCorrelationKeyError,
   PairedDirectorySourceNotFoundError,
   AnchorAlreadyBoundError,
+  CorrelationKeyTakenError,
   CandidateNotVisibleError,
   NoAccountToAdoptError,
   NotInConflictError,
@@ -250,6 +251,14 @@ function adoptionProblem(cause: unknown): unknown {
       409,
       'not-in-conflict',
       'This account is not in conflict',
+      cause.message,
+    );
+  }
+  if (cause instanceof CorrelationKeyTakenError) {
+    return new ProblemError(
+      409,
+      'correlation-key-taken',
+      'Account name already linked',
       cause.message,
     );
   }
