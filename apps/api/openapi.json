@@ -28951,6 +28951,70 @@
         }
       }
     },
+    "/api/admin/targets/connector-documents/validate": {
+      "post": {
+        "operationId": "postTargetsConnectorDocumentsValidate",
+        "tags": [
+          "Target systems"
+        ],
+        "summary": "Check an HTTP connector document without saving it",
+        "description": "Requires `provision.read`.",
+        "x-syntra-permission": [
+          "provision.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "document": {}
+                },
+                "required": [
+                  "document"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/targets/test": {
       "post": {
         "operationId": "postTargetsTest",

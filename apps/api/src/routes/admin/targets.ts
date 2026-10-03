@@ -10,9 +10,11 @@ import {
   testTargetRequestSchema,
   updateTargetRequestSchema,
   adoptAccountRequest,
+  validateConnectorDocumentRequest,
 } from '@syntra/contracts';
 import {
   BUILTIN_CONNECTOR_DOCUMENTS,
+  httpConnectorDocument,
   ENTRA_CAPABILITY_MATRIX,
   capabilitiesForTarget,
   firstSignInPasswordChange,
@@ -329,6 +331,26 @@ export async function registerAdminTargetRoutes(
         document,
       })),
     }),
+  );
+
+  /**
+   * Checks a connector document against the schema the connector runs, so the
+   * builder can mark each field as it is edited. Paths are relative to the
+   * document, e.g. `account.list.path`.
+   */
+  app.post(
+    '/targets/connector-documents/validate',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { document } = validateConnectorDocumentRequest.parse(request.body);
+      const result = httpConnectorDocument.safeParse(document);
+      return {
+        valid: result.success,
+        errors: result.success
+          ? []
+          : result.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+      };
+    },
   );
 
   /**

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   adoptAccountRequest,
+  validateConnectorDocumentRequest,
   containerListResponse,
   createTargetRequestSchema,
   idParam,
@@ -35,6 +36,10 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
   'GET /targets/connector-documents': {
     summary: 'List the built-in HTTP connector documents',
     description: 'Constants shipped with the product; placeholders in them such as `{clientId}` are for the administrator to replace.',
+  },
+  'POST /targets/connector-documents/validate': {
+    summary: 'Check an HTTP connector document without saving it',
+    body: validateConnectorDocumentRequest,
   },
   'GET /targets/:id/containers': {
     summary: 'List the containers a target system holds',

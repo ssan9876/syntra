@@ -282,6 +282,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/update/rollback', 'Deployment rollback; installation-wide, no tenant data.'],
   ['POST /api/admin/sources/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/test', 'Tests an unsaved connection description; references no saved object.'],
+  ['POST /api/admin/targets/connector-documents/validate', 'Checks an unsaved connector document against the schema; references no saved object.'],
   ['PATCH /api/admin/lifecycle-policy', 'The tenant\'s own lifecycle policy settings.'],
   ['PUT /api/admin/policy/default', 'The tenant\'s default authentication policy outcome.'],
   ['POST /api/admin/provision/external-write-stop', 'Tenant-wide write stop; takes a reason, not an id.'],

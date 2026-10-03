@@ -545,3 +545,9 @@ export const materialiseOrgUnitRequest = z
     dn: z.string().min(1).max(1024),
   })
   .strict();
+
+/**
+ * A connector document to check without saving it. The document itself is
+ * validated by `@syntra/connectors`; this is only the envelope.
+ */
+export const validateConnectorDocumentRequest = z.object({ document: z.unknown() }).strict();
