@@ -62,6 +62,11 @@ export const samlConfigRequest = z
      */
     wantAuthnRequestsSigned: z.boolean().default(true),
     encryptAssertions: z.boolean().default(false),
+    /**
+     * Sign the whole Response too, not only the Assertion inside it. Off by
+     * default; Mattermost needs it.
+     */
+    signResponse: z.boolean().default(false),
     encryptionCertificate: pemCertificate.nullable().default(null),
     sloUrl: endpoint.nullable().default(null),
     /**

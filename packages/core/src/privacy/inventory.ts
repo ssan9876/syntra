@@ -913,6 +913,7 @@ const RAW = {
     spCertificates: 'none',
     wantAuthnRequestsSigned: 'none',
     encryptAssertions: 'none',
+    signResponse: 'none',
     encryptionCertificate: 'none',
     sloUrl: 'none',
     sloBinding: 'none',

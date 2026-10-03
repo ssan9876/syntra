@@ -1309,7 +1309,11 @@ reads wait and retry, writes are retried by the run.
 
 **Single sign-on.** For SAML sign-in (a Mattermost Enterprise feature), change
 the create body to send `auth_service: "saml"` and `auth_data: "{{attr.mail}}"` instead of
-`password`, under *Edit the connector document*.
+`password`, under *Edit the connector document*. On the
+Syntra application, turn on **Sign the whole response, not only the
+assertion**: Mattermost rejects a response whose only signature is on the
+assertion, with "We received an invalid signature in the response from the
+Identity Provider".
 
 The document is tested against an in-memory Mattermost that follows the API
 v4 reference. Run a lifecycle simulation and one real create, team grant and
@@ -1908,7 +1912,10 @@ refused) and use the **SAML** panel on its page, or the same settings over
 or import the provider's metadata (`POST /api/admin/applications/:id/saml/import`),
 which also takes the single logout binding, as above. `wantAuthnRequestsSigned`
 needs the service provider's signing certificate registered; set it `false`
-only for a provider that does not sign. The portal tile's **launch address** is
+only for a provider that does not sign. Syntra signs the Assertion; set
+`signResponse` (**Sign the whole response, not only the assertion**) for a
+provider that also wants the Response signed — Mattermost refuses one without
+it as "an invalid signature". The portal tile's **launch address** is
 the application's `launchUrl` (`PUT /api/admin/applications/:id`): the
 provider's SSO start page, used whenever `allowIdpInitiated` is off.
 

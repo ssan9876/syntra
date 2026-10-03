@@ -34,6 +34,7 @@ import {
   buildLogoutResponse,
   buildSignedAssertion,
   buildSignedResponse,
+  signResponseDocument,
   decodePostMessage,
   decodeRedirectMessage,
   encryptAssertion,
@@ -976,6 +977,11 @@ export async function registerSamlIdpRoutes(
       );
       const encrypted = await encryptAssertion(assertion, ctx.config.encryptionCertificate);
       deliverable = xml.replace(assertion, encrypted);
+    }
+    // Last, over the bytes that are delivered: an encrypted Assertion is not
+    // the one that was built.
+    if (ctx.config.signResponse && ctx.parked.protocol !== 'wsfed') {
+      deliverable = signResponseDocument(deliverable, signingKey);
     }
 
     await request.db(async (tx) => {

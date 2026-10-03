@@ -166,6 +166,28 @@ export function buildSignedResponse(
   );
 }
 
+/**
+ * Signs a whole Response, around an Assertion that is already signed (or
+ * encrypted).
+ *
+ * For a service provider that refuses a Response whose only signature is
+ * inside it: Mattermost does, and ADFS calls the setting
+ * `MessageAndAssertion`. Called last, after any encryption, because replacing
+ * the Assertion with an EncryptedAssertion changes the bytes this signs.
+ *
+ * The signature goes after the Response's own Issuer, where the schema puts
+ * it, and the enveloped transform removes only this signature: the
+ * Assertion's stays inside the digest.
+ */
+export function signResponseDocument(responseXml: string, key: SigningMaterial): string {
+  return signFragment(responseXml, {
+    privateKeyPem: key.privateKeyPem,
+    certificatePem: key.certificatePem,
+    referenceXPath: "/*[local-name(.)='Response']",
+    insertAfterXPath: "/*[local-name(.)='Response']/*[local-name(.)='Issuer']",
+  });
+}
+
 /** The HTML auto-post form that delivers a Response over HTTP-POST. */
 export function postBindingForm(input: {
   acsUrl: string;

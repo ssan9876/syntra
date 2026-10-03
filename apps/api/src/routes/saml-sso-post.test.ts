@@ -218,6 +218,47 @@ describe('SAML single sign-on over HTTP-POST', () => {
     expect(profile!.department).toBeUndefined();
   });
 
+  describe('signing the whole response', () => {
+    const strictSp = async () => {
+      const metadata = await get('/saml/metadata', false);
+      const certificate = `-----BEGIN CERTIFICATE-----\n${
+        metadata.body.match(/<ds:X509Certificate>([^<]+)</)![1]!
+      }\n-----END CERTIFICATE-----`;
+      // Requires BOTH signatures, the way Mattermost does.
+      return new SAML({
+        idpCert: certificate,
+        issuer: SP, callbackUrl: ACS, audience: SP,
+        wantAuthnResponseSigned: true, wantAssertionsSigned: true,
+        validateInResponseTo: 'never' as never, acceptedClockSkewMs: 5000,
+      });
+    };
+
+    it('signs the Response as well as the Assertion when the application asks', async () => {
+      await saveSamlConfig(ctx.tenantId, applicationId, samlConfig({ signResponse: true }), samlKeyOptions);
+
+      const res = await postSso(authnRequest());
+      const xml = Buffer.from(extractResponse(res.body), 'base64').toString('utf8');
+
+      // The Response's signature sits after its own Issuer, before Status.
+      expect(xml).toMatch(/<samlp:Response[^>]*><saml:Issuer>[^<]*<\/saml:Issuer><ds:Signature /);
+      expect(xml.match(/<ds:Signature /g)).toHaveLength(2);
+      const { profile } = await (await strictSp()).validatePostResponseAsync({
+        SAMLResponse: extractResponse(res.body),
+      });
+      expect(profile!.nameID).toBe('j@acme.test');
+    });
+
+    it('signs only the Assertion by default', async () => {
+      const res = await postSso(authnRequest());
+      const xml = Buffer.from(extractResponse(res.body), 'base64').toString('utf8');
+
+      expect(xml.match(/<ds:Signature /g)).toHaveLength(1);
+      await expect(
+        (await strictSp()).validatePostResponseAsync({ SAMLResponse: extractResponse(res.body) }),
+      ).rejects.toThrow();
+    });
+  });
+
   it('echoes InResponseTo and RelayState back to the service provider', async () => {
     const res = await postSso(authnRequest({ id: '_abc123' }), 'deep/link');
     expect(res.body).toContain('name="RelayState" value="deep/link"');
