@@ -331,7 +331,7 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   await expect(page.getByText('Rule saved')).toBeVisible();
   await expect(
     page.getByText(
-      `(contract.department is ${DEPARTMENT}) AND (contract.department is ${DEPARTMENT})`,
+      `(Department is ${DEPARTMENT}) AND (Department is ${DEPARTMENT})`,
       { exact: false },
     ),
   ).toBeVisible();
