@@ -1335,9 +1335,19 @@ it lists (`provision.read` for runs, held actions and lifecycle work; `tenant.ma
 
 Below the work held for review, **Activity → Attention** lists what has
 stopped working: webhooks and mail that gave up, targets skipping or never
-finishing their runs, provisioning and sync runs that failed this week,
-failing delegated tasks and expired credentials. The same list feeds
-**Needs you** on the Overview.
+finishing their runs, targets whose runs keep ending partially applied,
+provisioning and sync runs that failed this week, failing delegated tasks and
+expired credentials. The same list feeds **Needs you** on the Overview.
+
+A run with failed actions ends `partially_applied`, not `failed`, so
+`provision_run_failed` does not count it. `target_runs_partially_applied`
+lists each enabled target with 3 or more such runs since its last run that
+ended `applied`: *Target "fmx.example.com": last 5 runs partially applied.*
+Each item links to the latest of those runs, where the failed actions and
+their errors are listed. A run that is partial only because actions are held
+for confirmation does not count; those are under **Held actions** above. The
+incident clears when a run ends `applied`. Its acknowledgement holds while the
+same targets carry on failing, and lapses when another target starts.
 
 Each incident lists the failures behind it, newest first, up to ten: the
 target, source, endpoint or credential by name, when, and the error it
@@ -1356,8 +1366,8 @@ Two answers can be given to an incident, and both are in the audit log
   permission of the area (`provision.manage`, `sync.manage`, `tenant.manage`
   or `automate.manage`). It is a watermark: what happened up to now is dealt
   with, and the next failure brings the incident straight back. A *condition*
-  (a target skipping its runs, an expired credential) cannot be resolved; it
-  disappears when the cause is fixed.
+  (a target skipping its runs or partially applying them, an expired
+  credential) cannot be resolved; it disappears when the cause is fixed.
 
 The API is `GET /api/admin/incidents`, `POST /api/admin/incidents/:kind/acknowledge`
 and `POST /api/admin/incidents/:kind/resolve`, each taking an optional
