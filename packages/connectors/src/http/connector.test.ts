@@ -1158,7 +1158,7 @@ describe('finding an account before a create', () => {
 
     const result = await httpTargetConnector.write(
       config(withFind({ path: '/users', query: { q: '{{correlationKey}}' }, itemsAt: 'results' })),
-      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true },
+      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true, initialPassword: 'pw-unused' },
     );
 
     // A near match from a fuzzy search is not a collision.
@@ -1171,7 +1171,7 @@ describe('finding an account before a create', () => {
 
     const result = await httpTargetConnector.write(
       config(withFind({ path: '/users/by-login/{{correlationKey}}' })),
-      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true },
+      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true, initialPassword: 'pw-unused' },
     );
 
     expect(result).toMatchObject({ ok: true, anchor: 'new' });
