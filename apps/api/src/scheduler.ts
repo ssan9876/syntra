@@ -26,6 +26,8 @@ import {
   registerWriteStopJobs,
   registerPersonPurgeJobs,
   schedulePersonPurge,
+  scheduleGroupRules,
+  registerGroupRuleJobs,
   registerPrivilegedAccessJobs,
   registerExportJobs,
   registerCredentialJobs,
@@ -158,6 +160,16 @@ export async function scheduleBackgroundWork(
     } catch (cause) {
       failure('write stop expiry');
       logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule write stop expiry');
+    }
+  }
+
+  for (const tenant of tenants) {
+    try {
+      attempt('group rules');
+      await scheduleGroupRules(scheduler, tenant.id);
+    } catch (cause) {
+      failure('group rules');
+      logger.error({ err: cause, tenantId: tenant.id }, 'failed to schedule group rules');
     }
   }
 
@@ -495,6 +507,7 @@ export async function startSyncScheduler(
     registerLifecycleJobs(scheduler, { publicUrl: config.publicUrl });
     registerWriteStopJobs(scheduler);
     registerPersonPurgeJobs(scheduler);
+    registerGroupRuleJobs(scheduler);
     // The transport is NOT optional: a break-glass activation that takes
     // effect after its delay is mailed to every tenant.manage holder.
     registerPrivilegedAccessJobs(scheduler, transport);

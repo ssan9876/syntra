@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { conditionRequestSchema } from './provision.js';
 
 export const createUserRequest = z.object({
   login: z.string().min(1).max(256),
@@ -60,6 +61,20 @@ export const createGroupRequest = z.object({
   name: z.string().min(1).max(256),
   description: z.string().max(1024).optional(),
 });
+
+/**
+ * A group's membership rule: the BusinessRule condition grammar, or null to
+ * clear it. A transport and bounds check only; core re-parses the condition
+ * against the closed field and operator sets.
+ */
+export const groupMembershipRuleRequest = z
+  .object({ rule: conditionRequestSchema.nullable() })
+  .strict();
+
+/** `confirm` applies a pass that removes more than the hold allows. */
+export const applyGroupRuleRequest = z
+  .object({ confirm: z.boolean().optional() })
+  .strict();
 
 export const createOrgUnitRequest = z.object({
   name: z.string().min(1).max(256),

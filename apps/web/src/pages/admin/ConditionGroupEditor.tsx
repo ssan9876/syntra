@@ -1,6 +1,7 @@
 import { Button, Field, Select } from '@syntra/ui';
 import {
   FIELDS,
+  FIELD_LABELS,
   OPERATORS,
   kindOf,
   type ConditionDraft,
@@ -44,7 +45,7 @@ export function ConditionGroupEditor({ node, onChange, depth }: ConditionGroupEd
             label="Field"
             value={node.field}
             onChange={(v) => onChange({ ...node, field: v as LeafDraft['field'] })}
-            options={FIELDS.map((field) => ({ value: field, label: field }))}
+            options={FIELDS.map((field) => ({ value: field, label: FIELD_LABELS[field] }))}
           />
           <Select
             label="Test"

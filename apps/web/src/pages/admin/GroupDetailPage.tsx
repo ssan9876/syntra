@@ -17,6 +17,7 @@ import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
 import { RecordPanel } from './RecordPanel.js';
+import { GroupMembershipRule } from './GroupMembershipRule.js';
 import { StatusToggle } from './StatusToggle.js';
 import { SubjectLog } from './SubjectLog.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
@@ -29,6 +30,10 @@ interface GroupDetail {
   statusReason: string | null;
   /** Set when a directory source owns this group. Null means locally managed. */
   sourceId: string | null;
+  /** A condition over person and contract fields, or null. */
+  membershipRule?: unknown;
+  ruleEvaluatedAt?: string | null;
+  ruleHeldRemoveCount?: number | null;
 }
 
 interface MemberRow {
@@ -36,6 +41,8 @@ interface MemberRow {
   login: string;
   displayName: string;
   status: string;
+  /** 'rule' when the group's membership rule added them. */
+  membershipOrigin?: 'direct' | 'rule';
 }
 
 /**
@@ -216,6 +223,21 @@ export function GroupDetailPage() {
           />
         )}
 
+        {local && (
+          <GroupMembershipRule
+            groupId={data.id}
+            groupName={data.name}
+            rule={data.membershipRule ?? null}
+            evaluatedAt={data.ruleEvaluatedAt ?? null}
+            heldRemoveCount={data.ruleHeldRemoveCount ?? null}
+            active={data.status === 'active'}
+            onChanged={() => {
+              reload();
+              reloadMembers();
+            }}
+          />
+        )}
+
         <Panel title="Members">
           <div className="space-y-4">
             {memberProblem && (
@@ -234,6 +256,7 @@ export function GroupDetailPage() {
                   <tr>
                     <th scope="col">Name</th>
                     <th scope="col">Login</th>
+                    <th scope="col">Added by</th>
                     <th scope="col">
                       <span className="sr-only">Actions</span>
                     </th>
@@ -251,14 +274,21 @@ export function GroupDetailPage() {
                         </Link>
                       </td>
                       <td className="font-mono text-sm">{member.login}</td>
+                      <td className="text-sm text-muted">
+                        {member.membershipOrigin === 'rule' ? 'Rule' : 'Direct'}
+                      </td>
                       <td className="text-right">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => void changeMembership(member.id, 'DELETE')}
-                        >
-                          Remove from group
-                        </Button>
+                        {member.membershipOrigin === 'rule' ? (
+                          <span className="text-sm text-muted">Change the rule to remove</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => void changeMembership(member.id, 'DELETE')}
+                          >
+                            Remove from group
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}

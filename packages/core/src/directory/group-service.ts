@@ -51,7 +51,6 @@ export async function listGroups(tx: TenantClient, opts: ListOptions = {}) {
   return { rows, total, page, pageSize };
 }
 
-/** Idempotent: adding an existing member is a no-op, not an error. */
 /**
  * Deactivates a group. Its MEMBERSHIPS ARE LEFT IN PLACE.
  *
@@ -83,6 +82,7 @@ export async function reactivateGroup(tx: TenantClient, id: string) {
   });
 }
 
+/** Idempotent: adding an existing member is not an error. */
 export async function addMember(
   tx: TenantClient,
   groupId: string,
@@ -92,7 +92,9 @@ export async function addMember(
   await tx.groupMembership.upsert({
     where: { groupId_userId: { groupId, userId } },
     create: { tenantId, groupId, userId },
-    update: {},
+    // An explicit add of somebody the group's rule put there makes them a
+    // direct member, so the rule no longer removes them.
+    update: { origin: 'direct' },
   });
 }
 
@@ -112,7 +114,7 @@ export async function listMembers(tx: TenantClient, groupId: string) {
     where: { groupId },
     include: { user: true },
   });
-  return rows.map((r) => r.user);
+  return rows.map((r) => ({ ...r.user, membershipOrigin: r.origin }));
 }
 
 /**

@@ -2,14 +2,21 @@ import type { FastifyInstance } from 'fastify';
 import { statusPageQuery } from './list-query.js';
 import {
   createGroupRequest,
+  applyGroupRuleRequest,
   deactivateGroupRequest,
+  groupMembershipRuleRequest,
   idParam,
   membershipParams,
   patchGroupRequest,
 } from '@syntra/contracts';
 import {
+  GroupRuleSourceOwnedError,
   PERMISSIONS,
   addMember,
+  applyGroupRule,
+  parseMembershipRule,
+  previewGroupRule,
+  setGroupMembershipRule,
   createGroup,
   deactivateGroup,
   listGroups,
@@ -204,6 +211,19 @@ export async function registerAdminGroupRoutes(
       const { id, userId } = membershipParams.parse(request.params);
 
       await request.db(async (tx) => {
+        const membership = await tx.groupMembership.findUnique({
+          where: { groupId_userId: { groupId: id, userId } },
+          include: { user: true },
+        });
+        // The rule would put them back on its next pass.
+        if (membership?.origin === 'rule') {
+          throw new ProblemError(
+            409,
+            'rule-member',
+            'Added by the group rule',
+            `${membership.user.displayName} matches this group's rule. Change the rule to remove them.`,
+          );
+        }
         // Idempotent (204 either way), but only a removal is an event: a
         // success naming a user who was never a member -- another tenant's,
         // which RLS hides -- is a false record. Found by the tenant-isolation
@@ -221,6 +241,108 @@ export async function registerAdminGroupRoutes(
       });
 
       return reply.status(204).send();
+    },
+  );
+
+  /** Sets or clears the membership rule and applies it at once. */
+  app.put(
+    '/groups/:id/rule',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { rule } = groupMembershipRuleRequest.parse(request.body);
+      return request.db(async (tx) => {
+        try {
+          const changes = await setGroupMembershipRule(tx, id, rule, {
+            actorUserId: request.session.userId,
+            sourceIp: request.ip,
+          });
+          if (!changes && !(await tx.group.findUnique({ where: { id } }))) {
+            throw new ProblemError(404, 'not-found', 'Group not found');
+          }
+          const group = await tx.group.findUnique({ where: { id } });
+          return {
+            group,
+            added: changes?.add.length ?? 0,
+            removed: changes?.remove.length ?? 0,
+          };
+        } catch (error) {
+          if (error instanceof GroupRuleSourceOwnedError) {
+            throw new ProblemError(
+              409,
+              'source-owned',
+              'Managed by a directory source',
+              'This group is synced from a directory source. Its members come from the directory.',
+            );
+          }
+          throw error;
+        }
+      });
+    },
+  );
+
+  /**
+   * Who a rule would add and remove, without saving it. Names are capped at
+   * 50 per side; the counts are exact.
+   */
+  app.post(
+    '/groups/:id/rule/preview',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { rule } = groupMembershipRuleRequest.parse(request.body);
+      const condition = rule === null ? null : parseMembershipRule(rule);
+      return request.db(async (tx) => {
+        const group = await tx.group.findUnique({ where: { id } });
+        if (!group) throw new ProblemError(404, 'not-found', 'Group not found');
+        const changes = await previewGroupRule(tx, id, condition);
+        const sample = async (ids: string[]) =>
+          tx.user.findMany({
+            where: { id: { in: ids.slice(0, 50) } },
+            select: { id: true, login: true, displayName: true },
+            orderBy: { displayName: 'asc' },
+          });
+        return {
+          add: { count: changes.add.length, users: await sample(changes.add) },
+          remove: { count: changes.remove.length, users: await sample(changes.remove) },
+          keep: { count: changes.keep.length },
+        };
+      });
+    },
+  );
+
+  /** Applies the saved rule now instead of waiting for the hourly pass. */
+  app.post(
+    '/groups/:id/rule/apply',
+    { preHandler: requirePermission(PERMISSIONS.DIRECTORY_WRITE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const { confirm } = applyGroupRuleRequest.parse(request.body ?? {});
+      return request.db(async (tx) => {
+        const group = await tx.group.findUnique({ where: { id } });
+        if (!group) throw new ProblemError(404, 'not-found', 'Group not found');
+        if (group.membershipRule === null) {
+          throw new ProblemError(409, 'no-rule', 'No membership rule', `Group "${group.name}" has no membership rule.`);
+        }
+        if (group.status !== 'active') {
+          throw new ProblemError(409, 'inactive', 'Group inactive', `Group "${group.name}" is inactive. Reactivate it first.`);
+        }
+        const result = await applyGroupRule(tx, id, {
+          actorUserId: request.session.userId,
+          sourceIp: request.ip,
+          ...(confirm === undefined ? {} : { confirm }),
+        });
+        if (result?.held) {
+          throw new ProblemError(
+            409,
+            'rule-held',
+            'Rule held',
+            `Rule would remove ${result.remove.length} of ${result.remove.length + result.keep.length} members of "${group.name}". Apply anyway to confirm.`,
+            { wouldRemove: result.remove.length },
+          );
+        }
+        return { added: result?.add.length ?? 0, removed: result?.remove.length ?? 0 };
+      });
     },
   );
 

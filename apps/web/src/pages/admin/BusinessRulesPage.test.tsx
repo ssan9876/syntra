@@ -399,7 +399,7 @@ describe('BusinessRulesPage', () => {
     // never the WHOLE text of any one node and a `getByText` exact or
     // regex match against a single element is the wrong tool here.
     expect(document.body.textContent).toContain(
-      '(contract.department is Finance) AND (contract.fte is greater than 0.5)',
+      '(Department is Finance) AND (FTE is greater than 0.5)',
     );
     expect(document.body.textContent).not.toContain('a compound condition');
   });

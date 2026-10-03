@@ -3,6 +3,7 @@ import { personSourceConnectorFor, type PersonSnapshotRecord } from '@syntra/con
 import { currentTenant } from '../tenant-context.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { recordEvent } from '../audit/audit-service.js';
+import { applyAllGroupRules } from '../directory/group-rules.js';
 import { storableCause, storableMessage } from '../storable-text.js';
 import { isPersonMappingFailure, mapPersonRecord, type MappedPerson } from './mapping.js';
 import { diffPersons, type ExistingSourcePerson, type PersonChangeType } from './diff.js';
@@ -997,6 +998,10 @@ export async function applyImportRun(
       payload: { applied, failed, withheld, confirmed: opts.confirm === true, cancelled },
     });
   });
+
+  // Group rules read the attributes this run just wrote. A failure here is
+  // logged per group and never fails the import.
+  if (applied > 0) await applyAllGroupRules(tenantId);
 
   return { applied, failed, cancelled };
 }

@@ -68,6 +68,22 @@ logins those people (and integrations) sign in with.
 - An account used only by an integration is marked a **service account** from
   its record. If it was linked to a person record, **Unlink** it first.
 
+### Groups
+
+A group's members are added by hand, by a directory source, or by a
+**membership rule**. A rule matches people on Department, Job title, Cost
+centre, Employer, Location, FTE and Person status, combined with AND, OR and
+NOT. Open a group and choose **Add rule**, then **Preview** to see who it adds
+and removes before **Save rule**.
+
+- A person matches when any contract in force today matches. A person with no
+  contract in force is matched on Person status alone.
+- Rules are applied when saved, after each HR import, and every hour. **Apply
+  now** applies one at once.
+- The rule removes only the members it added. Members added by hand stay. To
+  remove a rule member, change the rule.
+- A group synced from a directory source cannot have a rule.
+
 ### Org units
 
 ![Org units](images/console/06-org-units.png)
