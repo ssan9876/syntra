@@ -109,6 +109,11 @@ Directory target with mirroring on) becomes an OU.
 - **Claims** starts a SAML application with email, first name, last name,
   display name and groups, an OpenID Connect one with groups, or a saved claim
   set.
+- **Save as catalog entry** on an application saves its settings as your own
+  catalog entry. Write `{{name}}` where a value differs per instance, such as
+  `https://{{subdomain}}.example.com`, and give each a label and an example.
+  Your entries appear first in **Add from the catalog**. Deleting one leaves
+  the applications made from it as they are.
 - An application's record holds its sign-in configuration, who it is assigned
   to (people, groups or org units — an org unit reaches everyone in it and in
   the units beneath), its portal tile, and retiring or deleting it.

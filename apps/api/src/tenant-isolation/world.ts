@@ -53,6 +53,7 @@ export const KINDS = [
   'appAssignment',
   'claim',
   'claimSet',
+  'catalogTemplate',
   'target',
   'provisionRun',
   'provisionAction',
@@ -235,6 +236,9 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   });
   const claimSet = await tx.claimMappingSet.create({
     data: { tenantId, name: `${tag} claims`, protocol: 'oidc' },
+  });
+  const catalogTemplate = await tx.catalogTemplate.create({
+    data: { tenantId, name: `${tag} template`, entry: { variables: [] } },
   });
 
   // ---- provision ------------------------------------------------------------------
@@ -650,6 +654,7 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
     appAssignment: appAssignment.id,
     claim: claim.id,
     claimSet: claimSet.id,
+    catalogTemplate: catalogTemplate.id,
     target: target.id,
     provisionRun: provisionRun.id,
     provisionAction: provisionAction.id,

@@ -776,6 +776,68 @@
         }
       }
     },
+    "/api/admin/applications/{id}/catalog-draft": {
+      "get": {
+        "operationId": "getApplicationsByIdCatalogDraft",
+        "tags": [
+          "Applications"
+        ],
+        "summary": "A catalog entry pre-filled from an application",
+        "description": "Requires `access.read`.",
+        "x-syntra-permission": [
+          "access.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/applications/{id}/claims": {
       "get": {
         "operationId": "getApplicationsByIdClaims",
@@ -6259,7 +6321,7 @@
           "Applications"
         ],
         "summary": "List the application catalog",
-        "description": "The applications Syntra knows how to configure. Identical for every tenant.\n\nRequires `access.read`.",
+        "description": "The built-in entries (`source: builtin`), then the tenant's own (`source: tenant`, key `custom-<id>`).\n\nRequires `access.read`.",
         "x-syntra-permission": [
           "access.read"
         ],
@@ -6289,6 +6351,385 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/catalog/templates": {
+      "post": {
+        "operationId": "postCatalogTemplates",
+        "tags": [
+          "Applications"
+        ],
+        "summary": "Save a catalog entry",
+        "description": "In the shape of a built-in entry. Every `{{variable}}` used must be declared, and each URL must be valid with the examples filled in.\n\nRequires `access.manage`.",
+        "x-syntra-permission": [
+          "access.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "category": {
+                    "default": "other",
+                    "type": "string",
+                    "enum": [
+                      "collaboration",
+                      "productivity",
+                      "engineering",
+                      "itsm",
+                      "security",
+                      "other"
+                    ]
+                  },
+                  "description": {
+                    "default": "",
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "docsUrl": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "launchUrl": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "variables": {
+                    "default": [],
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "maxLength": 64,
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9_]*$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "example": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 256
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "label",
+                        "example"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "saml": {
+                    "type": "object",
+                    "properties": {
+                      "spEntityId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "acsUrls": {
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048
+                        }
+                      },
+                      "nameIdFormat": {
+                        "type": "string",
+                        "maxLength": 256
+                      },
+                      "nameIdClaim": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 128
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "sloUrl": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2048
+                      },
+                      "sloBinding": {
+                        "type": "string",
+                        "enum": [
+                          "HTTP-POST",
+                          "HTTP-Redirect"
+                        ]
+                      },
+                      "wantAuthnRequestsSigned": {
+                        "type": "boolean"
+                      },
+                      "claims": {
+                        "default": [],
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "claimName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "nameFormat": {
+                              "type": "string",
+                              "maxLength": 256
+                            },
+                            "sourceKind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "person",
+                                "contract",
+                                "attribute",
+                                "groups",
+                                "literal"
+                              ]
+                            },
+                            "sourceField": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "literalValue": {
+                              "type": "string",
+                              "maxLength": 1024
+                            },
+                            "releaseScope": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "multiValued": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "claimName",
+                            "sourceKind"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "spEntityId",
+                      "acsUrls",
+                      "nameIdFormat"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "oidc": {
+                    "type": "object",
+                    "properties": {
+                      "redirectUris": {
+                        "minItems": 1,
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048
+                        }
+                      },
+                      "postLogoutRedirectUris": {
+                        "maxItems": 16,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2048
+                        }
+                      },
+                      "scopes": {
+                        "default": [
+                          "openid",
+                          "profile",
+                          "email"
+                        ],
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 64
+                        }
+                      },
+                      "claims": {
+                        "default": [],
+                        "maxItems": 64,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "claimName": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128
+                            },
+                            "nameFormat": {
+                              "type": "string",
+                              "maxLength": 256
+                            },
+                            "sourceKind": {
+                              "type": "string",
+                              "enum": [
+                                "user",
+                                "person",
+                                "contract",
+                                "attribute",
+                                "groups",
+                                "literal"
+                              ]
+                            },
+                            "sourceField": {
+                              "type": "string",
+                              "maxLength": 128
+                            },
+                            "literalValue": {
+                              "type": "string",
+                              "maxLength": 1024
+                            },
+                            "releaseScope": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "multiValued": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "claimName",
+                            "sourceKind"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "redirectUris"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/catalog/templates/{id}": {
+      "delete": {
+        "operationId": "deleteCatalogTemplatesById",
+        "tags": [
+          "Applications"
+        ],
+        "summary": "Delete a catalog entry",
+        "description": "Applications made from it keep their configuration.\n\nRequires `access.manage`.",
+        "x-syntra-permission": [
+          "access.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

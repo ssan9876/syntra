@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isLaunchableUrl } from './launchable-url.js';
+import { isProtocolEndpoint } from './protocol.js';
 
 export { isLaunchableUrl };
 
@@ -184,3 +185,118 @@ export const catalogCreateResponse = z.object({
 
 export type CatalogCreateRequest = z.infer<typeof catalogCreateRequest>;
 export type CatalogCreateResponse = z.infer<typeof catalogCreateResponse>;
+
+const VARIABLE_PATTERN = /\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g;
+
+/** A string that may hold `{{variable}}` placeholders. */
+const templated = z.string().trim().min(1).max(2048);
+
+const catalogClaim = z
+  .object({
+    claimName: z.string().min(1).max(128),
+    nameFormat: z.string().max(256).optional(),
+    sourceKind: z.enum(['user', 'person', 'contract', 'attribute', 'groups', 'literal']),
+    sourceField: z.string().max(128).optional(),
+    literalValue: z.string().max(1024).optional(),
+    releaseScope: z.string().max(64).optional(),
+    multiValued: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * A tenant's own catalog entry, in the shape of a built-in one.
+ *
+ * Every `{{name}}` used must be declared in `variables` and every declared
+ * variable used. Each URL is checked with the variables' examples filled in,
+ * so an entry that could never render a valid address is refused at save.
+ */
+export const catalogTemplateRequest = z
+  .object({
+    name: z.string().trim().min(1).max(128),
+    category: z.enum(['collaboration', 'productivity', 'engineering', 'itsm', 'security', 'other']).default('other'),
+    description: z.string().trim().max(500).default(''),
+    docsUrl: z
+      .string()
+      .max(2048)
+      .refine(isLaunchableUrl, { message: 'Must be an http or https URL' })
+      .optional(),
+    launchUrl: templated.optional(),
+    variables: z
+      .array(
+        z
+          .object({
+            key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, 'Letters, digits and _; starting with a letter').max(64),
+            label: z.string().trim().min(1).max(120),
+            example: z.string().trim().min(1).max(256),
+          })
+          .strict(),
+      )
+      .max(10)
+      .default([]),
+    saml: z
+      .object({
+        spEntityId: templated,
+        acsUrls: z.array(templated).min(1).max(16),
+        nameIdFormat: z.string().max(256),
+        nameIdClaim: z.string().max(128).nullable().optional(),
+        sloUrl: templated.optional(),
+        sloBinding: z.enum(['HTTP-POST', 'HTTP-Redirect']).optional(),
+        wantAuthnRequestsSigned: z.boolean().optional(),
+        claims: z.array(catalogClaim).max(64).default([]),
+      })
+      .strict()
+      .optional(),
+    oidc: z
+      .object({
+        redirectUris: z.array(templated).min(1).max(16),
+        postLogoutRedirectUris: z.array(templated).max(16).optional(),
+        scopes: z.array(z.string().max(64)).max(32).default(['openid', 'profile', 'email']),
+        claims: z.array(catalogClaim).max(64).default([]),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    const declared = new Map(v.variables.map((variable) => [variable.key, variable.example]));
+    const used = new Set<string>();
+    const check = (value: string | undefined, path: (string | number)[], kind: 'launch' | 'endpoint' | 'text') => {
+      if (value === undefined) return;
+      let rendered = value;
+      for (const match of value.matchAll(VARIABLE_PATTERN)) {
+        const key = match[1]!;
+        used.add(key);
+        if (!declared.has(key)) {
+          ctx.addIssue({ code: 'custom', path, message: `{{${key}}} is not a declared variable` });
+          return;
+        }
+        rendered = rendered.replace(match[0], declared.get(key)!);
+      }
+      if (kind === 'launch' && !isLaunchableUrl(rendered)) {
+        ctx.addIssue({ code: 'custom', path, message: 'Must be an http or https URL' });
+      }
+      if (kind === 'endpoint' && !isProtocolEndpoint(rendered)) {
+        ctx.addIssue({ code: 'custom', path, message: 'Must be an http or https URL with no fragment' });
+      }
+    };
+    check(v.launchUrl, ['launchUrl'], 'launch');
+    if (v.saml) {
+      check(v.saml.spEntityId, ['saml', 'spEntityId'], 'text');
+      v.saml.acsUrls.forEach((url, i) => check(url, ['saml', 'acsUrls', i], 'endpoint'));
+      check(v.saml.sloUrl, ['saml', 'sloUrl'], 'endpoint');
+    }
+    if (v.oidc) {
+      v.oidc.redirectUris.forEach((url, i) => check(url, ['oidc', 'redirectUris', i], 'endpoint'));
+      v.oidc.postLogoutRedirectUris?.forEach((url, i) => check(url, ['oidc', 'postLogoutRedirectUris', i], 'endpoint'));
+    }
+    v.variables.forEach((variable, i) => {
+      if (!used.has(variable.key)) {
+        ctx.addIssue({ code: 'custom', path: ['variables', i, 'key'], message: `{{${variable.key}}} is not used` });
+      }
+    });
+    if (v.saml && v.oidc) {
+      ctx.addIssue({ code: 'custom', path: ['oidc'], message: 'An entry is SAML or OpenID Connect, not both' });
+    }
+  });
+export type CatalogTemplateRequest = z.input<typeof catalogTemplateRequest>;
+export type CatalogTemplateInput = z.output<typeof catalogTemplateRequest>;

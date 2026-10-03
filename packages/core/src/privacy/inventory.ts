@@ -966,6 +966,22 @@ const RAW = {
     erasure: 'retain',
     why: "Identifiers only: which relying party was told the session ended.",
   }),
+  CatalogTemplate: table('configuration', {
+    id: 'none',
+    tenantId: 'none',
+    name: 'none',
+    category: 'none',
+    description: 'none',
+    docsUrl: 'none',
+    entry: 'none',
+    createdById: 'identity',
+    createdAt: 'operational',
+    updatedAt: 'operational',
+  }, {
+    links: {user: ['createdById']},
+    erasure: 'retain',
+    why: "A tenant's own application template and who saved it. Configuration, not data about a person; the administrator reference is kept as evidence, like the audit event it mirrors.",
+  }),
   ClaimMappingSet: table('configuration', {
     id: 'none',
     tenantId: 'none',

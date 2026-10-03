@@ -208,6 +208,7 @@ model Tenant {
   apiTokens                 ApiToken[]
   logoutDeliveries          LogoutDelivery[]
   claimMappingSets          ClaimMappingSet[]
+  catalogTemplates          CatalogTemplate[]
   claimMappings             ClaimMapping[]
   upstreamIdps              UpstreamIdp[]
   upstreamLinks             UpstreamLink[]
@@ -1743,6 +1744,28 @@ model LogoutDelivery {
 /// template an administrator stamps out, and the stamped rows are then that
 /// application's own: editable, removable, and visible in one list beside the
 /// ones added by hand.
+/// A tenant's own catalog entry for Access → Applications, in the shape of a
+/// built-in one (`CatalogEntry` in packages/core/src/access/catalog). An
+/// application is made from it by COPY: editing or deleting the entry changes
+/// no application. RLS in migration `20261117000000_catalog_templates`.
+model CatalogTemplate {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  category    String   @default("other")
+  description String   @default("")
+  docsUrl     String?
+  /// launchUrl, variables, saml and oidc, as `CatalogEntry` holds them.
+  entry       Json
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
 model ClaimMappingSet {
   id          String  @id @default(uuid()) @db.Uuid
   tenantId    String  @db.Uuid
