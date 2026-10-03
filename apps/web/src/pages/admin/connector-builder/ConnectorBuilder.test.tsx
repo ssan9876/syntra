@@ -82,4 +82,16 @@ describe('ConnectorBuilder', () => {
     await userEvent.click(screen.getByLabelText('This application has groups, roles or licences'));
     expect(latest.entitlement).toBeUndefined();
   });
+  it('edits the accounts to skip', async () => {
+    render(<Harness initial={{ ...blankDocument(), account: { list: { path: '/users' }, anchorAt: 'id', exclude: [{ at: 'is_bot', equals: 'true' }] } }} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Add skip rule' }));
+    const fields = screen.getAllByLabelText('Field');
+    await userEvent.type(fields[fields.length - 1]!, 'role');
+    const equals = screen.getAllByLabelText('Equals');
+    await userEvent.type(equals[equals.length - 1]!, 'system');
+    expect((latest.account as { exclude: unknown }).exclude).toEqual([
+      { at: 'is_bot', equals: 'true' },
+      { at: 'role', equals: 'system' },
+    ]);
+  });
 });

@@ -285,6 +285,47 @@ function JsonAt({ path, label }: { path: string; label: string }) {
   );
 }
 
+/** Accounts left out of every read: bots, service users. */
+function ExcludeAt({ path }: { path: string }) {
+  const { doc, update, errors } = useBuilder();
+  const raw = getAt(doc, path);
+  const rules = (Array.isArray(raw) ? raw : []) as { at?: string; equals?: string }[];
+  const write = (next: { at?: string; equals?: string }[]) => update(setAt(doc, path, next.length === 0 ? undefined : next));
+  return (
+    <div className="space-y-2">
+      <span className="font-medium text-ink">Skip accounts where</span>
+      {rules.map((rule, index) => (
+        <div key={index} className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+          <Field
+            label="Field"
+            value={rule.at ?? ''}
+            placeholder="is_bot"
+            spellCheck={false}
+            autoComplete="off"
+            error={errors[`${path}.${index}.at`]}
+            onChange={(at) => write(rules.map((r, i) => (i === index ? { ...r, at } : r)))}
+          />
+          <Field
+            label="Equals"
+            value={rule.equals ?? ''}
+            placeholder="true"
+            spellCheck={false}
+            autoComplete="off"
+            error={errors[`${path}.${index}.equals`]}
+            onChange={(equals) => write(rules.map((r, i) => (i === index ? { ...r, equals } : r)))}
+          />
+          <Button type="button" size="sm" variant="ghost" onClick={() => write(rules.filter((_, i) => i !== index))}>
+            Remove
+          </Button>
+        </div>
+      ))}
+      <Button type="button" size="sm" variant="secondary" disabled={rules.length >= 20} onClick={() => write([...rules, { at: '', equals: '' }])}>
+        Add skip rule
+      </Button>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 
@@ -601,6 +642,7 @@ function AccountsReadSection() {
         <TextAt path="account.enabledWhen.at" label="Enabled when field" placeholder="status" mono />
         <TextAt path="account.enabledWhen.equals" label="Equals" placeholder="active" mono />
       </Grid>
+      <ExcludeAt path="account.exclude" />
       <Optional path="account.read" label="Read one account by id" initial={{ path: '/users/{{anchor}}' }}>
         <Grid>
           <TextAt path="account.read.path" label="Path" placeholder="/users/{{anchor}}" mono />
