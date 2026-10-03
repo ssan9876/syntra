@@ -4,6 +4,7 @@ import { Alert, Button, Empty, Panel, Select, SkeletonRows } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
 import { PickerNote } from './PickerNote.js';
+import { SaveAsCatalogEntry } from './SaveAsCatalogEntry.js';
 import { PageHeader } from './PageHeader.js';
 import { ApplicationSso } from './ApplicationSso.js';
 import { AppLogoPicker } from './AppLogoPicker.js';
@@ -65,6 +66,7 @@ export function ApplicationDetailPage() {
   }>('/api/admin/applications');
   const application = applicationsData?.applications?.find((row) => row.id === id) ?? null;
   const [savedIcon, setSavedIcon] = useState<ApplicationIconView | undefined>(undefined);
+  const [savingToCatalog, setSavingToCatalog] = useState(false);
 
   const users: Named[] = (usersData?.users ?? []).map((row) => ({
     id: row.id,
@@ -156,7 +158,22 @@ export function ApplicationDetailPage() {
 
   return (
     <>
-      <PageHeader title={application?.name ?? 'Application'} />
+      <PageHeader
+        title={application?.name ?? 'Application'}
+        actions={
+          application && id && !savingToCatalog ? (
+            <Button variant="secondary" size="sm" onClick={() => setSavingToCatalog(true)}>
+              Save as catalog entry
+            </Button>
+          ) : undefined
+        }
+      />
+
+      {savingToCatalog && id && (
+        <div className="mb-6">
+          <SaveAsCatalogEntry applicationId={id} onDone={() => setSavingToCatalog(false)} />
+        </div>
+      )}
 
       {application && id && (
         <div className="mb-6">

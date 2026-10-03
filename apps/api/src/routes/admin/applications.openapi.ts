@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { applicationIconRequest, applicationIconView, assignApplicationRequest, assignmentParams, catalogCreateRequest, catalogCreateResponse, createApplicationRequest, deleteApplicationRequest, deleteApplicationResponse, idParam, updateApplicationRequest } from '@syntra/contracts';
+import { applicationIconRequest, applicationIconView, assignApplicationRequest, assignmentParams, catalogCreateRequest, catalogCreateResponse, catalogTemplateRequest, createApplicationRequest, deleteApplicationRequest, deleteApplicationResponse, idParam, updateApplicationRequest } from '@syntra/contracts';
 import { describeAdminRoutes } from '../../openapi/describe.js';
 
 /** The OpenAPI description of the routes in `applications.ts`. See openapi/describe.ts. */
@@ -11,7 +11,23 @@ export const applicationsOpenApi = describeAdminRoutes('Applications', {
   },
   'GET /catalog': {
     summary: 'List the application catalog',
-    description: 'The applications Syntra knows how to configure. Identical for every tenant.',
+    description: 'The built-in entries (`source: builtin`), then the tenant\'s own (`source: tenant`, key `custom-<id>`).',
+  },
+  'POST /catalog/templates': {
+    summary: 'Save a catalog entry',
+    description: 'In the shape of a built-in entry. Every `{{variable}}` used must be declared, and each URL must be valid with the examples filled in.',
+    body: catalogTemplateRequest,
+    status: 201,
+  },
+  'DELETE /catalog/templates/:id': {
+    summary: 'Delete a catalog entry',
+    description: 'Applications made from it keep their configuration.',
+    params: idParam,
+    status: 204,
+  },
+  'GET /applications/:id/catalog-draft': {
+    summary: 'A catalog entry pre-filled from an application',
+    params: idParam,
   },
   'POST /applications/from-catalog': {
     summary: 'Create an application from a catalog entry',

@@ -138,6 +138,7 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
   ['assignments/:assignmentId', 'appAssignment'],
   ['claims/:claimId', 'claim'],
   ['claim-sets/:id', 'claimSet'],
+  ['templates/:id', 'catalogTemplate'],
   ['policy/rules/:ruleId', 'policyRule'],
   // ---- provision -----------------------------------------------------------------
   ['targets/:id', 'target'],
@@ -251,6 +252,7 @@ export const ABSENT_IS_EMPTY: ReadonlyMap<string, string> = new Map<string, stri
   ['DELETE /api/admin/applications/:id/claims/:claimId', IDEMPOTENT],
   ['DELETE /api/admin/policy/rules/:ruleId', IDEMPOTENT],
   ['DELETE /api/admin/claim-sets/:id', IDEMPOTENT],
+  ['DELETE /api/admin/catalog/templates/:id', IDEMPOTENT],
   ['DELETE /api/admin/targets/:id/placements/:personId', IDEMPOTENT],
 ]);
 
@@ -306,6 +308,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/identity-reference-values', 'Adds a department or location name.'],
   ['POST /api/admin/person-sources', 'Creates an HR source from a connection description.'],
   ['POST /api/admin/applications/from-catalog', 'Installs a catalog template by its product-wide key.'],
+  ['POST /api/admin/catalog/templates', 'Saves a catalog entry from its own settings; references no saved object.'],
   ['POST /api/admin/applications', 'Creates an application from a name, slug and launch details.'],
   ['POST /api/admin/govern/snapshots', 'Builds a snapshot of the calling tenant; takes only a kind.'],
   ['POST /api/admin/automate/sweeps', 'Previews an expiry sweep of the calling tenant; takes no body.'],

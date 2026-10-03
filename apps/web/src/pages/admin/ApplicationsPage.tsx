@@ -33,6 +33,8 @@ interface CatalogEntry {
   variables: { key: string; label: string; example: string }[];
   saml?: unknown;
   oidc?: unknown;
+  /** `tenant` for an entry saved from one of this tenant's applications. */
+  source?: 'builtin' | 'tenant';
 }
 
 interface Row {
@@ -65,7 +67,7 @@ function CatalogPicker({
   onCancel(): void;
   onCreated(): void;
 }) {
-  const { data, error } = useApiResource<{ entries: CatalogEntry[] }>(
+  const { data, error, reload } = useApiResource<{ entries: CatalogEntry[] }>(
     '/api/admin/catalog',
   );
   const [chosen, setChosen] = useState<CatalogEntry | null>(null);
@@ -222,26 +224,58 @@ function CatalogPicker({
     >
       <div className="p-4">
         {error && <Alert tone="danger">{error}</Alert>}
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {entries.map((entry) => (
-            <button
-              key={entry.key}
-              type="button"
-              onClick={() => {
-                setChosen(entry);
-                setValues({});
-                setProblem(null);
-              }}
-              className="rounded-panel border border-border-control p-3 text-left transition-colors duration-150 ease-out hover:border-primary hover:bg-surface-2"
-            >
-              <span className="block font-medium text-ink">{entry.name}</span>
-              <span className="mt-0.5 block text-sm text-muted">{entry.description}</span>
-              <span className="mt-2 inline-block">
-                <Status tone="neutral">{entry.saml ? 'SAML' : 'OpenID Connect'}</Status>
-              </span>
-            </button>
+        {problem && !chosen && <Alert tone="danger">{problem}</Alert>}
+        {[
+          { title: 'Your entries', list: entries.filter((e) => e.source === 'tenant') },
+          { title: 'Built in', list: entries.filter((e) => e.source !== 'tenant') },
+        ]
+          .filter((group) => group.list.length > 0)
+          .map((group) => (
+            <section key={group.title} className="mb-4">
+              <h3 className="mb-2 text-sm font-medium text-muted">{group.title}</h3>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {group.list.map((entry) => (
+                  <div key={entry.key} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChosen(entry);
+                        setValues({});
+                        setProblem(null);
+                      }}
+                      className="h-full w-full rounded-panel border border-border-control p-3 text-left transition-colors duration-150 ease-out hover:border-primary hover:bg-surface-2"
+                    >
+                      <span className="block font-medium text-ink">{entry.name}</span>
+                      <span className="mt-0.5 block text-sm text-muted">{entry.description}</span>
+                      <span className="mt-2 inline-block">
+                        <Status tone="neutral">{entry.saml ? 'SAML' : entry.oidc ? 'OpenID Connect' : 'Link'}</Status>
+                      </span>
+                    </button>
+                    {entry.source === 'tenant' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="absolute right-2 top-2"
+                        aria-label={`Delete ${entry.name}`}
+                        onClick={() => {
+                          setProblem(null);
+                          api(`/api/admin/catalog/templates/${entry.key.slice('custom-'.length)}`, { method: 'DELETE' })
+                            .then(() => {
+                              toast({ tone: 'success', title: `${entry.name} removed from the catalog` });
+                              reload();
+                            })
+                            .catch(() => setProblem(`${entry.name} was not removed.`));
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
           ))}
-        </div>
       </div>
     </Panel>
   );

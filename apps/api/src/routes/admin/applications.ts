@@ -5,6 +5,7 @@ import {
   assignmentParams,
   catalogCreateRequest,
   catalogCreateResponse,
+  catalogTemplateRequest,
   createApplicationRequest,
   deleteApplicationRequest,
   deleteApplicationResponse,
@@ -13,21 +14,26 @@ import {
 } from '@syntra/contracts';
 import {
   ApplicationIconRefusedError,
+  CatalogTemplateNameTakenError,
   CatalogVariableMissingError,
   EntityIdTakenError,
   PERMISSIONS,
   STEP_UP_MAX_AGE_MS,
   UnknownCatalogEntryError,
   assignApplication,
-  catalogEntry,
+  catalogDraftFromApplication,
+  createApplicationFromDefinition,
+  createCatalogTemplate,
+  deleteCatalogTemplate,
+  renderEntry,
+  resolveCatalogEntry,
   createApplication,
-  createFromCatalog,
   deleteApplication,
   ensureActiveKey,
   findApplication,
   isRecentElevation,
   type MasterKeyProvider,
-  listCatalog,
+  listCatalogWithTemplates,
   listApplications,
   listAssignments,
   recordEvent,
@@ -100,7 +106,7 @@ export async function registerAdminApplicationRoutes(
   app.get(
     '/catalog',
     { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) },
-    async () => ({ entries: listCatalog() }),
+    async (request) => ({ entries: await request.db((tx) => listCatalogWithTemplates(tx)) }),
   );
 
   app.post(
@@ -130,9 +136,9 @@ export async function registerAdminApplicationRoutes(
       // that maps its errors. Left unmapped, an unknown key threw out of the
       // route as a 500 — the 404 the service raises by name never reached the
       // handler that turns it into one.
-      const entry = (() => {
+      const entry = await request.db(async (tx) => {
         try {
-          return catalogEntry(body.key);
+          return await resolveCatalogEntry(tx, body.key);
         } catch (cause) {
           if (cause instanceof UnknownCatalogEntryError) {
             throw new ProblemError(
@@ -144,7 +150,7 @@ export async function registerAdminApplicationRoutes(
           }
           throw cause;
         }
-      })();
+      });
 
       if (entry.saml) {
         const tenant = await request.db((tx) =>
@@ -160,7 +166,7 @@ export async function registerAdminApplicationRoutes(
       }
 
       const created = await request
-        .db((tx) => createFromCatalog(tx, body))
+        .db((tx) => createApplicationFromDefinition(tx, renderEntry(entry, body.variables, body.name)))
         .catch((cause: unknown) => {
           // Three named refusals, each of which the form can act on. Anything
           // else is a fault and goes up to the problem-json handler as a 500 —
@@ -200,6 +206,73 @@ export async function registerAdminApplicationRoutes(
       );
 
       return reply.status(201).send(catalogCreateResponse.parse(created));
+    },
+  );
+
+  /** Saves a tenant's own catalog entry. */
+  app.post(
+    '/catalog/templates',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) },
+    async (request, reply) => {
+      const body = catalogTemplateRequest.parse(request.body);
+      const entry = await request
+        .db(async (tx) => {
+          const created = await createCatalogTemplate(tx, body as never, request.session.userId);
+          await recordEvent(tx, {
+            actorUserId: request.session.userId,
+            action: 'access.catalog_template_created',
+            targetType: 'CatalogTemplate',
+            targetId: created.key.slice('custom-'.length),
+            outcome: 'success',
+            sourceIp: request.ip,
+            payload: { name: created.name, protocol: created.saml ? 'saml' : created.oidc ? 'oidc' : 'bookmark' },
+          });
+          return created;
+        })
+        .catch((cause: unknown) => {
+          if (cause instanceof CatalogTemplateNameTakenError) {
+            throw new ProblemError(409, 'conflict', 'Name in use', undefined, {
+              errors: [{ path: 'name', message: cause.message }],
+            });
+          }
+          throw cause;
+        });
+      return reply.status(201).send({ ...entry, source: 'tenant' });
+    },
+  );
+
+  /** Applications made from the entry keep their configuration. */
+  app.delete(
+    '/catalog/templates/:id',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      await request.db(async (tx) => {
+        const row = await tx.catalogTemplate.findUnique({ where: { id }, select: { name: true } });
+        if ((await deleteCatalogTemplate(tx, id)) === 0) return;
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'access.catalog_template_deleted',
+          targetType: 'CatalogTemplate',
+          targetId: id,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: { name: row?.name ?? null },
+        });
+      });
+      return reply.status(204).send();
+    },
+  );
+
+  /** A catalog entry pre-filled from this application, for "Save as catalog entry". */
+  app.get(
+    '/applications/:id/catalog-draft',
+    { preHandler: requirePermission(PERMISSIONS.ACCESS_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const draft = await request.db((tx) => catalogDraftFromApplication(tx, id));
+      if (!draft) throw new ProblemError(404, 'not-found', 'No such application');
+      return draft;
     },
   );
 

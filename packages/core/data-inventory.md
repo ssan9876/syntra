@@ -53,6 +53,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `CampaignDecision` | person: `personId` | retain | Append-only at the database: a review decision is access-governance evidence. |
 | `CampaignItem` | person: `personId` | retain | Access-review evidence. |
 | `CampaignItemReviewer` | person: `personId` | retain | Access-review evidence. |
+| `CatalogTemplate` | user: `createdById` | retain | A tenant's own application template and who saved it. Configuration, not data about a person; the administrator reference is kept as evidence, like the audit event it mirrors. |
 | `Contract` | person: `personId` | pseudonymize | Employment details are cleared. Dates, sequence and the HR employment id are kept: lifecycle decisions (departure, grace periods) are computed from the dates, and the id stops a feed from re-creating the contract. |
 | `CoverageGap` | person: `personId` | retain | Snapshot evidence; removed with the snapshot. |
 | `CredentialPickup` | account: `targetAccountId` | delete | Credential material: the right to read an account's initial password once. No recipient address is stored -- only which kind of recipient (the person's personal email, their manager, or an administrator) the one-time link was sent to. |
@@ -2222,6 +2223,18 @@ No personal data. Columns: `id`, `tenantId`, `functionId`, `systemId`, `resource
 #### `BusinessRule`
 
 No personal data. Columns: `id`, `tenantId`, `targetSystemId`, `name`, `description`, `condition`, `grantsAccount`, `enabled`, `createdAt`, `updatedAt`.
+
+#### `CatalogTemplate`
+
+Linked to a data subject by user: `createdById`. Erasure: **retain** -- A tenant's own application template and who saved it. Configuration, not data about a person; the administrator reference is kept as evidence, like the audit event it mirrors.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `createdById` | identity | retained |  |
+| `createdAt` | operational | retained |  |
+| `updatedAt` | operational | retained |  |
+
+Not personal data: `id`, `tenantId`, `name`, `category`, `description`, `docsUrl`, `entry`.
 
 #### `ClaimMapping`
 
