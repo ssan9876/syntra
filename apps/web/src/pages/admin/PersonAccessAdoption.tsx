@@ -36,7 +36,12 @@ export function Adoption({
 
   // Read when the dialog opens, never on page load: it is a live call to the
   // directory, for a control most visits never touch.
-  const candidate = useApiResource<{ anchor: string; dn: string }>(
+  const candidate = useApiResource<{
+    anchor: string;
+    dn: string;
+    correlationKey?: string;
+    matchedBy?: 'name' | 'email';
+  }>(
     open ? `${base}/adoption-candidate` : null,
   );
   // The object is not there. WHICH of the two reasons it is not there is the
@@ -95,6 +100,12 @@ export function Adoption({
           {candidate.data && (
             <>
               <div className="font-mono text-sm text-ink">{candidate.data.dn}</div>
+              {candidate.data.matchedBy === 'email' && (
+                <Alert tone="info">
+                  Found by business email, as {candidate.data.correlationKey}. Nothing is named{' '}
+                  {correlationKey}.
+                </Alert>
+              )}
               <Alert tone="warning">
                 Syntra manages this account from now on, including disabling it at leave.
               </Alert>

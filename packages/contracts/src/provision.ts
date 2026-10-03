@@ -499,6 +499,10 @@ export const adoptionCandidateResponse = z.object({
   anchor: z.string(),
   dn: z.string(),
   attributes: z.record(z.string(), z.array(z.string())),
+  /** The account's own name at the target. */
+  correlationKey: z.string(),
+  /** `email` when found by the person's business email rather than by name. */
+  matchedBy: z.enum(['name', 'email']),
 });
 
 export type AdoptAccountRequest = z.input<typeof adoptAccountRequest>;
