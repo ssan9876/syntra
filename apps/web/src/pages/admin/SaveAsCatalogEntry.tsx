@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Alert, Button, ErrorSummary, Field, FormActions, Panel, Select, SkeletonRows, Textarea, useToast } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { useApiResource } from './hooks.js';
@@ -54,33 +54,7 @@ export function variablesIn(values: string[]): string[] {
  * the next one. `{{name}}` in a value becomes a field to fill in.
  */
 export function SaveAsCatalogEntry({ applicationId, onDone }: { applicationId: string; onDone(): void }) {
-  const toast = useToast();
   const { data, error } = useApiResource<Draft>(`/api/admin/applications/${applicationId}/catalog-draft`);
-
-  const [name, setName] = useState('');
-  const [category, setCategory] = useState('other');
-  const [description, setDescription] = useState('');
-  const [docsUrl, setDocsUrl] = useState('');
-  const [launchUrl, setLaunchUrl] = useState('');
-  const [entityId, setEntityId] = useState('');
-  const [acsUrls, setAcsUrls] = useState('');
-  const [redirectUris, setRedirectUris] = useState('');
-  const [variables, setVariables] = useState<Record<string, { label: string; example: string }>>({});
-
-  const [busy, setBusy] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [problem, setProblem] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!data) return;
-    setName(data.name);
-    setDescription(data.description);
-    setLaunchUrl(data.launchUrl ?? '');
-    setEntityId(data.saml?.spEntityId ?? '');
-    setAcsUrls((data.saml?.acsUrls ?? []).join('\n'));
-    setRedirectUris((data.oidc?.redirectUris ?? []).join('\n'));
-  }, [data]);
-
   if (error) return <Alert tone="danger">{error}</Alert>;
   if (!data) {
     return (
@@ -89,11 +63,30 @@ export function SaveAsCatalogEntry({ applicationId, onDone }: { applicationId: s
       </Panel>
     );
   }
+  // The form starts from the draft's values, so nothing fills them in after
+  // the reader has started typing.
+  return <EntryForm data={data} onDone={onDone} />;
+}
+
+function EntryForm({ data, onDone }: { data: Draft; onDone(): void }) {
+  const toast = useToast();
+  const [name, setName] = useState(data.name);
+  const [category, setCategory] = useState('other');
+  const [description, setDescription] = useState(data.description);
+  const [docsUrl, setDocsUrl] = useState('');
+  const [launchUrl, setLaunchUrl] = useState(data.launchUrl ?? '');
+  const [entityId, setEntityId] = useState(data.saml?.spEntityId ?? '');
+  const [acsUrls, setAcsUrls] = useState((data.saml?.acsUrls ?? []).join('\n'));
+  const [redirectUris, setRedirectUris] = useState((data.oidc?.redirectUris ?? []).join('\n'));
+  const [variables, setVariables] = useState<Record<string, { label: string; example: string }>>({});
+
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [problem, setProblem] = useState<string | null>(null);
 
   const used = variablesIn([launchUrl, entityId, acsUrls, redirectUris]);
 
   async function save() {
-    if (!data) return;
     setErrors({});
     setProblem(null);
     setBusy(true);
