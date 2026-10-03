@@ -199,23 +199,55 @@ async function findCandidate(
   businessEmail: string | null,
   override: TargetConnector<never> | undefined,
 ): Promise<Candidate | null> {
+  const records = await readTarget(tenantId, provider, targetSystemId, type, override);
+  return matchCandidate(records, correlationKey, businessEmail);
+}
+
+type ObservedRecord = Omit<Candidate, 'matchedBy'>;
+
+/** Every account at the target, each with its own correlation key. */
+async function readTarget(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  targetSystemId: string,
+  type: string,
+  override: TargetConnector<never> | undefined,
+): Promise<ObservedRecord[]> {
   const config = await withTenant(tenantId, (tx) =>
     targetWithCredential(tx, provider, targetSystemId),
   );
   if (!config) throw new Error(`Target ${targetSystemId} has no configuration or credential.`);
   const connector = (override ??
     targetConnectorFor(type)) as unknown as TargetConnector<unknown>;
+  const records: ObservedRecord[] = [];
+  for await (const record of connector.read(config as never)) {
+    records.push({
+      anchor: record.anchor,
+      dn: record.dn,
+      attributes: record.attributes,
+      correlationKey: observedCorrelationKey(type, config, record).trim(),
+    });
+  }
+  return records;
+}
 
+function matchCandidate(
+  records: ObservedRecord[],
+  correlationKey: string,
+  businessEmail: string | null,
+): Candidate | null {
   const wanted = correlationKey.trim().toLowerCase();
   const email = businessEmail?.trim().toLowerCase() || null;
   const byEmail: Candidate[] = [];
-  for await (const record of connector.read(config as never)) {
-    const key = observedCorrelationKey(type, config, record).trim();
-    const candidate = { anchor: record.anchor, dn: record.dn, attributes: record.attributes, correlationKey: key };
-    if (key.toLowerCase() === wanted) return { ...candidate, matchedBy: 'name' };
+  for (const record of records) {
+    if (record.correlationKey.toLowerCase() === wanted) return { ...record, matchedBy: 'name' };
     const emails = EMAIL_ATTRIBUTES.flatMap((name) => record.attributes[name] ?? []);
-    if (email !== null && key !== '' && emails.some((value) => value.trim().toLowerCase() === email)) {
-      byEmail.push({ ...candidate, matchedBy: 'email' });
+    if (
+      email !== null &&
+      record.correlationKey !== '' &&
+      emails.some((value) => value.trim().toLowerCase() === email)
+    ) {
+      byEmail.push({ ...record, matchedBy: 'email' });
     }
   }
   // A create refused because the EMAIL is taken (Mattermost, most REST
@@ -313,6 +345,17 @@ export async function adoptAccount(
     return { adopted: false, anchor: null, dn: null };
   }
 
+  await bindCandidate(tenantId, account, candidate, input);
+  return { adopted: true, anchor: candidate.anchor, dn: candidate.dn };
+}
+
+/** Binds the row to the object, with the audit event, in one transaction. */
+async function bindCandidate(
+  tenantId: string,
+  account: { id: string; correlationKey: string },
+  candidate: Candidate,
+  input: { targetSystemId: string; reason: string; actorUserId: string | null; sourceIp: string | null },
+): Promise<void> {
   await withTenant(tenantId, async (tx) => {
     const held = await tx.targetAccount.findFirst({
       where: { targetSystemId: input.targetSystemId, anchor: candidate.anchor },
@@ -368,6 +411,134 @@ export async function adoptAccount(
       },
     });
   });
+}
 
-  return { adopted: true, anchor: candidate.anchor, dn: candidate.dn };
+/** One account in conflict on a target, with the object it would adopt. */
+export interface ConflictAdoption {
+  personId: string;
+  givenName: string;
+  familyName: string;
+  businessEmail: string | null;
+  /** The name Syntra reserved and the target refused. */
+  correlationKey: string;
+  /** Null when no object carries the name and no one object has the email. */
+  candidate: Candidate | null;
+}
+
+/** Every conflicted account on the target and the object each would adopt. */
+async function conflictAdoptions(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  targetSystemId: string,
+  override: TargetConnector<never> | undefined,
+): Promise<{ id: string; adoption: ConflictAdoption }[]> {
+  const { target, accounts } = await withTenant(tenantId, async (tx) => ({
+    target: await tx.targetSystem.findUniqueOrThrow({
+      where: { id: targetSystemId },
+      select: { type: true },
+    }),
+    accounts: await tx.targetAccount.findMany({
+      where: { targetSystemId, status: 'conflict' },
+      select: {
+        id: true,
+        correlationKey: true,
+        person: {
+          select: { id: true, givenName: true, familyName: true, businessEmail: true },
+        },
+      },
+      orderBy: { correlationKey: 'asc' },
+    }),
+  }));
+  if (accounts.length === 0) return [];
+  // One read of the target for all of them, not one per person.
+  const records = await readTarget(tenantId, provider, targetSystemId, target.type, override);
+  return accounts.map((account) => ({
+    id: account.id,
+    adoption: {
+      personId: account.person.id,
+      givenName: account.person.givenName,
+      familyName: account.person.familyName,
+      businessEmail: account.person.businessEmail,
+      correlationKey: account.correlationKey,
+      candidate: matchCandidate(records, account.correlationKey, account.person.businessEmail),
+    },
+  }));
+}
+
+/**
+ * Every conflicted account on the target, for the administrator to look at
+ * before adopting them together. The same lookup as `adoptionCandidate`.
+ */
+export async function conflictAdoptionPreview(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  targetSystemId: string,
+  connector?: TargetConnector<never>,
+): Promise<ConflictAdoption[]> {
+  const rows = await conflictAdoptions(tenantId, provider, targetSystemId, connector);
+  return rows.map((row) => row.adoption);
+}
+
+export interface AdoptConflictsInput {
+  targetSystemId: string;
+  /**
+   * The person and the object the administrator saw in the preview. A person
+   * whose candidate is now a different object is not adopted.
+   */
+  adoptions: { personId: string; anchor: string }[];
+  reason: string;
+  actorUserId: string | null;
+  sourceIp: string | null;
+  connector?: TargetConnector<never>;
+}
+
+export interface AdoptConflictResult {
+  personId: string;
+  adopted: boolean;
+  anchor: string | null;
+  /** Why it was not adopted. Null when it was. */
+  message: string | null;
+}
+
+/**
+ * Adopts the conflicted accounts the administrator confirmed from
+ * `conflictAdoptionPreview`, each in its own transaction with its own audit
+ * event. One refusal does not stop the rest.
+ */
+export async function adoptConflicts(
+  tenantId: string,
+  provider: MasterKeyProvider,
+  input: AdoptConflictsInput,
+): Promise<AdoptConflictResult[]> {
+  const rows = await conflictAdoptions(tenantId, provider, input.targetSystemId, input.connector);
+  const byPerson = new Map(rows.map((row) => [row.adoption.personId, row]));
+  const results: AdoptConflictResult[] = [];
+  for (const { personId, anchor } of input.adoptions) {
+    const row = byPerson.get(personId);
+    const refuse = (message: string) => results.push({ personId, adopted: false, anchor: null, message });
+    if (row === undefined) {
+      refuse('Account is no longer in conflict.');
+      continue;
+    }
+    const { candidate, correlationKey } = row.adoption;
+    if (candidate === null) {
+      refuse(`No account at the target has the name ${correlationKey} or the email ${row.adoption.businessEmail ?? '(none)'}.`);
+      continue;
+    }
+    if (candidate.anchor !== anchor) {
+      refuse(`Account ${correlationKey} now matches a different object at the target. Preview again.`);
+      continue;
+    }
+    try {
+      await bindCandidate(tenantId, { id: row.id, correlationKey }, candidate, input);
+      results.push({ personId, adopted: true, anchor: candidate.anchor, message: null });
+    } catch (cause) {
+      if (cause instanceof AnchorAlreadyBoundError || cause instanceof CorrelationKeyTakenError) {
+        refuse(cause.message);
+        continue;
+      }
+      throw cause;
+    }
+  }
+  return results;
 }

@@ -281,6 +281,25 @@ async function runWrite(
   return { ok: true, message: what, ...(anchor === undefined ? {} : { anchor }) };
 }
 
+/** Whether `attributes` carries a non-empty value for `name`. */
+function hasValue(attributes: Record<string, string[]> | undefined, name: string): boolean {
+  if (attributes === undefined || !Object.hasOwn(attributes, name)) return false;
+  return (attributes[name] ?? []).some((value) => value.trim() !== '');
+}
+
+/** An account's follow-up writes, in order, stopping at the first that fails. */
+async function runFollowUps(
+  config: Resolved,
+  specs: (WriteSpec & { when: string })[],
+  vars: TemplateVars,
+): Promise<WriteResult> {
+  for (const [index, spec] of specs.entries()) {
+    const result = await runWrite(config, spec, vars, `run follow-up ${index + 1} (${spec.when})`);
+    if (!result.ok) return { ...result, message: `follow-up ${spec.method} ${spec.path} failed: ${result.message}` };
+  }
+  return { ok: true, message: 'follow-ups' };
+}
+
 /**
  * A target connector driven entirely by a JSON document.
  *
@@ -518,10 +537,21 @@ export const httpTargetConnector: TargetConnector<Config> & {
         // after, and again on an adopting retry: the first attempt may have
         // created the account and never got as far as disabling it.
         const settle = async (created: WriteResult): Promise<WriteResult> => {
-          if (!created.ok || !followWithDisable) return created;
+          if (!created.ok) return created;
+          const followUps = account.followUps.filter((spec) => hasValue(op.attributes, spec.when));
+          if (!followWithDisable && followUps.length === 0) return created;
           if (created.anchor === undefined) {
-            return { ok: false, message: `Created ${op.correlationKey}, but the target returned no id to disable it by.`, failure: 'rejected' };
+            return { ok: false, message: `Created ${op.correlationKey}, but the target returned no id to write to.`, failure: 'rejected' };
           }
+          const followed = await runFollowUps(config, followUps, {
+            actionId: op.actionId,
+            anchor: created.anchor,
+            attributes: op.attributes,
+          });
+          if (!followed.ok) {
+            return { ...followed, message: `Created ${op.correlationKey}, but ${followed.message}` };
+          }
+          if (!followWithDisable) return created;
           const disabled = await runWrite(
             config,
             account.disable,
@@ -565,13 +595,17 @@ export const httpTargetConnector: TargetConnector<Config> & {
         );
       }
 
-      case 'update_account':
-        return runWrite(
+      case 'update_account': {
+        const vars = { actionId: op.actionId, anchor: op.anchor, attributes: op.attributes };
+        const updated = await runWrite(config, account.update, vars, 'update an account');
+        if (!updated.ok) return updated;
+        const followed = await runFollowUps(
           config,
-          account.update,
-          { actionId: op.actionId, anchor: op.anchor, attributes: op.attributes },
-          'update an account',
+          account.followUps.filter((spec) => hasValue(op.attributes, spec.when)),
+          vars,
         );
+        return followed.ok ? updated : { ...followed, message: `Updated the account, but ${followed.message}` };
+      }
 
       case 'enable_account':
         return runWrite(

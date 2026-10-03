@@ -288,6 +288,17 @@ const accountResource = z.object({
   disable: writeSpec(accountMethod).optional(),
   archive: writeSpec(accountMethod).optional(),
   rename: writeSpec(accountMethod).optional(),
+  /**
+   * Further writes after a create or an update, each made only when the
+   * account's attributes carry a value for `when`. For what a target changes
+   * on an endpoint of its own: Mattermost's sign-in method is
+   * `PUT /users/{id}/auth`, which `patch` ignores. Each must be safe to
+   * repeat, because every update makes it again.
+   */
+  followUps: z
+    .array(writeSpec(accountMethod).extend({ when: trimmed }))
+    .max(5)
+    .default([]),
 });
 
 const entitlementResource = z.object({

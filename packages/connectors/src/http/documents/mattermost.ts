@@ -35,6 +35,12 @@ import type { HttpConnectorDocument } from '../document.js';
  * revoking removes the membership and leaves the user and their posts alone.
  * Channels are not modelled.
  *
+ * **Sign-in method is `PUT /users/{id}/auth`.** `patch` ignores
+ * `auth_service`, so a follow-up switches the user whenever the account
+ * profile maps `authService` (`saml`) and `authData` (what Mattermost's SAML
+ * login matches: the Id attribute, or the email when none is set). Repeating
+ * it changes nothing. Without the mapping, users keep the sign-in they have.
+ *
  * **There is no archive and no delete.** `DELETE /users/{id}` in Mattermost
  * deactivates; a permanent delete needs server settings Syntra does not ask
  * for.
@@ -70,6 +76,7 @@ export const mattermostDocument: HttpConnectorDocument = {
       last_name: 'familyName',
       email: 'mail',
       position: 'title',
+      auth_service: 'authService',
     },
     enabledWhen: { at: 'delete_at', equals: '0' },
     exclude: [{ at: 'is_bot', equals: 'true' }],
@@ -106,6 +113,14 @@ export const mattermostDocument: HttpConnectorDocument = {
       path: '/users/{{anchor}}/patch',
       body: { username: '{{correlationKey}}' },
     },
+    followUps: [
+      {
+        when: 'authService',
+        method: 'PUT',
+        path: '/users/{{anchor}}/auth',
+        body: { auth_service: '{{attr.authService}}', auth_data: '{{attr.authData}}' },
+      },
+    ],
     enable: { method: 'PUT', path: '/users/{{anchor}}/active', body: { active: true } },
     disable: { method: 'PUT', path: '/users/{{anchor}}/active', body: { active: false } },
   },

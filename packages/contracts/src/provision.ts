@@ -505,7 +505,49 @@ export const adoptionCandidateResponse = z.object({
   matchedBy: z.enum(['name', 'email']),
 });
 
+/**
+ * Adopting every conflicted account on a target at once. Each entry is a
+ * person and the object the administrator saw for them in the preview; one
+ * whose candidate has changed since is not adopted.
+ */
+export const adoptConflictsRequest = z
+  .object({
+    reason: z.string().trim().min(1).max(512),
+    adoptions: z
+      .array(z.object({ personId: z.string().uuid(), anchor: z.string().min(1) }).strict())
+      .min(1)
+      .max(1000),
+  })
+  .strict();
+
+export const conflictAdoptionPreviewResponse = z.object({
+  accounts: z.array(
+    z.object({
+      personId: z.string().uuid(),
+      givenName: z.string(),
+      familyName: z.string(),
+      businessEmail: z.string().nullable(),
+      correlationKey: z.string(),
+      candidate: adoptionCandidateResponse.nullable(),
+    }),
+  ),
+});
+
+export const adoptConflictsResponse = z.object({
+  results: z.array(
+    z.object({
+      personId: z.string().uuid(),
+      adopted: z.boolean(),
+      anchor: z.string().nullable(),
+      message: z.string().nullable(),
+    }),
+  ),
+});
+
 export type AdoptAccountRequest = z.input<typeof adoptAccountRequest>;
+export type AdoptConflictsRequest = z.input<typeof adoptConflictsRequest>;
+export type ConflictAdoptionPreviewResponse = z.infer<typeof conflictAdoptionPreviewResponse>;
+export type AdoptConflictsResponse = z.infer<typeof adoptConflictsResponse>;
 export type AdoptionCandidateResponse = z.infer<typeof adoptionCandidateResponse>;
 
 export const placementResponse = z.object({

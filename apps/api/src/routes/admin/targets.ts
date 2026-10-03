@@ -11,6 +11,7 @@ import {
   updateTargetRequestSchema,
   adoptAccountRequest,
   validateConnectorDocumentRequest,
+  adoptConflictsRequest,
 } from '@syntra/contracts';
 import {
   BUILTIN_CONNECTOR_DOCUMENTS,
@@ -38,7 +39,9 @@ import {
   NotInConflictError,
   TargetNotFoundError,
   adoptAccount,
+  adoptConflicts,
   adoptionCandidate,
+  conflictAdoptionPreview,
   clearPlacement,
   createTarget,
   deleteTarget,
@@ -533,6 +536,38 @@ export async function registerAdminTargetRoutes(
       }).catch((cause: unknown) => {
         throw adoptionProblem(cause);
       });
+    },
+  );
+
+  /**
+   * Every conflicted account on the target and the object each would adopt,
+   * from one read of the target. `PROVISION_MANAGE` for the same reason as
+   * the single candidate.
+   */
+  app.get(
+    '/targets/:id/conflicts/adoption-preview',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      return { accounts: await conflictAdoptionPreview(request.tenantId, provider, id) };
+    },
+  );
+
+  /** Adopts the conflicted accounts confirmed from the preview. */
+  app.post(
+    '/targets/:id/conflicts/adopt',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const body = adoptConflictsRequest.parse(request.body);
+      const results = await adoptConflicts(request.tenantId, provider, {
+        targetSystemId: id,
+        adoptions: body.adoptions,
+        reason: body.reason,
+        actorUserId: request.session.userId,
+        sourceIp: request.ip,
+      });
+      return { results };
     },
   );
 
