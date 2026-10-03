@@ -6,11 +6,17 @@ import {
   idParam,
   oidcClientRequest,
   samlConfigRequest,
+  setupApplicationRequest,
+  setupApplicationResponse,
   spMetadataImportRequest,
 } from '@syntra/contracts';
 import {
   ClaimMappingSetProtocolMismatchError,
+  EntityIdTakenError,
   PERMISSIONS,
+  SlugTakenError,
+  createApplicationFromDefinition,
+  standardClaims,
   REQUIRE_SIGNED_AUTHN_REQUESTS_BY_DEFAULT,
   applyClaimMappingSet,
   createClaimMapping,
@@ -171,6 +177,140 @@ export async function registerAdminProtocolRoutes(
     const record = await request.db((tx) => findSamlConfigForApplication(tx, id));
     if (!record) throw new ProblemError(404, 'not-found', 'Not configured');
     return record;
+  });
+
+  /**
+   * "New application" in one step: the tile, its SAML or OpenID Connect
+   * configuration and its claims, in one transaction.
+   */
+  app.post('/applications/setup', manage, async (request, reply) => {
+    const body = setupApplicationRequest.parse(request.body);
+
+    // Metadata first, outside any transaction: it may be a fetch.
+    let parsed: ReturnType<typeof parseSpMetadata> | null = null;
+    if (body.protocol === 'saml' && body.saml) {
+      const xml =
+        body.saml.metadataXml ??
+        (body.saml.metadataUrl === undefined
+          ? undefined
+          : await fetchExternalDocument(body.saml.metadataUrl, {
+              allowPrivateAddresses: options.outboundAllowPrivate,
+            }).catch((cause: unknown) => {
+              throw new ProblemError(400, 'metadata-fetch-failed', 'Metadata URL could not be read', undefined, {
+                errors: [{ path: 'saml.metadataUrl', message: cause instanceof Error ? cause.message : 'Could not be read' }],
+              });
+            }));
+      if (xml !== undefined) {
+        try {
+          parsed = parseSpMetadata(xml);
+        } catch (cause) {
+          throw new ProblemError(400, 'metadata-unreadable', 'Metadata could not be parsed', undefined, {
+            errors: [{ path: 'saml.metadataXml', message: cause instanceof Error ? cause.message : 'Could not be parsed' }],
+          });
+        }
+        if (body.saml.wantAuthnRequestsSigned && parsed.certificates.length === 0) {
+          throw new ProblemError(409, 'metadata-has-no-signing-certificate', 'No signing certificate in metadata', undefined, {
+            errors: [
+              {
+                path: 'saml.wantAuthnRequestsSigned',
+                message: 'The metadata has no signing certificate. Turn off "Require signed requests" or use metadata that has one.',
+              },
+            ],
+          });
+        }
+      }
+    }
+
+    const saml =
+      body.protocol === 'saml' && body.saml
+        ? {
+            spEntityId: parsed?.entityId ?? body.saml.spEntityId!,
+            acsUrls: parsed?.acsUrls ?? body.saml.acsUrls,
+            defaultAcsUrl: parsed?.defaultAcsUrl ?? null,
+            nameIdFormat: parsed?.nameIdFormats[0] ?? body.saml.nameIdFormat,
+            spCertificates: parsed?.certificates ?? body.saml.spCertificates,
+            encryptionCertificate: parsed?.encryptionCertificates[0] ?? null,
+            sloUrl: parsed?.sloUrl ?? null,
+            sloBinding: parsed?.sloBinding ?? 'HTTP-POST',
+            wantAuthnRequestsSigned: body.saml.wantAuthnRequestsSigned,
+            claims: body.claims.kind === 'standard' ? standardClaims('saml') : [],
+          }
+        : undefined;
+    const oidc =
+      body.protocol === 'oidc' && body.oidc
+        ? {
+            redirectUris: body.oidc.redirectUris,
+            scopes: body.oidc.scopes,
+            claims: body.claims.kind === 'standard' ? standardClaims('oidc') : [],
+          }
+        : undefined;
+
+    if (saml) {
+      const tenant = await request.db((tx) =>
+        tx.tenant.findUniqueOrThrow({ where: { id: request.tenantId } }),
+      );
+      await ensureSamlKey(request.tenantId, tenant.primaryDomain);
+    }
+
+    const created = await request
+      .db(async (tx) => {
+        if (body.claims.kind === 'set' && body.protocol !== 'bookmark') {
+          // Looked up first, under RLS: another tenant's set id resolves to
+          // nothing here and is refused before anything is written.
+          const set = await tx.claimMappingSet.findUnique({ where: { id: body.claims.setId } });
+          if (!set) {
+            throw new ProblemError(404, 'not-found', 'No such claim set', undefined, {
+              errors: [{ path: 'claims', message: 'That claim set does not exist.' }],
+            });
+          }
+        }
+        const result = await createApplicationFromDefinition(tx, {
+          name: body.name,
+          slug: body.slug,
+          description: body.description,
+          category: body.category,
+          launchUrl: body.launchUrl,
+          saml,
+          oidc,
+        });
+        if (body.claims.kind === 'set' && body.protocol !== 'bookmark') {
+          await applyClaimMappingSet(tx, result.applicationId, body.claims.setId);
+        }
+        await recordEvent(tx, {
+          actorUserId: request.session.userId,
+          action: 'access.application_created',
+          targetType: 'Application',
+          targetId: result.applicationId,
+          outcome: 'success',
+          sourceIp: request.ip,
+          payload: {
+            slug: result.slug,
+            protocol: result.protocol,
+            source: parsed ? 'metadata' : 'manual',
+            claims: body.claims.kind,
+          },
+        });
+        return result;
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof SlugTakenError) {
+          throw new ProblemError(409, 'slug-taken', 'Slug already in use', undefined, {
+            errors: [{ path: 'slug', message: cause.message }],
+          });
+        }
+        if (cause instanceof EntityIdTakenError) {
+          throw new ProblemError(409, 'entity-id-taken', 'Already registered', cause.message);
+        }
+        if (cause instanceof ClaimMappingSetProtocolMismatchError) {
+          throw new ProblemError(409, 'claim-set-protocol-mismatch', 'Claim set is for another protocol', cause.message);
+        }
+        throw cause;
+      });
+
+    if (oidc) invalidateProvider(request.tenantId);
+
+    // An OIDC client secret is in this response and in no other, ever.
+    return reply.status(201).send(setupApplicationResponse.parse(created));
   });
 
   app.post('/applications/:id/saml/import', manage, async (request) => {

@@ -799,3 +799,122 @@ describe('federate policy rules', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe('POST /applications/setup', () => {
+  it('creates a SAML application from pasted metadata, with the standard claims', async () => {
+    const res = await post('/api/admin/applications/setup', {
+      name: 'Acme Wiki',
+      protocol: 'saml',
+      saml: { metadataXml: SP_METADATA },
+    });
+    expect(res.statusCode).toBe(201);
+    const { applicationId, slug, protocol } = res.json();
+    expect({ slug, protocol }).toEqual({ slug: 'acme-wiki', protocol: 'saml' });
+
+    const saml = await get(`/api/admin/applications/${applicationId}/saml`);
+    expect(saml.json()).toMatchObject({
+      spEntityId: 'https://sp.example.test/metadata',
+      acsUrls: ['https://sp.example.test/acs', 'https://sp.example.test/acs2'],
+      wantAuthnRequestsSigned: true,
+      allowIdpInitiated: false,
+    });
+    const claims = await get(`/api/admin/applications/${applicationId}/claims`);
+    expect(claims.json().saml.map((m: { claimName: string }) => m.claimName).sort()).toEqual(
+      ['displayName', 'email', 'firstName', 'groups', 'lastName'],
+    );
+  });
+
+  it('creates a SAML application from typed-in settings', async () => {
+    const res = await post('/api/admin/applications/setup', {
+      name: 'Payroll',
+      slug: 'payroll',
+      protocol: 'saml',
+      saml: {
+        spEntityId: 'https://payroll.example.test',
+        acsUrls: ['https://payroll.example.test/saml/acs'],
+        spCertificates: [PEM],
+      },
+      claims: { kind: 'none' },
+    });
+    expect(res.statusCode).toBe(201);
+    const claims = await get(`/api/admin/applications/${res.json().applicationId}/claims`);
+    expect(claims.json().saml).toEqual([]);
+  });
+
+  it('refuses required request signing with no certificate, against the field', async () => {
+    const res = await post('/api/admin/applications/setup', {
+      name: 'Payroll',
+      protocol: 'saml',
+      saml: { spEntityId: 'https://payroll.example.test', acsUrls: ['https://payroll.example.test/acs'] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('saml.spCertificates');
+  });
+
+  it('refuses metadata with no signing certificate while signed requests are required', async () => {
+    const res = await post('/api/admin/applications/setup', {
+      name: 'Acme Wiki',
+      protocol: 'saml',
+      saml: { metadataXml: SP_METADATA_UNSIGNED },
+    });
+    expect(res.statusCode).toBe(409);
+    const unsigned = await post('/api/admin/applications/setup', {
+      name: 'Acme Wiki',
+      protocol: 'saml',
+      saml: { metadataXml: SP_METADATA_UNSIGNED, wantAuthnRequestsSigned: false },
+    });
+    expect(unsigned.statusCode).toBe(201);
+  });
+
+  it('returns an OpenID Connect client secret once', async () => {
+    const res = await post('/api/admin/applications/setup', {
+      name: 'Grafana',
+      protocol: 'oidc',
+      launchUrl: 'https://grafana.example.test/login/generic_oauth',
+      oidc: { redirectUris: ['https://grafana.example.test/login/generic_oauth'] },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ protocol: 'oidc', clientId: expect.stringMatching(/^grafana-/), clientSecret: expect.any(String) });
+  });
+
+  it('stamps a saved claim set, and refuses one that does not exist', async () => {
+    const set = await post('/api/admin/claim-sets', {
+      name: 'Employee id',
+      protocol: 'saml',
+      mappings: [{ protocol: 'saml', claimName: 'employeeId', sourceKind: 'user', sourceField: 'login' }],
+    });
+    const body = {
+      name: 'HR',
+      protocol: 'saml',
+      saml: { metadataXml: SP_METADATA },
+      claims: { kind: 'set', setId: set.json().id },
+    };
+    const res = await post('/api/admin/applications/setup', body);
+    expect(res.statusCode).toBe(201);
+    const claims = await get(`/api/admin/applications/${res.json().applicationId}/claims`);
+    expect(claims.json().saml.map((m: { claimName: string }) => m.claimName)).toEqual(['employeeId']);
+
+    const missing = await post('/api/admin/applications/setup', {
+      ...body,
+      name: 'HR two',
+      saml: { spEntityId: 'https://hr2.example.test', acsUrls: ['https://hr2.example.test/acs'], spCertificates: [PEM] },
+      claims: { kind: 'set', setId: '00000000-0000-4000-8000-000000000000' },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('refuses a slug in use against the field, and a link with no launch URL', async () => {
+    await post('/api/admin/applications/setup', { name: 'Wiki', protocol: 'bookmark', launchUrl: 'https://wiki.example.test' });
+    const taken = await post('/api/admin/applications/setup', {
+      name: 'Wiki two',
+      slug: 'wiki',
+      protocol: 'bookmark',
+      launchUrl: 'https://wiki2.example.test',
+    });
+    expect(taken.statusCode).toBe(409);
+    expect(taken.json().errors).toEqual([{ path: 'slug', message: 'Slug wiki is already in use.' }]);
+
+    const noUrl = await post('/api/admin/applications/setup', { name: 'Wiki three', protocol: 'bookmark' });
+    expect(noUrl.statusCode).toBe(400);
+  });
+});

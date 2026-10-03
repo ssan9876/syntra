@@ -1,4 +1,4 @@
-import { claimMappingRequest, claimMappingSetRequest, idParam, oidcClientRequest, samlConfigRequest, spMetadataImportRequest } from '@syntra/contracts';
+import { claimMappingRequest, claimMappingSetRequest, idParam, oidcClientRequest, samlConfigRequest, setupApplicationRequest, spMetadataImportRequest } from '@syntra/contracts';
 import { applyClaimSetRequest, claimParams } from './protocol-apps.js';
 import { describeAdminRoutes } from '../../openapi/describe.js';
 
@@ -11,6 +11,12 @@ export const protocolAppsOpenApi = describeAdminRoutes('Protocol applications', 
     params: idParam,
   },
   'GET /applications/:id/saml': { summary: 'Get an application\'s SAML configuration', params: idParam },
+  'POST /applications/setup': {
+    summary: 'Create an application with its sign-in configuration',
+    description: 'The tile, its SAML (from metadata, or entity ID and ACS URLs) or OpenID Connect configuration, and its claims, in one transaction. An OpenID Connect client secret is returned once.',
+    body: setupApplicationRequest,
+    status: 201,
+  },
   'POST /applications/:id/saml/import': {
     summary: 'Configure SAML from the service provider\'s metadata',
     description: 'Metadata that would weaken the tenant\'s signing posture is refused unless the request explicitly accepts it.',
