@@ -269,6 +269,48 @@ export function skipAdvice(reason: string | null): string {
   return 'Skipped: no reason recorded. Check this target’s runs.';
 }
 
+/** The position of `document` in an API error path, or -1. */
+function documentSegment(path: string): number {
+  const parts = path.split('.');
+  return parts[0] === 'document' ? 0 : parts[0] === 'config' && parts[1] === 'document' ? 1 : -1;
+}
+
+/** Whether an API error path points inside the connector document. */
+export function isDocumentPath(path: string): boolean {
+  return documentSegment(path) !== -1;
+}
+
+/**
+ * Schema errors inside the connector document, one per line, each with its
+ * path in the document: `account.list.paging.style: Invalid input`.
+ */
+export function documentIssues(errors: { path?: string; message: string }[] | undefined): string | null {
+  const lines = (errors ?? []).flatMap((issue) => {
+    const path = issue.path ?? '';
+    const at = documentSegment(path);
+    if (at === -1) return [];
+    const inner = path.split('.').slice(at + 1).join('.');
+    return [inner === '' ? issue.message : `${inner}: ${issue.message}`];
+  });
+  return lines.length === 0 ? null : lines.join('\n');
+}
+
+/** What the vault credential is called for a document's `auth.type`. */
+export function credentialLabel(document: Record<string, unknown> | null): string {
+  const auth = document?.auth as { type?: unknown } | undefined;
+  switch (auth?.type) {
+    case 'basic':
+      return 'Password';
+    case 'header':
+    case 'query':
+      return 'API key';
+    case 'oauth2':
+      return 'Client secret';
+    default:
+      return 'API token';
+  }
+}
+
 /**
  * Parses a connector document, or null.
  *

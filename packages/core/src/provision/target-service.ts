@@ -907,6 +907,29 @@ const testScalarsSchema = z.object({
   borrowFromTargetId: z.string().uuid().optional(),
 });
 
+/**
+ * Whether a REST target's test would send the saved credential to the same
+ * place the saved document does: the same `baseUrl` origin and the same
+ * authentication, including where an OAuth secret is posted. Paths and
+ * mappings may differ; that is what a test of an edited document is for.
+ */
+export function sameHttpCredentialDestination(saved: unknown, requested: unknown): boolean {
+  const documentOf = (config: unknown) =>
+    (config as { document?: { baseUrl?: unknown; auth?: Record<string, unknown> } } | null)?.document;
+  const a = documentOf(saved);
+  const b = documentOf(requested);
+  if (typeof a?.baseUrl !== 'string' || typeof b?.baseUrl !== 'string') return false;
+  let origins: [string, string];
+  try {
+    origins = [new URL(a.baseUrl).origin, new URL(b.baseUrl).origin];
+  } catch {
+    return false;
+  }
+  if (origins[0] !== origins[1]) return false;
+  const keys = ['type', 'tokenUrl', 'clientId', 'clientAuth', 'username', 'header', 'prefix', 'param'];
+  return keys.every((key) => (a.auth?.[key] ?? null) === (b.auth?.[key] ?? null));
+}
+
 export async function testTargetConfiguration(
   tenantId: string,
   provider: MasterKeyProvider,
@@ -968,6 +991,15 @@ export async function testTargetConfiguration(
           savedConfig.tlsMode !== requested.tlsMode ||
           savedConfig.rejectUnauthorized !== requested.rejectUnauthorized
         ) {
+          return 'mismatch' as const;
+        }
+      }
+      if (type === 'httpJson') {
+        // Parsed for the reason the Active Directory comparison below is: a
+        // default the schema fills in (`clientAuth`) must not read as a
+        // difference from a row saved before it existed.
+        const savedConfig = targetConfigSchemaFor(target.type).safeParse(target.config);
+        if (!savedConfig.success || !sameHttpCredentialDestination(savedConfig.data, config)) {
           return 'mismatch' as const;
         }
       }

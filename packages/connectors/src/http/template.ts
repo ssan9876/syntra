@@ -45,8 +45,36 @@ export interface TemplateVars {
  */
 const PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 
-/** The names this vocabulary admits. Everything else is `MISSING`. */
-const NAME = /^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)?(?:\[\])?$/;
+/**
+ * The names this vocabulary admits, each with an optional type:
+ * `{{attr.departmentId|number}}`, `{{attr.isManager|boolean}}`. Everything
+ * else is `MISSING`.
+ */
+const NAME = /^([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_-]*)?(?:\[\])?)(?:\|(number|boolean))?$/;
+
+/**
+ * Where a value is rendered. A URL and a header are logged by proxies and
+ * servers along the way, so the initial password is never rendered into one.
+ */
+type Place = 'body' | 'url';
+
+/** A value as the type a placeholder asked for, or `MISSING` when it is not one. */
+function cast(value: unknown, type: string | undefined): unknown {
+  if (type === undefined || value === MISSING) return value;
+  if (Array.isArray(value)) {
+    const items = value.map((item) => cast(item, type));
+    return items.includes(MISSING) ? MISSING : items;
+  }
+  const text = String(value).trim();
+  if (type === 'number') {
+    const number = Number(text);
+    return text !== '' && Number.isFinite(number) ? number : MISSING;
+  }
+  const lowered = text.toLowerCase();
+  if (lowered === 'true') return true;
+  if (lowered === 'false') return false;
+  return MISSING;
+}
 
 /** Own properties only. `{{attr.constructor}}` must not reach Object.prototype. */
 function ownAttribute(
@@ -59,9 +87,13 @@ function ownAttribute(
   return values && values.length > 0 ? values : undefined;
 }
 
-function lookup(raw: string, vars: TemplateVars): unknown {
-  const name = raw.trim();
-  if (!NAME.test(name)) return MISSING;
+function lookup(raw: string, vars: TemplateVars, place: Place = 'body'): unknown {
+  const match = NAME.exec(raw.trim());
+  if (!match?.[1]) return MISSING;
+  return cast(lookupName(match[1], vars, place), match[2]);
+}
+
+function lookupName(name: string, vars: TemplateVars, place: Place): unknown {
   if (name.startsWith('attr.')) {
     const wantsList = name.endsWith('[]');
     const key = name.slice(5, wantsList ? -2 : undefined);
@@ -79,7 +111,7 @@ function lookup(raw: string, vars: TemplateVars): unknown {
     case 'entitlementId':
       return vars.entitlementId ?? MISSING;
     case 'initialPassword':
-      return vars.initialPassword ?? MISSING;
+      return place === 'body' ? (vars.initialPassword ?? MISSING) : MISSING;
     case 'reason':
       return vars.reason ?? MISSING;
     case 'enabled':
@@ -104,13 +136,13 @@ function lookup(raw: string, vars: TemplateVars): unknown {
  * string is missing if any one of its placeholders is: half a sentence with a
  * hole in it is not a value anybody meant to send.
  */
-export function renderValue(template: string, vars: TemplateVars): unknown {
+export function renderValue(template: string, vars: TemplateVars, place: Place = 'body'): unknown {
   const whole = new RegExp(`^${PLACEHOLDER.source}$`).exec(template);
-  if (whole?.[1]) return lookup(whole[1], vars);
+  if (whole?.[1]) return lookup(whole[1], vars, place);
 
   let missing = false;
   const rendered = template.replace(PLACEHOLDER, (_match, name: string) => {
-    const value = lookup(name, vars);
+    const value = lookup(name, vars, place);
     if (value === MISSING) {
       missing = true;
       return '';
@@ -180,8 +212,26 @@ export class MissingTemplateValueError extends Error {
  */
 export function renderPath(template: string, vars: TemplateVars): string {
   return template.replace(PLACEHOLDER, (_match, name: string) => {
-    const value = lookup(name, vars);
+    const value = lookup(name, vars, 'url');
     if (value === MISSING) throw new MissingTemplateValueError(name);
     return encodeURIComponent(Array.isArray(value) ? value.join(',') : String(value));
   });
+}
+
+/**
+ * Renders query parameters or headers. A value that renders to nothing leaves
+ * its key out, as in a body; the initial password is never rendered, as in a
+ * path.
+ */
+export function renderParams(
+  template: Record<string, string>,
+  vars: TemplateVars,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(template)) {
+    const rendered = renderValue(value, vars, 'url');
+    if (rendered === MISSING) continue;
+    out[key] = Array.isArray(rendered) ? rendered.join(',') : String(rendered);
+  }
+  return out;
 }

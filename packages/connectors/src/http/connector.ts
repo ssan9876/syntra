@@ -1,6 +1,8 @@
 import {
   completeReadBack,
+  observedEnabled,
   readBackByEnumeration,
+  type AccountPreview,
   type DiscoveredEntitlement,
   type SchemaDescriptor,
   type SourceRecord,
@@ -11,20 +13,25 @@ import {
 } from '../types.js';
 import {
   bodyFailure,
-  classify,
+  errorFailure,
+  firstPageQuery,
+  FormBodyError,
   httpRequest,
+  pageItems,
   paginate,
   readPath,
+  readRequest,
   retryAfterMs,
 } from './client.js';
 import {
   httpTargetConfigSchema,
+  type FieldEquals,
   type HttpTargetConfig,
   type ResolvedHttpConnectorDocument,
   type ResolvedHttpTargetConfig,
   type WriteSpec,
 } from './document.js';
-import { MISSING, renderBody, renderPath, type TemplateVars } from './template.js';
+import { MISSING, renderBody, renderParams, renderPath, type TemplateVars } from './template.js';
 
 // Every target connector is handed its vault value as `bindPassword` by core.
 // HTTP targets do not bind to a directory, but keeping the shared input name
@@ -69,6 +76,11 @@ function toRecord(
     const values = asValues(readPath(item, targetField));
     if (values) attributes[syntraName] = values;
   }
+  const enabledWhen = document.account.enabledWhen;
+  if (enabledWhen) {
+    const actual = asValues(readPath(item, enabledWhen.at))?.[0];
+    if (actual !== undefined) attributes.enabled = [String(actual === enabledWhen.equals)];
+  }
 
   const correlation = document.account.correlationAt
     ? asValues(readPath(item, document.account.correlationAt))?.[0]
@@ -83,6 +95,57 @@ function toRecord(
     dn: correlation ?? anchor,
     attributes,
   };
+}
+
+const PREVIEW_ACCOUNTS = 5;
+
+/**
+ * The first page as the connector will read it, for the connection test: the
+ * mapped accounts, how many were skipped, and the fields it leaves unread.
+ * Field NAMES only for the unread ones; their values stay at the target.
+ */
+function accountPreview(document: ResolvedHttpConnectorDocument, items: unknown[]): AccountPreview {
+  const accounts: AccountPreview['accounts'] = [];
+  let skipped = 0;
+  for (const item of items) {
+    const record = excluded(document.account.exclude, item) ? null : toRecord(document, item);
+    if (record === null) {
+      skipped += 1;
+      continue;
+    }
+    if (accounts.length < PREVIEW_ACCOUNTS) {
+      accounts.push({
+        anchor: record.anchor,
+        name: record.dn,
+        enabled: observedEnabled(record),
+        attributes: record.attributes,
+      });
+    }
+  }
+
+  const account = document.account;
+  const read = new Set(
+    [
+      account.anchorAt,
+      account.correlationAt,
+      account.enabledWhen?.at,
+      account.provenance?.path,
+      ...Object.keys(account.fields),
+      ...account.exclude.map((rule) => rule.at),
+    ]
+      .filter((path): path is string => path !== undefined)
+      .flatMap((path) => [path, path.split('.')[0]]),
+  );
+  const first = items.find((item) => item !== null && typeof item === 'object' && !Array.isArray(item));
+  const unreadFields = first
+    ? Object.keys(first).filter((key) => !read.has(key)).sort()
+    : [];
+  return { accounts, skipped, unreadFields };
+}
+
+/** Whether the item matches one of `account.exclude`. */
+function excluded(rules: readonly FieldEquals[], item: unknown): boolean {
+  return rules.some((rule) => asValues(readPath(item, rule.at))?.[0] === rule.equals);
 }
 
 function provenanceValues(
@@ -109,11 +172,47 @@ async function findCreateCollision(
   const correlationAt = document.account.correlationAt;
   if (correlationAt === undefined) return undefined;
   const wanted = correlationKey.toLocaleLowerCase();
-  for await (const item of paginate(document, credential, document.account.list)) {
+  const candidates = document.account.find
+    ? findCandidates(config, correlationKey)
+    : paginate(document, credential, document.account.list);
+  for await (const item of candidates) {
     const correlation = asValues(readPath(item, correlationAt))?.[0];
     if (correlation?.toLocaleLowerCase() === wanted) return item;
   }
   return undefined;
+}
+
+/**
+ * What `account.find` answers for one correlation key: a list, or with no
+ * paging a single object, and nothing for a not-found status.
+ */
+async function* findCandidates(config: Resolved, correlationKey: string): AsyncIterable<unknown> {
+  const { document, credential } = config;
+  const spec = document.account.find;
+  if (spec === undefined) return;
+  const vars = { correlationKey };
+  const path = renderPath(spec.path, vars);
+  if (spec.paging.style !== 'none') {
+    yield* paginate(document, credential, { ...spec, path }, vars);
+    return;
+  }
+  const response = await readRequest(document, credential, {
+    path,
+    query: firstPageQuery(spec, vars),
+  });
+  if (response.status >= 400) {
+    const failed = errorFailure(document, response, [credential]);
+    if (failed.failure === 'not_found') return;
+    throw new Error(`Looking up ${correlationKey} failed: ${failed.message}`);
+  }
+  const refused = bodyFailure(document, response.body, [credential]);
+  if (refused) {
+    if (refused.failure === 'not_found') return;
+    throw new Error(`Looking up ${correlationKey} failed: ${refused.message}`);
+  }
+  const found = spec.itemsAt ? readPath(response.body, spec.itemsAt) : response.body;
+  if (Array.isArray(found)) yield* found;
+  else if (found !== null && typeof found === 'object') yield found;
 }
 
 async function runWrite(
@@ -141,21 +240,30 @@ async function runWrite(
   }
 
   const body = spec.body === undefined ? undefined : renderBody(spec.body, vars);
-  const response = await httpRequest(document, credential, {
-    method: spec.method,
-    path,
-    query: spec.query,
-    ...(body === undefined || body === MISSING ? {} : { body }),
-  });
+  let response;
+  try {
+    response = await httpRequest(document, credential, {
+      method: spec.method,
+      path,
+      query: renderParams(spec.query, vars),
+      headers: renderParams(spec.headers, vars),
+      bodyFormat: spec.bodyFormat,
+      ...(body === undefined || body === MISSING ? {} : { body }),
+    });
+  } catch (cause) {
+    if (cause instanceof FormBodyError) return { ok: false, message: cause.message, failure: 'rejected' };
+    throw cause;
+  }
 
   if (response.status >= 400) {
-    const failure = classify(document, response.status);
+    // The status, and the target's own message only where `failures.error`
+    // names it, redacted: a target's error text can quote back what was
+    // sent, and what was sent may include an initial password.
+    const { failure, message } = errorFailure(document, response, [credential, vars.initialPassword]);
     const after = retryAfterMs(response.headers);
     return {
       ok: false,
-      // The STATUS, never the response body. A target's error text can quote
-      // back what was sent, and what was sent may include an initial password.
-      message: `the target answered HTTP ${response.status}`,
+      message,
       failure,
       ...(failure === 'throttled' && after !== undefined ? { retryAfterMs: after } : {}),
     };
@@ -186,35 +294,26 @@ export const httpTargetConnector: TargetConnector<Config> & {
   async test(raw) {
     const config = normalise(raw);
     const { document, credential } = config;
+    const list = document.account.list;
     try {
-      const response = await httpRequest(document, credential, {
-        method: 'GET',
-        path: document.account.list.path,
-        query: document.account.list.query,
+      const response = await readRequest(document, credential, {
+        path: list.path,
+        query: firstPageQuery(list),
       });
       if (response.status === 401 || response.status === 403) {
         return { ok: false, message: 'the credential was refused' };
       }
       if (response.status >= 400) {
-        return { ok: false, message: `the target answered HTTP ${response.status}` };
+        return { ok: false, message: errorFailure(document, response, [credential]).message };
       }
       const refused = bodyFailure(document, response.body, [credential]);
       if (refused) return { ok: false, message: refused.message };
-      const items = document.account.list.itemsAt
-        ? readPath(response.body, document.account.list.itemsAt)
-        : response.body;
-      if (!Array.isArray(items)) {
-        return {
-          ok: false,
-          message: document.account.list.itemsAt
-            ? `the response has no array at "${document.account.list.itemsAt}"`
-            : 'the response was not an array',
-        };
-      }
+      const items = pageItems(list, response.body);
       return {
         ok: true,
         message: `Connected to ${document.name}`,
         sampleCounts: { user: items.length, group: 0, orgUnit: 0 },
+        preview: accountPreview(document, items),
         // The rights this connector needs cannot be read from a REST API that
         // does not publish them, and `unverified` is deliberately not a polite
         // `granted` — see `ConnectorRight`.
@@ -242,7 +341,12 @@ export const httpTargetConnector: TargetConnector<Config> & {
     // asking.
     return {
       objectClasses: ['user'],
-      attributes: [...new Set(Object.values(document.account.fields))].sort(),
+      attributes: [
+        ...new Set([
+          ...Object.values(document.account.fields),
+          ...(document.account.enabledWhen ? ['enabled'] : []),
+        ]),
+      ].sort(),
     };
   },
 
@@ -253,6 +357,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
       config.credential,
       config.document.account.list,
     )) {
+      if (excluded(config.document.account.exclude, item)) continue;
       const record = toRecord(config.document, item);
       if (record) yield record;
     }
@@ -313,15 +418,15 @@ export const httpTargetConnector: TargetConnector<Config> & {
     const spec = document.account.read;
     if (spec === undefined) return readBackByEnumeration(httpTargetConnector, raw, anchor);
 
-    const response = await httpRequest(document, credential, {
-      method: 'GET',
+    const response = await readRequest(document, credential, {
       path: renderPath(spec.path, { anchor }),
-      query: spec.query,
+      query: renderParams(spec.query, { anchor }),
     });
     const absent = { account: null, entitlementIds: [], enabled: null, complete: true };
     if (response.status >= 400) {
-      if (classify(document, response.status) === 'not_found') return absent;
-      throw new Error(`reading the account back answered HTTP ${response.status}`);
+      const failed = errorFailure(document, response, [credential]);
+      if (failed.failure === 'not_found') return absent;
+      throw new Error(`reading the account back failed: ${failed.message}`);
     }
     const refused = bodyFailure(document, response.body, [credential]);
     if (refused) {
@@ -355,10 +460,13 @@ export const httpTargetConnector: TargetConnector<Config> & {
     const members: string[] = [];
     // `paginate` throws rather than returning what it managed to fetch, which
     // is what makes this all-or-nothing rather than "as much as we got".
-    for await (const item of paginate(config.document, config.credential, {
-      ...spec,
-      path: renderPath(spec.path, { entitlementId: entitlementDn, anchor: entitlementDn }),
-    })) {
+    const vars = { entitlementId: entitlementDn, anchor: entitlementDn };
+    for await (const item of paginate(
+      config.document,
+      config.credential,
+      { ...spec, path: renderPath(spec.path, vars) },
+      vars,
+    )) {
       const member = asValues(readPath(item, spec.memberAnchorAt))?.[0];
       if (member !== undefined) members.push(member);
     }
@@ -385,7 +493,7 @@ export const httpTargetConnector: TargetConnector<Config> & {
           failure: 'rejected',
         };
 
-      case 'create_account':
+      case 'create_account': {
         if (
           account.create === undefined ||
           account.correlationAt === undefined ||
@@ -398,36 +506,64 @@ export const httpTargetConnector: TargetConnector<Config> & {
             failure: 'rejected',
           };
         }
-        {
-          const existing = await findCreateCollision(config, op.correlationKey);
-          if (existing !== undefined) {
-            const anchor = asValues(readPath(existing, account.anchorAt))?.[0];
-            if (anchor !== undefined && provenanceValues(existing, account.provenance).includes(op.actionId)) {
-              return {
-                ok: true,
-                message: 'adopted the account this action already created',
-                anchor,
-              };
-            }
-            return {
-              ok: false,
-              message: `Account ${op.correlationKey} already exists and was not created by Syntra.`,
-              failure: 'conflict',
-            };
-          }
+        const followWithDisable = !op.enabled && account.createsEnabled;
+        if (followWithDisable && account.disable === undefined) {
+          return {
+            ok: false,
+            message: `Not created: ${op.correlationKey} is to start disabled, and the connector document declares no disable.`,
+            failure: 'rejected',
+          };
         }
-        return runWrite(
-          config,
-          account.create,
-          {
-            actionId: op.actionId,
-            correlationKey: op.correlationKey,
-            attributes: op.attributes,
-            enabled: op.enabled,
-            initialPassword: op.initialPassword,
-          },
-          'create an account',
+        // A target whose create always enables gets the disable straight
+        // after, and again on an adopting retry: the first attempt may have
+        // created the account and never got as far as disabling it.
+        const settle = async (created: WriteResult): Promise<WriteResult> => {
+          if (!created.ok || !followWithDisable) return created;
+          if (created.anchor === undefined) {
+            return { ok: false, message: `Created ${op.correlationKey}, but the target returned no id to disable it by.`, failure: 'rejected' };
+          }
+          const disabled = await runWrite(
+            config,
+            account.disable,
+            { actionId: op.actionId, anchor: created.anchor, enabled: false },
+            'disable an account',
+          );
+          return disabled.ok
+            ? created
+            : { ...disabled, message: `Created ${op.correlationKey}, but disabling it failed: ${disabled.message}` };
+        };
+
+        const existing = await findCreateCollision(config, op.correlationKey);
+        if (existing !== undefined) {
+          const anchor = asValues(readPath(existing, account.anchorAt))?.[0];
+          if (anchor !== undefined && provenanceValues(existing, account.provenance).includes(op.actionId)) {
+            return settle({
+              ok: true,
+              message: 'adopted the account this action already created',
+              anchor,
+            });
+          }
+          return {
+            ok: false,
+            message: `Account ${op.correlationKey} already exists and was not created by Syntra.`,
+            failure: 'conflict',
+          };
+        }
+        return settle(
+          await runWrite(
+            config,
+            account.create,
+            {
+              actionId: op.actionId,
+              correlationKey: op.correlationKey,
+              attributes: op.attributes,
+              enabled: op.enabled,
+              initialPassword: op.initialPassword,
+            },
+            'create an account',
+          ),
         );
+      }
 
       case 'update_account':
         return runWrite(

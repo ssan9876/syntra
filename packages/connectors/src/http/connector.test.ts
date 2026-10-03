@@ -7,7 +7,7 @@ import {
 } from './documents/index.js';
 import { httpConnectorDocument, type HttpConnectorDocument } from './document.js';
 import { httpTargetConnector } from './connector.js';
-import { forgetAccessTokens, readPath } from './client.js';
+import { forgetAccessTokens, readPath, readRetry } from './client.js';
 import { certifyTargetConnector } from '../testing/target-connector-certification.js';
 
 /**
@@ -99,11 +99,18 @@ const collect = async <T>(source: AsyncIterable<T>): Promise<T[]> => {
   return out;
 };
 
+/** How long each read retry asked to wait. Nothing actually waits. */
+let waits: number[];
+
 beforeEach(() => {
   calls = [];
   answers = [];
   responder = undefined;
+  waits = [];
   forgetAccessTokens();
+  vi.spyOn(readRetry, 'sleep').mockImplementation(async (ms) => {
+    waits.push(ms);
+  });
 });
 
 describe('shared connector certification', () => {
@@ -240,7 +247,7 @@ describe('the documents that ship with the product', () => {
     // schema. A shipped document is what an administrator copies and edits,
     // so it is also what teaches them what is allowed.
     for (const document of Object.values(BUILTIN_CONNECTOR_DOCUMENTS)) {
-      const account = document.account as Record<string, { method?: string }>;
+      const account = document.account as unknown as Record<string, { method?: string } | undefined>;
       for (const key of ['create', 'update', 'enable', 'disable', 'archive', 'rename']) {
         expect(account[key]?.method).not.toBe('DELETE');
       }
@@ -414,9 +421,15 @@ describe('read', () => {
     answers = [
       { status: 200, body: { items: [{ id: 'u1' }], next: 'https://api.example.com/v1/users?p=2' } },
       { status: 500, body: null },
+      { status: 500, body: null },
+      { status: 500, body: null },
+      { status: 500, body: null },
     ];
 
     await expect(collect(httpTargetConnector.read(config(document)))).rejects.toThrow(/500/);
+    // The failing page was tried four times, waiting 1, 2 and 4 seconds.
+    expect(calls).toHaveLength(5);
+    expect(waits).toEqual([1000, 2000, 4000]);
   });
 });
 
@@ -872,5 +885,407 @@ describe('offset paging with a stated total', () => {
     const records = await collect(httpTargetConnector.read(config(offsetDocument())));
     expect(records.map((r) => r.anchor)).toEqual(['u1']);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('numbered and Link-header paging', () => {
+  const withPaging = (paging: unknown, itemsAt: string | null = 'items') =>
+    simple({
+      account: { ...simple().account, list: { path: '/users', ...(itemsAt ? { itemsAt } : {}), paging } },
+    } as never);
+
+  it('walks numbered pages from 1 until an empty page', async () => {
+    responder = (call) => {
+      const page = Number(new URL(call.url).searchParams.get('page'));
+      return { status: 200, body: { items: page <= 2 ? [{ id: `u${page}` }] : [] } };
+    };
+
+    const records = await collect(httpTargetConnector.read(config(withPaging({ style: 'page', pageSize: 50 }))));
+
+    expect(records.map((r) => r.anchor)).toEqual(['u1', 'u2']);
+    expect(calls.map((c) => new URL(c.url).search)).toEqual([
+      '?page=1&per_page=50',
+      '?page=2&per_page=50',
+      '?page=3&per_page=50',
+    ]);
+  });
+
+  it('holds numbered pages to a stated total', async () => {
+    responder = (call) => {
+      const page = Number(new URL(call.url).searchParams.get('page'));
+      return { status: 200, body: { total: 3, items: page === 1 ? [{ id: 'a' }, { id: 'b' }] : [] } };
+    };
+
+    await expect(
+      collect(httpTargetConnector.read(config(withPaging({ style: 'page', totalAt: 'total' })))),
+    ).rejects.toThrow(/stopped answering at 2 of 3 items/);
+  });
+
+  it('follows rel="next" in the Link header, resolved against baseUrl', async () => {
+    answers = [
+      {
+        status: 200,
+        body: [{ id: 'u1' }],
+        headers: { link: '</v1/users?after=u1>; rel="next", </v1/users>; rel="first"' },
+      },
+      { status: 200, body: [{ id: 'u2' }], headers: { link: '</v1/users>; rel="first"' } },
+    ];
+
+    const records = await collect(httpTargetConnector.read(config(withPaging({ style: 'link' }, null))));
+
+    expect(records.map((r) => r.anchor)).toEqual(['u1', 'u2']);
+    expect(calls[1]!.url).toBe('https://api.example.com/v1/users?after=u1');
+  });
+
+  it('refuses a Link header pointing at another host', async () => {
+    answers = [
+      { status: 200, body: [{ id: 'u1' }], headers: { link: '<https://evil.example.net/users>; rel=next' } },
+    ];
+
+    await expect(
+      collect(httpTargetConnector.read(config(withPaging({ style: 'link' }, null)))),
+    ).rejects.toThrow(/evil\.example\.net/);
+  });
+});
+
+describe('reads retried on throttling', () => {
+  it('honours Retry-After, then succeeds', async () => {
+    answers = [
+      { status: 429, body: null, headers: { 'retry-after': '7' } },
+      { status: 200, body: { items: [{ id: 'u1' }] } },
+    ];
+
+    const records = await collect(httpTargetConnector.read(config()));
+
+    expect(records).toHaveLength(1);
+    expect(waits).toEqual([7000]);
+  });
+
+  it('does not retry a 4xx that is not throttling', async () => {
+    answers = [{ status: 400, body: null }];
+
+    await expect(collect(httpTargetConnector.read(config()))).rejects.toThrow(/HTTP 400/);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('paths into lists', () => {
+  it('reads a list entry by position', async () => {
+    const document = simple({
+      account: { ...simple().account, fields: { 'emails.0.value': 'mail' } },
+    });
+    answers = [
+      {
+        status: 200,
+        body: { items: [{ id: 'u1', emails: [{ value: 'a@example.com' }, { value: 'b@example.com' }] }] },
+      },
+    ];
+
+    const [record] = await collect(httpTargetConnector.read(config(document)));
+
+    expect(record!.attributes.mail).toEqual(['a@example.com']);
+    expect(readPath({ list: ['x', 'y'] }, 'list.1')).toBe('y');
+  });
+});
+
+describe('templated requests', () => {
+  it('renders query and headers, leaving out what has no value', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        update: {
+          method: 'PATCH',
+          path: '/users/{{anchor}}',
+          query: { notify: 'false', dept: '{{attr.department}}' },
+          headers: { 'If-Match': '{{attr.etag}}', 'X-Reason': '{{attr.missing}}' },
+          body: { displayName: '{{attr.displayName}}' },
+        },
+      },
+    });
+    answers = [{ status: 200, body: {} }];
+
+    await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane'], etag: ['W/"3"'] },
+    });
+
+    expect(calls[0]!.url).toBe('https://api.example.com/v1/users/u1?notify=false');
+    expect(calls[0]!.headers['if-match']).toBe('W/"3"');
+    expect(calls[0]!.headers['x-reason']).toBeUndefined();
+  });
+
+  it('never renders the initial password into a URL or a header', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        create: {
+          method: 'POST',
+          path: '/users',
+          query: { pw: '{{initialPassword}}' },
+          headers: { 'X-Password': '{{initialPassword}}' },
+          body: { login: '{{correlationKey}}', actionId: '{{actionId}}' },
+        },
+      },
+    });
+    answers = [{ status: 200, body: { items: [] } }, { status: 201, body: { id: 'new' } }];
+
+    await httpTargetConnector.write(config(document), {
+      op: 'create_account',
+      actionId: 'a1',
+      correlationKey: 'jdoe',
+      attributes: {},
+      enabled: true,
+      initialPassword: 'Initial-Passw0rd!',
+    });
+
+    const sent = calls.at(-1)!;
+    expect(sent.url).not.toContain('Passw0rd');
+    expect(sent.headers['x-password']).toBeUndefined();
+  });
+
+  it('cannot replace the credential with a request header', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        update: {
+          method: 'PATCH',
+          path: '/users/{{anchor}}',
+          headers: { Authorization: 'Bearer {{attr.displayName}}' },
+          body: { displayName: '{{attr.displayName}}' },
+        },
+      },
+    });
+    answers = [{ status: 200, body: {} }];
+
+    await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane'] },
+    });
+
+    expect(calls[0]!.headers.authorization).toBe('Bearer a-secret');
+  });
+
+  it('sends typed values: numbers and booleans', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        update: {
+          method: 'PATCH',
+          path: '/users/{{anchor}}',
+          body: {
+            department_id: '{{attr.departmentId|number}}',
+            manager: '{{attr.isManager|boolean}}',
+            floor: '{{attr.floor|number}}',
+          },
+        },
+      },
+    });
+    answers = [{ status: 200, body: {} }];
+
+    await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { departmentId: ['12'], isManager: ['TRUE'], floor: ['ground'] },
+    });
+
+    // `floor` is not a number, so it is left out rather than sent as NaN.
+    expect(calls[0]!.body).toEqual({ department_id: 12, manager: true });
+  });
+
+  it('sends a form-encoded body', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        update: {
+          method: 'POST',
+          path: '/users/{{anchor}}',
+          bodyFormat: 'form',
+          body: { display_name: '{{attr.displayName}}', active: true },
+        },
+      },
+    });
+    answers = [{ status: 200, body: {} }];
+
+    await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane Doe'] },
+    });
+
+    expect(calls[0]!.headers['content-type']).toBe('application/x-www-form-urlencoded');
+    expect(calls[0]!.body).toBe('display_name=Jane+Doe&active=true');
+  });
+
+  it('refuses a nested form body without sending it', async () => {
+    const document = simple({
+      account: {
+        ...simple().account,
+        update: {
+          method: 'POST',
+          path: '/users/{{anchor}}',
+          bodyFormat: 'form',
+          body: { name: { given: '{{attr.displayName}}' } },
+        },
+      },
+    });
+
+    const result = await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane'] },
+    });
+
+    expect(result).toMatchObject({ ok: false, failure: 'rejected' });
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('finding an account before a create', () => {
+  const withFind = (find: unknown) => simple({ account: { ...simple().account, find } } as never);
+
+  it('asks the search endpoint instead of walking the collection', async () => {
+    answers = [
+      { status: 200, body: { results: [{ id: 'other', login: 'jdoe.smith' }] } },
+      { status: 201, body: { id: 'new' } },
+    ];
+
+    const result = await httpTargetConnector.write(
+      config(withFind({ path: '/users', query: { q: '{{correlationKey}}' }, itemsAt: 'results' })),
+      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true, initialPassword: 'pw-unused' },
+    );
+
+    // A near match from a fuzzy search is not a collision.
+    expect(result).toMatchObject({ ok: true, anchor: 'new' });
+    expect(calls[0]!.url).toBe('https://api.example.com/v1/users?q=jdoe');
+  });
+
+  it('reads a not-found answer as no collision', async () => {
+    answers = [{ status: 404, body: null }, { status: 201, body: { id: 'new' } }];
+
+    const result = await httpTargetConnector.write(
+      config(withFind({ path: '/users/by-login/{{correlationKey}}' })),
+      { op: 'create_account', actionId: 'a1', correlationKey: 'jdoe', attributes: {}, enabled: true, initialPassword: 'pw-unused' },
+    );
+
+    expect(result).toMatchObject({ ok: true, anchor: 'new' });
+  });
+});
+
+describe('failures explained in a 4xx body', () => {
+  it('classifies by message only where the status leaves it rejected', async () => {
+    const document = simple({
+      failures: { error: { messageAt: 'error.message', conflictWhen: ['taken'] } },
+    } as never);
+    answers = [{ status: 422, body: { error: { message: 'login is taken; secret a-secret' } } }];
+
+    const result = await httpTargetConnector.write(config(document), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane'] },
+    });
+
+    expect(result).toMatchObject({ ok: false, failure: 'conflict' });
+    expect(result.message).toMatch(/^the target answered HTTP 422: login is taken/);
+    expect(result.message).not.toContain('a-secret');
+  });
+
+  it('shows only the status when the document names no message', async () => {
+    answers = [{ status: 422, body: { error: { message: 'Initial-Passw0rd! is too short' } } }];
+
+    const result = await httpTargetConnector.write(config(), {
+      op: 'update_account',
+      actionId: 'a1',
+      anchor: 'u1',
+      attributes: { displayName: ['Jane'] },
+    });
+
+    expect(result.message).toBe('the target answered HTTP 422');
+  });
+});
+
+describe('more ways to authenticate', () => {
+  it('sends client credentials as HTTP Basic, with extra token fields', async () => {
+    const document = simple({
+      auth: {
+        type: 'oauth2',
+        tokenUrl: 'https://login.example.com/token',
+        clientId: 'client 1',
+        clientAuth: 'basic',
+        tokenParams: { audience: 'https://api.example.com' },
+      },
+    });
+    answers = [
+      { status: 200, body: { access_token: 'issued', expires_in: 3600 } },
+      { status: 200, body: { items: [] } },
+    ];
+
+    await collect(httpTargetConnector.read(config(document)));
+
+    const exchange = calls[0]!;
+    expect(exchange.headers.authorization).toBe(
+      `Basic ${Buffer.from('client+1:a-secret').toString('base64')}`,
+    );
+    expect(exchange.body).toBe('audience=https%3A%2F%2Fapi.example.com&grant_type=client_credentials');
+  });
+
+  it('refuses a token field Syntra sets itself', () => {
+    const parsed = httpConnectorDocument.safeParse(
+      simple({
+        auth: {
+          type: 'oauth2',
+          tokenUrl: 'https://login.example.com/token',
+          clientId: 'c',
+          tokenParams: { client_secret: 'x' },
+        },
+      }),
+    );
+    expect(parsed.success).toBe(false);
+  });
+
+  it('sends the credential as a query parameter', async () => {
+    answers = [{ status: 200, body: { items: [] } }];
+
+    await collect(
+      httpTargetConnector.read(config(simple({ auth: { type: 'query', param: 'api_key' } }))),
+    );
+
+    expect(new URL(calls[0]!.url).searchParams.get('api_key')).toBe('a-secret');
+    expect(calls[0]!.headers.authorization).toBeUndefined();
+  });
+});
+
+describe('the connection test preview', () => {
+  it('shows mapped accounts, skipped items and fields the document leaves unread', async () => {
+    const document = simple({
+      account: { ...simple().account, exclude: [{ at: 'type', equals: 'service' }] },
+    });
+    answers = [
+      {
+        status: 200,
+        body: {
+          items: [
+            { id: 'u1', login: 'jdoe', displayName: 'Jane', type: 'person', phone: '555' },
+            { id: 'svc', login: 'backup', type: 'service' },
+            { login: 'no-id' },
+          ],
+        },
+      },
+    ];
+
+    const tested = await httpTargetConnector.test(config(document));
+
+    expect(tested.preview).toEqual({
+      accounts: [{ anchor: 'u1', name: 'jdoe', enabled: null, attributes: { displayName: ['Jane'] } }],
+      skipped: 2,
+      unreadFields: ['phone'],
+    });
   });
 });

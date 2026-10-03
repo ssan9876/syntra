@@ -18,7 +18,7 @@ the variables; this page collects them in one place.
 - [Connectors: provisioning into target systems](#connectors-provisioning-into-target-systems)
   — [Active Directory](#active-directory), [Microsoft Entra ID](#microsoft-entra-id),
   [SCIM 2.0](#scim-20-targets), [REST API documents](#rest-api-connector-documents)
-  including [Snipe-IT](#snipe-it), and
+  including [Snipe-IT](#snipe-it) and [Mattermost](#mattermost), and
   [certification and rollout](#connector-certification-capabilities-and-rollout)
 - [Access: signing in, second factors and policy](#access-signing-in-second-factors-and-policy),
   including [signing in to applications](#signing-in-to-applications) and
@@ -1097,22 +1097,61 @@ API — its base URL, authentication, how to list, create, update, enable,
 disable and read back an account, optionally entitlements and containers, and
 how its refusals look. **Target systems → New target → REST API** offers the
 shipped documents as starting points (`GET /api/admin/targets/connector-documents`):
-Snipe-IT, Google Workspace and Microsoft Entra ID. The one you pick is
+Snipe-IT, Mattermost, Google Workspace and Microsoft Entra ID. The one you pick is
 **copied into the target's own configuration** and edited there under *Edit
 the connector document*, so editing one target's never changes another's —
 or changes a plan between its preview and its apply.
 
 - **Authentication** is one of `bearer` (the credential sent as a bearer
   token), `basic` (a username in the document, the password in the vault),
-  `header` (a named header and optional prefix, e.g. `X-Api-Key`), or `oauth2`
-  client credentials (an `https://` token URL, client id and scope in the
-  document, the client secret in the vault). The credential never appears in
-  the document.
+  `header` (a named header and optional prefix, e.g. `X-Api-Key`), `query`
+  (a named query parameter, e.g. `api_key`, for an API that accepts nothing
+  else; URLs end up in proxy logs), or `oauth2` client credentials (an
+  `https://` token URL, client id and scope in the document, the client secret
+  in the vault). `oauth2` takes `clientAuth: "basic"` for a token endpoint
+  that wants the client id and secret as HTTP Basic, and `tokenParams` for
+  extra fields such as Auth0's `audience`. The credential never appears in the
+  document.
+- **Paging** is `none`, `cursor` (a next-page URL or token in the body),
+  `offset` (`limit`/`offset`), `page` (numbered pages; `firstPage` 0 or 1,
+  ending at the first empty page, or at `totalAt`), or `link` (the `Link`
+  header's `rel="next"`). A throttled (`429`) or failed (`5xx`) page is tried
+  up to four times, waiting as long as `Retry-After` says, up to a minute. A
+  read that still fails fails whole; no partial list is used.
+- **Paths** are dotted property names; a number is a list position, so
+  `emails.0.value` reads the first address.
+- **Placeholders**: `{{anchor}}`, `{{correlationKey}}`, `{{actionId}}`,
+  `{{entitlementId}}`, `{{initialPassword}}`, `{{reason}}`, `{{enabled}}` and
+  `{{attr.name}}` (`{{attr.name[]}}` for every value). Add `|number` or
+  `|boolean` to send a typed value: `"{{attr.departmentId|number}}"` sends
+  `12`, not `"12"`. A value with nothing to put in it is left out of the
+  request. Paths, query parameters and per-request `headers` take
+  placeholders too; `{{initialPassword}}` renders only in a body.
+- **Bodies** are JSON, or `"bodyFormat": "form"` for
+  `application/x-www-form-urlencoded` (one flat object).
+- **Accounts**: `enabledWhen` reads enabled state from a field that is not a
+  boolean (`{"at": "delete_at", "equals": "0"}`); `exclude` leaves out bots and
+  service users (`[{"at": "is_bot", "equals": "true"}]`); `find` looks one
+  correlation key up before a create instead of reading every account; and
+  `createsEnabled: true` says the target cannot create a disabled account, so
+  a pre-hire create is followed by the document's `disable`.
 - **Only what the document declares is possible.** A document with no create
   cannot create, and no document can express `DELETE` on an account.
 - **Refusals**: HTTP status lists for unauthorized, not-found, conflict and
-  throttled, and optionally `failures.body` for an API that answers `200` and
-  puts the refusal in the body (Snipe-IT does).
+  throttled; optionally `failures.body` for an API that answers `200` and puts
+  the refusal in the body (Snipe-IT does), and `failures.error` for one that
+  answers `400` or `422` with the reason in the body (Mattermost does).
+  `failures.error` names where the message is (`messageAt`) and which words
+  make it a conflict or not-found; the run then shows the target's message,
+  with the credential, the initial password and token-shaped strings removed.
+- **Test connection** reads the first page and shows up to five accounts as
+  the document maps them, how many were skipped, and the target's fields the
+  document does not read. A schema error in the document is shown under the
+  document with its path, e.g. `account.list.paging.style`.
+- **A saved credential is reused by Test connection** only while the
+  document's `baseUrl` host and its authentication (type, token URL, client
+  id, header or parameter name) are unchanged. Changing either needs the
+  credential typed again.
 - **Naming**: without a `naming` block a correlation key follows Active
   Directory's rule — letters, digits, `.` and `-`, 20 characters. A document
   may allow an email-shaped key instead (Snipe-IT's does).
@@ -1211,6 +1250,62 @@ Snipe-IT's own SP metadata instead picks up the binding as well.
 The document's shapes follow Snipe-IT's API reference and are tested against an
 in-memory Snipe-IT; run a lifecycle simulation and one real create and
 deactivate against a test instance before enabling writes.
+
+### Mattermost
+
+The shipped Mattermost document provisions Mattermost **user accounts** and
+**team membership** through REST API v4:
+
+| Operation | Request | Notes |
+| --- | --- | --- |
+| Read accounts | `GET /api/v4/users?page=N&per_page=200` | Pages from 0, ending at the first empty page. Bots (`is_bot`) are left out. |
+| Look up before a create | `GET /api/v4/users/username/{username}` | `404` means free. |
+| Create | `POST /api/v4/users` | `username`, `email`, `first_name`, `last_name`, `position`, `password` (the run's initial password), and Syntra's marker in `props.syntra_action_id`. |
+| Update | `PUT /api/v4/users/{id}/patch` | `first_name`, `last_name`, `email`, `position`. |
+| Rename | `PUT /api/v4/users/{id}/patch` | `username`. |
+| Disable / enable | `PUT /api/v4/users/{id}/active` | `active: false` / `true`. Enabled state is read from `delete_at` (`0` is active). |
+| Read-back | `GET /api/v4/users/{id}` | |
+| Teams | `GET /api/v4/teams`, `GET /api/v4/teams/{id}/members` | Each team is an entitlement. |
+| Grant / revoke a team | `POST /api/v4/teams/{id}/members`, `DELETE /api/v4/teams/{id}/members/{user}` | Removes the membership only. |
+
+No channels, no archive and no delete. A pre-hire account is created and then
+deactivated, because Mattermost's create always makes an active user.
+
+**Setting it up.**
+
+1. **System Console → Integrations → Integration Management**: turn on
+   **Enable Personal Access Tokens**.
+2. Use a System Admin account, or a bot account given the System Admin role
+   (**Integrations → Bot Accounts**). Syntra needs to read, create and edit
+   users and manage team members.
+3. On that account's **Profile → Security → Personal Access Tokens**, create a
+   token and copy it (it is shown once).
+4. **Target systems → New target → REST API → Mattermost**, and paste the
+   token as **Personal access token**.
+5. **Edit the connector document** and replace `{instance}` in `baseUrl`:
+   `https://chat.example.com/api/v4`.
+6. **Test connection**, and check the first accounts it read.
+
+**Account profile.** Correlation key: Mattermost usernames are 3 to 22
+characters, start with a letter, and use lowercase letters, digits, `.`, `-`
+and `_`; the default naming rule (letters, digits, `.` and `-`, 20
+characters) fits, e.g. `%person.givenName.initial%%person.familyName%`.
+Attributes `givenName`, `familyName`, `mail` (required; Mattermost refuses a
+user with no email) and `title`. The initial password must meet the server's
+password requirements (**System Console → Authentication → Password**).
+
+**Refusals.** A username or email already in use is `400` with
+`An account with that username already exists.`, reported as a conflict with
+Mattermost's own message. Mattermost's API rate limit, when on, answers `429`;
+reads wait and retry, writes are retried by the run.
+
+**Single sign-on.** For SAML sign-in (a Mattermost Enterprise feature), change
+the create body to send `auth_service: "saml"` and `auth_data: "{{attr.mail}}"` instead of
+`password`, under *Edit the connector document*.
+
+The document is tested against an in-memory Mattermost that follows the API
+v4 reference. Run a lifecycle simulation and one real create, team grant and
+deactivate against a test server before enabling writes.
 
 ### Connector certification, capabilities and rollout
 

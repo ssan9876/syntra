@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Alert, Button, Field, Select, Textarea } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
-import { ENTRA_CORRELATION_FIELDS, parseDocument } from './target-form.js';
+import { ENTRA_CORRELATION_FIELDS, credentialLabel, parseDocument } from './target-form.js';
 
 /**
  * Configuring the native Microsoft Entra ID connector.
@@ -130,6 +130,7 @@ export function HttpConnectorFields({
   isNew,
   documentKey,
   documentJson,
+  documentError,
   credential,
   entraTenantId,
   entraClientId,
@@ -142,6 +143,8 @@ export function HttpConnectorFields({
   isNew: boolean;
   documentKey: string;
   documentJson: string;
+  /** Schema errors the API found in the document, one per line. */
+  documentError?: string | undefined;
   credential: string;
   entraTenantId: string;
   entraClientId: string;
@@ -161,8 +164,10 @@ export function HttpConnectorFields({
   const unreadable = documentJson.trim() !== '' && parsed === null;
   const isEntra = documentKey === 'entra-id' || parsed?.name === 'Microsoft Entra ID';
   const isSnipeIt = documentKey === 'snipe-it' || parsed?.name === 'Snipe-IT';
-  // The shipped Snipe-IT document cannot know the instance's host, and a
-  // placeholder left in place fails only at the first connection test.
+  const isMattermost = documentKey === 'mattermost' || parsed?.name === 'Mattermost';
+  // A shipped self-hosted document (Snipe-IT, Mattermost) cannot know the
+  // instance's host, and a placeholder left in place fails only at the first
+  // connection test.
   const hostPlaceholder =
     typeof parsed?.baseUrl === 'string' && parsed.baseUrl.includes('{instance}');
 
@@ -205,7 +210,13 @@ export function HttpConnectorFields({
 
       <Field
         label={
-          isEntra ? 'Application client secret' : isSnipeIt ? 'Personal API key' : 'Client secret'
+          isEntra
+            ? 'Application client secret'
+            : isSnipeIt
+              ? 'Personal API key'
+              : isMattermost
+                ? 'Personal access token'
+                : credentialLabel(parsed)
         }
         name="bindPassword"
         type="password"
@@ -217,7 +228,8 @@ export function HttpConnectorFields({
 
       {hostPlaceholder && (
         <Alert tone="warning">
-          Replace <code>{'{instance}'}</code> in <code>baseUrl</code> with your Snipe-IT host.
+          Replace <code>{'{instance}'}</code> in <code>baseUrl</code> with your{' '}
+          {typeof parsed?.name === 'string' ? parsed.name : 'server'} host.
         </Alert>
       )}
 
@@ -239,7 +251,7 @@ export function HttpConnectorFields({
             onChange={onDocumentChange}
             spellCheck={false}
             rows={20}
-            error={unreadable ? 'That is not valid JSON.' : undefined}
+            error={unreadable ? 'That is not valid JSON.' : documentError}
           />
         )}
         {/* Still said while the box is closed. A document broken and then
@@ -247,6 +259,11 @@ export function HttpConnectorFields({
             say why. */}
         {!showJson && unreadable && (
           <Alert tone="danger">The connector document is not valid JSON.</Alert>
+        )}
+        {!showJson && !unreadable && documentError && (
+          <Alert tone="danger" title="Connector document not valid">
+            <span className="whitespace-pre-line">{documentError}</span>
+          </Alert>
         )}
       </div>
     </div>

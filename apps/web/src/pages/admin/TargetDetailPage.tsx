@@ -37,7 +37,9 @@ import {
   THRESHOLDS,
   configFromForm,
   deletesAccounts,
+  documentIssues,
   formFrom,
+  isDocumentPath,
   skipAdvice,
   validateNumbers,
   type EnforcementMode,
@@ -380,7 +382,11 @@ export function TargetDetailPage() {
   const dirty = draftKey(form) !== draftKey(baseline);
 
   function fail(cause: unknown, fallback: string) {
-    const marked = fieldErrors(cause);
+    // A path inside the connector document names a line of the document, not
+    // a control: `config.document.name` is not the target's Name field.
+    const marked = fieldErrors(cause, (path) => !isDocumentPath(path));
+    const inDocument = cause instanceof ApiError ? documentIssues(cause.problem.errors) : null;
+    if (inDocument !== null) marked.document = inDocument;
     setInvalid(marked);
     if (Object.keys(marked).length > 0) {
       setProblem(null);
@@ -712,6 +718,7 @@ export function TargetDetailPage() {
                 isNew={isNew}
                 documentKey={form.documentKey}
                 documentJson={form.documentJson}
+                documentError={invalid.document}
                 credential={form.bindPassword}
                 entraTenantId={form.entraTenantId}
                 entraClientId={form.entraClientId}

@@ -16,10 +16,14 @@ export { useApiResource, type Resource } from '../../session/use-api-resource.js
  * from one endpoint and `config.url` from another, and the editor is one flat
  * form either way.
  */
-export function fieldErrors(cause: unknown): Record<string, string> {
+export function fieldErrors(
+  cause: unknown,
+  include: (path: string) => boolean = () => true,
+): Record<string, string> {
   if (!(cause instanceof ApiError)) return {};
   const errors: Record<string, string> = {};
   for (const issue of cause.problem.errors ?? []) {
+    if (!include(issue.path ?? '')) continue;
     // Numeric segments are list positions, not controls: `acsUrls.1` is the
     // second line of the ACS box, and keying it as `1` named nothing on
     // screen.

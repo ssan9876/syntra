@@ -1353,3 +1353,120 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     expect(patchBody(fetchMock).ladder).not.toHaveProperty('deleteAfterDays');
   });
 });
+
+describe('TargetDetailPage: REST API documents', () => {
+  const mattermost = {
+    name: 'Mattermost',
+    version: 1,
+    baseUrl: 'https://{instance}/api/v4',
+    auth: { type: 'bearer' },
+    account: { list: { path: '/users' }, anchorAt: 'id' },
+  };
+
+  const withDocuments = (answer: (url: string, init?: RequestInit) => Response | undefined = () => undefined) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      const special = answer(url, init);
+      if (special) return Promise.resolve(special);
+      return Promise.resolve(
+        url.includes('/connector-documents')
+          ? json({ documents: [{ key: 'mattermost', name: 'Mattermost', document: mattermost }] })
+          : json(target()),
+      );
+    });
+
+  it('asks Mattermost for a personal access token and its host', async () => {
+    withDocuments();
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /^mattermost$/i }));
+
+    expect(screen.getByLabelText(/personal access token/i)).toBeInTheDocument();
+    expect(screen.getByText(/with your mattermost host/i)).toBeInTheDocument();
+  });
+
+  it('names the credential after the document’s authentication', async () => {
+    withDocuments();
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /edit the connector document/i }));
+    const editor = screen.getByLabelText(/connector document/i);
+    await userEvent.click(editor);
+    await userEvent.paste(JSON.stringify({ name: 'Other', auth: { type: 'header', header: 'X-Api-Key' } }));
+
+    expect(screen.getByLabelText(/^api key$/i)).toBeInTheDocument();
+  });
+
+  it('shows the accounts a connection test read', async () => {
+    withDocuments((url) =>
+      url.includes('/targets/test')
+        ? json({
+            ok: true,
+            message: 'Connected to Mattermost',
+            preview: {
+              accounts: [
+                {
+                  anchor: 'id0001',
+                  name: 'jdoe',
+                  enabled: true,
+                  attributes: { givenName: ['Jane'], mail: ['jane@example.test'] },
+                },
+                { anchor: 'id0002', name: 'asmith', enabled: null, attributes: {} },
+              ],
+              skipped: 1,
+              unreadFields: ['locale', 'timezone'],
+            },
+          })
+        : undefined,
+    );
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /^mattermost$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+
+    const table = await screen.findByRole('table', { name: 'First accounts read' });
+    const rows = within(table).getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('jdoe');
+    expect(rows[1]).toHaveTextContent('givenName: Jane; mail: jane@example.test');
+    expect(within(rows[2]!).getByText('Not read')).toBeVisible();
+    expect(screen.getByText(/1 skipped/)).toBeVisible();
+    expect(screen.getByText('locale, timezone')).toBeVisible();
+  });
+
+  it('puts a document schema error under the document, with its path there', async () => {
+    withDocuments((url, init) =>
+      init?.method === 'POST' && url.endsWith('/api/admin/targets')
+        ? (new Response(
+            JSON.stringify({
+              title: 'Validation failed',
+              status: 400,
+              errors: [
+                { path: 'config.document.name', message: 'Required' },
+                { path: 'config.document.account.list.paging.style', message: 'Invalid input' },
+              ],
+            }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          ) as never)
+        : undefined,
+    );
+    renderNew();
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^type$/i), 'httpJson');
+    await userEvent.click(await screen.findByRole('button', { name: /^mattermost$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    // Under the document, which is closed, and in the summary at the top.
+    const title = await screen.findByText('Connector document not valid');
+    const alert = title.closest('[role="alert"]') ?? title.parentElement!;
+    expect(alert).toHaveTextContent('account.list.paging.style: Invalid input');
+    expect(alert).toHaveTextContent('name: Required');
+    expect(
+      screen.getByRole('button', { name: /^Connector document: name: Required/ }),
+    ).toBeVisible();
+    // `config.document.name` is the document's name, not the target's.
+    expect(screen.getByLabelText(/^name$/i)).not.toHaveAttribute('aria-invalid', 'true');
+  });
+});
