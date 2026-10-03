@@ -1082,6 +1082,28 @@ describe('TargetDetailPage: Apply renames automatically', () => {
     );
     expect(screen.getByTestId('auto-confirm-renames')).toHaveTextContent(/cannot rename accounts/i);
   });
+
+  describe('Sync passwords from Syntra', () => {
+    it('saves the setting and names the right the bind needs', async () => {
+      const fetchMock = mockTarget({ type: 'activeDirectory' });
+      renderExisting();
+      await userEvent.click(await screen.findByRole('checkbox', { name: /sync passwords from syntra/i }));
+      expect(screen.getByText(/needs the Reset Password right/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
+      );
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+      expect(JSON.parse(String(patch[1]!.body))).toMatchObject({ syncPassword: true });
+    });
+
+    it('is not offered for a target that cannot take a password', async () => {
+      mockTarget({ type: 'httpJson' });
+      renderExisting();
+      await screen.findByDisplayValue('Samba AD');
+      expect(screen.queryByRole('checkbox', { name: /sync passwords from syntra/i })).toBeNull();
+    });
+  });
 });
 
 describe('TargetDetailPage: Mirror org units as OUs', () => {

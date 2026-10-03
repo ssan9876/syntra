@@ -122,6 +122,7 @@ const TARGET_FIELDS = {
   autoConfirmRenames: true,
   mirrorOrgUnits: true,
   orgUnitRootDn: true,
+  syncPassword: true,
   enabled: true,
   enforcementMode: true,
   preHireDays: true,

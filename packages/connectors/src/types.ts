@@ -340,6 +340,29 @@ export interface SourceWriteback<C> {
   deleteObject(config: C, input: DeleteObjectInput): Promise<WritebackResult>;
 }
 
+export interface ResetPasswordInput {
+  anchor: string;
+  /** Never logged, returned, or included in a message. */
+  newPassword: string;
+  /** Ask the target to make the person choose another at next sign-in. */
+  requireChange: boolean;
+}
+
+/**
+ * Setting the password on a provisioned account, with no current password.
+ *
+ * Not a `WriteOperation`, for the reasons given on `WritebackFailure`: one
+ * person, one write, no retry. Called only for a target with `syncPassword`
+ * on, whose bind holds the target's reset right.
+ *
+ * `failure: 'unsupported'` means the target will not take a password for this
+ * account at all (an Entra ID user synced from on-premises AD), and the caller
+ * reports it as skipped.
+ */
+export interface TargetPasswordReset<C> {
+  resetPassword(config: C, input: ResetPasswordInput): Promise<WritebackResult>;
+}
+
 /**
  * A closed set decided by the connector, not a string the run pattern-matches.
  * Only the connector knows whether an LDAP `busy` or an HTTP 429 is worth

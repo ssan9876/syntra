@@ -124,7 +124,7 @@ describe('requestPasswordReset', () => {
     const first = tokenFromMail()!;
     await request('jdoe');
 
-    const outcome = await completePasswordReset(tenantId, transport, {
+    const outcome = await completePasswordReset(tenantId, transport, provider, {
       token: first,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
@@ -253,7 +253,7 @@ describe('preflightPasswordReset', () => {
 
 describe('completePasswordReset', () => {
   const complete = (over: Record<string, unknown> = {}) =>
-    completePasswordReset(tenantId, transport, {
+    completePasswordReset(tenantId, transport, provider, {
       token: tokenFromMail()!,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
@@ -264,7 +264,7 @@ describe('completePasswordReset', () => {
 
   it('sets the new password', async () => {
     await request('jdoe');
-    expect(await complete()).toEqual({ ok: true });
+    expect(await complete()).toEqual({ ok: true, targets: [] });
 
     const credential = await withTenant(tenantId, (tx) =>
       tx.passwordCredential.findUniqueOrThrow({ where: { userId } }),
@@ -294,7 +294,7 @@ describe('completePasswordReset', () => {
       detail: 'too_short',
     });
     // Still usable: a rejected password is the user's typo, not an attack.
-    expect(await complete()).toEqual({ ok: true });
+    expect(await complete()).toEqual({ ok: true, targets: [] });
   });
 
   it('revokes every session', async () => {
@@ -383,14 +383,14 @@ describe('completePasswordReset', () => {
         throw new Error('ECONNREFUSED 127.0.0.1:1025');
       },
     };
-    const outcome = await completePasswordReset(tenantId, dead, {
+    const outcome = await completePasswordReset(tenantId, dead, provider, {
       token: tokenFromMail()!,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
       sourceIp: null,
       now: NOW,
     });
-    expect(outcome).toEqual({ ok: true });
+    expect(outcome).toEqual({ ok: true, targets: [] });
 
     await notificationsSettled();
     const failures = await withTenant(tenantId, (tx) =>
@@ -412,7 +412,7 @@ describe('completePasswordReset with a second factor', () => {
   });
 
   it('refuses without the factor — otherwise reset is a way around MFA', async () => {
-    const outcome = await completePasswordReset(tenantId, transport, {
+    const outcome = await completePasswordReset(tenantId, transport, provider, {
       token: tokenFromMail()!,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
@@ -429,7 +429,7 @@ describe('completePasswordReset with a second factor', () => {
 
   it('refuses a wrong factor without spending the token', async () => {
     const token = tokenFromMail()!;
-    const bad = await completePasswordReset(tenantId, transport, {
+    const bad = await completePasswordReset(tenantId, transport, provider, {
       token,
       newPassword: NEW_PASSWORD,
       factor: { type: 'recovery_code', code: 'ZZZZZ-ZZZZZ' },
@@ -439,7 +439,7 @@ describe('completePasswordReset with a second factor', () => {
     });
     expect(bad).toEqual({ ok: false, reason: 'factor_invalid' });
 
-    const good = await completePasswordReset(tenantId, transport, {
+    const good = await completePasswordReset(tenantId, transport, provider, {
       token,
       newPassword: NEW_PASSWORD,
       factor: { type: 'recovery_code', code: codes[0]! },
@@ -447,11 +447,11 @@ describe('completePasswordReset with a second factor', () => {
       sourceIp: null,
       now: NOW,
     });
-    expect(good).toEqual({ ok: true });
+    expect(good).toEqual({ ok: true, targets: [] });
   });
 
   it('accepts a valid factor and spends it', async () => {
-    const outcome = await completePasswordReset(tenantId, transport, {
+    const outcome = await completePasswordReset(tenantId, transport, provider, {
       token: tokenFromMail()!,
       newPassword: NEW_PASSWORD,
       factor: { type: 'recovery_code', code: codes[0]! },
@@ -459,7 +459,7 @@ describe('completePasswordReset with a second factor', () => {
       sourceIp: null,
       now: NOW,
     });
-    expect(outcome).toEqual({ ok: true });
+    expect(outcome).toEqual({ ok: true, targets: [] });
 
     const spent = await withTenant(tenantId, (tx) =>
       tx.recoveryCode.count({ where: { userId, usedAt: { not: null } } }),
@@ -492,7 +492,7 @@ describe('issuePasswordSetup', () => {
     expect(issued.ok).toBe(true);
     if (!issued.ok) return;
 
-    const outcome = await completePasswordReset(tenantId, transport, {
+    const outcome = await completePasswordReset(tenantId, transport, provider, {
       token: issued.token,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
@@ -525,7 +525,7 @@ describe('issuePasswordSetup', () => {
     );
     if (!first.ok || !second.ok) throw new Error('expected ok');
 
-    const dead = await completePasswordReset(tenantId, transport, {
+    const dead = await completePasswordReset(tenantId, transport, provider, {
       token: first.token,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,
@@ -534,7 +534,7 @@ describe('issuePasswordSetup', () => {
     });
     expect(dead).toEqual({ ok: false, reason: 'invalid_token' });
 
-    const live = await completePasswordReset(tenantId, transport, {
+    const live = await completePasswordReset(tenantId, transport, provider, {
       token: second.token,
       newPassword: NEW_PASSWORD,
       relyingParty: RP,

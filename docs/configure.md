@@ -776,7 +776,10 @@ source → Write-back** has four switches, all off until somebody turns them on:
 and performs the standard LDAP change on their own object. The bind account is
 not involved, so do not grant it *Reset Password* across the user OU: a
 credential that can reset any password is an account-takeover primitive in a
-vault, and nothing here needs it. The domain's policy applies on top of the
+vault, and nothing here needs it. (A *target* with
+[password sync](#syncing-passwords-to-active-directory-and-entra-id) on is the
+one place that right is required, and turning it on is that decision.) The
+domain's policy applies on top of the
 tenant's — minimum password age (one day by default), history and complexity
 — and a refusal says the directory refused it. A domain controller that cannot
 be reached refuses the change; it is never applied locally alone.
@@ -1058,6 +1061,59 @@ refused unless `ENTRA_DISPOSABLE_TENANT=yes`, also creates a user
 the same action id (expecting the same anchor), updates it, grants and revokes
 each group in `ENTRA_TEST_GROUP_IDS`, and disables it — never deleting it. The
 evidence is written to `test-results/entra-evidence-<timestamp>.json`.
+
+### Syncing passwords to Active Directory and Entra ID
+
+**Target → Sync passwords from Syntra** (`syncPassword`, off by default) sets a
+person's new Syntra password on their account at that target, every time it is
+set in Syntra:
+
+| Where the password is set | Must change at next sign-in on the target |
+|---|---|
+| Self-service change on **Security** | no |
+| Forgot-password reset | no |
+| Renewal of an expired password at sign-in | no |
+| An administrator's **Set password** on the account | yes, except for a service account |
+
+It reaches the accounts of the user's linked person (`User.personId`) that are
+`active` or `disabled` at an enabled target with the setting on. A user with no
+person, and a pending, archived or deleted account, is left alone.
+
+**The order, and what a refusal does.** Active Directory targets are written
+first, then Entra ID, one at a time, before Syntra's own hash. If the first
+target written refuses the password under its own policy, nothing is changed
+anywhere and the person is told which target refused it; a reset link stays
+usable. Once one target holds the new password, Syntra commits, and any later
+failure is shown to the person and recorded as `auth.password_sync_failed`. A
+target that cannot be reached never blocks the change. Every write is audited
+as `auth.password_synced` or `auth.password_sync_failed`, with the target and
+the trigger and never the password. A target with external writes paused, or
+on an adapter past its deprecation date, is skipped.
+
+**What the credential needs.** Setting a password without the old one is a
+reset, and the target's credential must hold the reset right:
+
+- **Active Directory:** *Reset Password* on the user objects in the target's
+  base DN, over LDAPS or StartTLS:
+
+  ```powershell
+  dsacls "OU=Syntra,DC=example,DC=local" /I:S /G "EXAMPLE\svc-syntra:CA;Reset Password;user"
+  dsacls "OU=Syntra,DC=example,DC=local" /I:S /G "EXAMPLE\svc-syntra:WP;pwdLastSet;user"
+  ```
+
+  The domain's complexity and history rules apply; minimum password age does
+  not, as for any reset.
+- **Entra ID:** the application permission `User-PasswordProfile.ReadWrite.All`
+  with admin consent. A user synced from on-premises AD
+  (`onPremisesSyncEnabled`) is skipped: Graph refuses the write, and their
+  password reaches Entra ID from AD through password hash sync. Turn sync on
+  for the AD target instead. Graph refuses to reset an administrator's password
+  unless the application also holds a role that may reset it.
+
+A credential with reset rights can take over every account it covers, so keep
+the scope to the OUs Syntra manages, and treat the vault and its master key
+accordingly. When a user's directory source writes passwords back (above), a
+target paired with that source is not written a second time.
 
 ### SCIM 2.0 targets
 

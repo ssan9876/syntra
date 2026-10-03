@@ -396,6 +396,7 @@ export async function buildApp(
   await app.register(registerPasswordResetRoutes, {
     prefix: '/api/auth/password-reset',
     transport,
+    keyProvider,
     publicUrl: config.publicUrl,
     authRateLimitMax: config.authRateLimitMax,
     authRateLimitTenantMax: config.authRateLimitTenantMax,

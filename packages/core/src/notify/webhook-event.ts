@@ -135,6 +135,8 @@ export const WEBHOOK_EVENT_GROUPS = {
       'mfa.recovery_codes_issued',
       'auth.password_changed',
       'auth.password_renewed',
+      'auth.password_synced',
+      'auth.password_sync_failed',
       'auth.password_setup_issued',
       'auth.forced_enrolment_completed',
       'session.revoked',

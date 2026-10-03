@@ -11,6 +11,7 @@ import {
   preflightPasswordReset,
   requestPasswordReset,
   userForResetToken,
+  type MasterKeyProvider,
   type Transport,
 } from '@syntra/core';
 import { ProblemError } from '../plugins/problem-json.js';
@@ -20,6 +21,8 @@ import { tenantRelyingParty } from './relying-party.js';
 
 export interface PasswordResetRouteOptions {
   transport: Transport;
+  /** Opens target credentials when the new password is synced to targets. */
+  keyProvider: MasterKeyProvider;
   publicUrl: string;
   /** Attempts per minute, per tenant per address. */
   authRateLimitMax: number;
@@ -127,7 +130,7 @@ export async function registerPasswordResetRoutes(
           ? ({ type: 'webauthn', assertion: body.factor.assertion } as const)
           : ({ type: body.factor.type, code: body.factor.code } as const);
 
-    const outcome = await completePasswordReset(request.tenantId, options.transport, {
+    const outcome = await completePasswordReset(request.tenantId, options.transport, options.keyProvider, {
       token: body.token,
       newPassword: body.newPassword,
       ...(factor === undefined ? {} : { factor }),
@@ -148,6 +151,10 @@ export async function registerPasswordResetRoutes(
         'That password does not meet the policy',
         passwordRejectionMessage(outcome.detail),
       );
+    }
+    if (outcome.reason === 'target_policy') {
+      // The link is still usable, as for `reused`: the password is the problem.
+      throw new ProblemError(400, 'target-password-policy', 'Password refused', outcome.message);
     }
     if (outcome.reason === 'factor_required') {
       throw new ProblemError(

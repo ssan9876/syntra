@@ -62,6 +62,7 @@ export * from './auth/password-policy.js';
 export * from './auth/refresh-token.js';
 export * from './auth/password-change.js';
 export * from './auth/password-reset.js';
+export * from './auth/password-sync.js';
 // Everything except the two user-wide revokes: `endSessions` is the only way
 // to end a user's sessions, because ending them without revoking the refresh
 // tokens and telling the relying parties is the defect this whole slice

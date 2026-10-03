@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Alert, Button, Field, Panel } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
+import { passwordSyncProblems, type PasswordSyncTarget } from './password-sync.js';
 
 interface ChangeResult {
   ok: true;
   otherSessionsRevoked: number;
+  targets?: PasswordSyncTarget[];
 }
 
 /**
@@ -31,6 +33,7 @@ export function PasswordPanel() {
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<Record<string, string>>({});
   const [done, setDone] = useState<string | null>(null);
+  const [syncProblems, setSyncProblems] = useState<string[]>([]);
 
   const mismatch = confirm !== '' && next !== confirm;
   const ready = current !== '' && next !== '' && confirm !== '' && !mismatch;
@@ -43,6 +46,7 @@ export function PasswordPanel() {
     setError(null);
     setFieldError({});
     setDone(null);
+    setSyncProblems([]);
 
     try {
       const result = await api<ChangeResult>('/api/auth/password', {
@@ -64,6 +68,7 @@ export function PasswordPanel() {
             } signed out.`
           : 'Password changed.',
       );
+      setSyncProblems(passwordSyncProblems(result.targets));
     } catch (cause) {
       if (cause instanceof ApiError) {
         // `detail` is the sentence the server wrote for this exact refusal;
@@ -89,6 +94,13 @@ export function PasswordPanel() {
     >
       <form onSubmit={submit} className="space-y-4">
         {done && <Alert tone="success">{done}</Alert>}
+        {syncProblems.length > 0 && (
+          <Alert tone="warning">
+            {syncProblems.map((line) => (
+              <span key={line} className="block">{line}</span>
+            ))}
+          </Alert>
+        )}
         {error && <Alert tone="danger">{error}</Alert>}
 
         <Field

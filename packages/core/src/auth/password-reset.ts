@@ -10,6 +10,12 @@ import { hashPassword, setPasswordHash } from './password.js';
 import { passwordWasUsedBefore } from './password-ageing.js';
 import { validateNewPassword } from './password-policy.js';
 import { endSessions } from './end-sessions.js';
+import {
+  pushPasswordToTargets,
+  recordPasswordSyncDesync,
+  type PasswordSyncResult,
+} from './password-sync.js';
+import type { MasterKeyProvider } from '../vault/master-key.js';
 import { enrolledFactorTypes, hasRecoveryCodes, verifyFactor } from './mfa/registry.js';
 import type { RelyingParty } from './mfa/relying-party.js';
 import type { FactorPresentation } from './mfa/types.js';
@@ -405,12 +411,14 @@ export interface CompleteResetInput {
 }
 
 export type ResetOutcome =
-  | { ok: true }
+  | { ok: true; targets: PasswordSyncResult[] }
   | {
       ok: false;
       reason: 'invalid_token' | 'factor_required' | 'factor_invalid' | 'weak_password';
       detail?: string;
     }
+  /** The first target written refused the new password. The link still works. */
+  | { ok: false; reason: 'target_policy'; message: string }
   /**
    * One of the last `depth` passwords this user retired.
    *
@@ -434,6 +442,7 @@ export type ResetOutcome =
 export async function completePasswordReset(
   tenantId: string,
   transport: Transport,
+  provider: MasterKeyProvider,
   input: CompleteResetInput,
 ): Promise<ResetOutcome> {
   const now = input.now ?? new Date();
@@ -510,18 +519,40 @@ export async function completePasswordReset(
   // transaction opens, rather than inside one.
   const hash = await hashPassword(input.newPassword);
 
-  // Spending the token, changing the password and revoking everything derived
-  // from the old one are one transaction. Consuming first, in the same
-  // statement that checks the token is still live, is what makes a double
-  // submission safe: PostgreSQL serialises the two updates on the row and the
-  // loser sees zero rows changed, so it returns before writing anything.
-  const applied = await withTenant(tenantId, async (tx) => {
-    const consumed = await tx.passwordResetToken.updateMany({
+  // The token is spent FIRST, in the statement that checks it is still live,
+  // which is what makes a double submission safe: PostgreSQL serialises the
+  // two updates on the row and the loser sees zero rows changed, so it returns
+  // before writing anything -- here or at any target.
+  const claimed = await withTenant(tenantId, (tx) =>
+    tx.passwordResetToken.updateMany({
       where: { id: context.tokenId, consumedAt: null },
       data: { consumedAt: now },
-    });
-    if (consumed.count !== 1) return false;
+    }),
+  );
+  if (claimed.count !== 1) return { ok: false, reason: 'invalid_token' };
 
+  const synced = await pushPasswordToTargets(tenantId, provider, {
+    userId: context.user.id,
+    newPassword: input.newPassword,
+    requireChange: false,
+    actorUserId: context.user.id,
+    sourceIp: input.sourceIp,
+    trigger: 'reset',
+  });
+  if (!synced.ok) {
+    // Nothing changed anywhere, so the link is handed back for another try.
+    await withTenant(tenantId, (tx) =>
+      tx.passwordResetToken.updateMany({
+        where: { id: context.tokenId, consumedAt: now },
+        data: { consumedAt: null },
+      }),
+    );
+    return { ok: false, reason: 'target_policy', message: synced.rejectedBy.message };
+  }
+
+  // Changing the password and revoking everything derived from the old one
+  // are one transaction.
+  await withTenant(tenantId, async (tx) => {
     await setPasswordHash(tx, context.user.id, hash, { now });
     await endSessions(tx, context.user.id, {
       trigger: 'password_reset',
@@ -536,10 +567,15 @@ export async function completePasswordReset(
       sourceIp: input.sourceIp,
       payload: { factorPresented: input.factor?.type ?? null },
     });
-    return true;
+  }).catch(async (cause: unknown) => {
+    await recordPasswordSyncDesync(
+      tenantId,
+      { userId: context.user.id, actorUserId: context.user.id, sourceIp: input.sourceIp },
+      synced.results,
+      cause,
+    );
+    throw cause;
   });
-
-  if (!applied) return { ok: false, reason: 'invalid_token' };
 
   // Queued, not awaited: the reset has committed, and a mail server that is
   // down must not turn a completed password change into a 500 for the user who
@@ -552,5 +588,5 @@ export async function completePasswordReset(
     { tenantId, userId: context.user.id, purpose: 'password-changed' },
   );
 
-  return { ok: true };
+  return { ok: true, targets: synced.results };
 }

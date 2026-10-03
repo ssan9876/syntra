@@ -25,13 +25,18 @@ import type {
   ConnectionResult,
   ConnectorRight,
   DiscoveredEntitlement,
+  ResetPasswordInput,
   SchemaDescriptor,
   SourceRecord,
   TargetConnector,
+  TargetPasswordReset,
+  WritebackFailure,
+  WritebackResult,
   WriteFailure,
   WriteOperation,
   WriteResult,
 } from '../types.js';
+import { classifyWritebackError } from '../ldap/writeback.js';
 import {
   adTargetConfigSchema,
   type AdTargetConfig,
@@ -1627,6 +1632,54 @@ export const adTargetConnector: TargetConnector<Config> = {
         message: cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
         failure: classifyLdapError(cause),
       };
+    } finally {
+      await client?.unbind().catch(() => undefined);
+    }
+  },
+};
+
+const RESET_MESSAGE: Record<WritebackFailure, string> = {
+  wrong_password: 'the bind was refused',
+  policy: 'the directory refused the new password: it does not meet the domain password policy',
+  unauthorized: 'the bind lacks the Reset Password right on this account',
+  not_found: 'no account at this anchor',
+  unsupported: 'this account cannot take a password',
+  transient: 'the directory could not be reached',
+};
+
+function resetFailure(failure: WritebackFailure): WritebackResult {
+  // A refused bind here is the SERVICE account's credential, never the
+  // person's: there is no current password on this path.
+  const mapped = failure === 'wrong_password' ? 'unauthorized' : failure;
+  return { ok: false, failure: mapped, message: RESET_MESSAGE[mapped] };
+}
+
+/**
+ * The administrative reset form: bind as the service account and `replace
+ * unicodePwd`, with `pwdLastSet = 0` when the person must choose another.
+ *
+ * Needs the Reset Password extended right on the account, which `write` does
+ * not. Only reached for a target with `syncPassword` on. The directory's own
+ * diagnostic text is classified and dropped, never returned.
+ */
+export const adPasswordReset: TargetPasswordReset<Config> = {
+  async resetPassword(rawConfig, input: ResetPasswordInput): Promise<WritebackResult> {
+    const config = normalise(rawConfig);
+    let client: Client | undefined;
+    try {
+      client = await connect(config);
+      const found = await findByAnchor(client, config, input.anchor);
+      if (!found) return resetFailure('not_found');
+      await client.modify(
+        found.dn,
+        initialPasswordChanges({
+          initialPassword: input.newPassword,
+          requirePasswordChange: input.requireChange,
+        }),
+      );
+      return { ok: true, message: 'password set' };
+    } catch (cause) {
+      return resetFailure(classifyWritebackError(cause));
     } finally {
       await client?.unbind().catch(() => undefined);
     }

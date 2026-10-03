@@ -274,6 +274,12 @@ export const updateTargetRequestSchema = createTargetRequestSchema
      * anything else must sit below it (422 `invalid-org-unit-root`).
      */
     orgUnitRootDn: z.string().max(1024).nullable().optional(),
+    /**
+     * Push a person's new Syntra password to their account on this target
+     * whenever it is set. Active Directory and Entra ID only (422
+     * `sync-password-unsupported`). The bind needs the target's reset right.
+     */
+    syncPassword: z.boolean().optional(),
   })
   .strict();
 export type UpdateTargetRequest = z.input<typeof updateTargetRequestSchema>;

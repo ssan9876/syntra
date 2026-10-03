@@ -91,6 +91,14 @@ const CONNECTION_FIELDS = new Set([
 ]);
 const ENFORCEMENT_FIELDS = new Set(['schedule', 'enforcementMode', 'maxAttempts']);
 const MIRROR_FIELDS = new Set(['mirrorOrgUnits', 'orgUnitRootDn']);
+
+/** What the bind needs once "Sync passwords from Syntra" is on. */
+const PASSWORD_RESET_RIGHT: Record<string, string> = {
+  activeDirectory: 'The bind account needs the Reset Password right on the user OUs.',
+  entraId: 'The app needs User-PasswordProfile.ReadWrite.All with admin consent.',
+};
+
+const syncsPasswords = (type: string): boolean => type in PASSWORD_RESET_RIGHT;
 const LADDER_FIELDS = new Set([
   'preHireDays', 'entitlementRevocationDelayDays', 'disableGraceDays',
   'archiveAfterDays', 'deleteAfterDays', 'reenableWithoutConfirmationDays',
@@ -469,6 +477,7 @@ export function TargetDetailPage() {
           await api(`/api/admin/targets/${created.id}`, {
             method: 'PATCH',
             body: JSON.stringify({
+              ...(syncsPasswords(form.type) ? { syncPassword: form.syncPassword } : {}),
               preHireDays: n.preHireDays,
               maxAttempts: n.maxAttempts,
               ladder: {
@@ -511,6 +520,7 @@ export function TargetDetailPage() {
           schedule: form.schedule.trim() === '' ? null : form.schedule.trim(),
           autoApply: form.autoApply,
           autoConfirmRenames: form.autoConfirmRenames,
+          ...(syncsPasswords(form.type) ? { syncPassword: form.syncPassword } : {}),
           // Sent only where there are OUs to mirror into: the server refuses
           // `true` anywhere else, and a flat target has nothing to say here.
           ...(data?.placesAccountsInContainers === false
@@ -953,6 +963,16 @@ export function TargetDetailPage() {
               renameEnabled={form.renameEnabled}
               onChange={(v) => set('autoConfirmRenames', v)}
             />
+            {syncsPasswords(form.type) && (
+              <Check
+                className="sm:col-span-2"
+                name="syncPassword"
+                checked={form.syncPassword}
+                onChange={(v) => set('syncPassword', v)}
+                label="Sync passwords from Syntra"
+                warning={form.syncPassword ? PASSWORD_RESET_RIGHT[form.type] : undefined}
+              />
+            )}
             <Field
               label="Maximum attempts per action"
               name="maxAttempts"
