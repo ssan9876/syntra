@@ -6,7 +6,7 @@ import {
 } from '@simplewebauthn/server';
 import type {
   AuthenticationResponseJSON,
-  AuthenticatorTransportFuture,
+  AuthenticatorTransport,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
   RegistrationResponseJSON,
@@ -104,7 +104,7 @@ export async function beginWebAuthnRegistration(
     // authenticators; excluding them makes the browser say so instead.
     excludeCredentials: existing.map((row) => ({
       id: row.credentialId,
-      transports: row.transports as AuthenticatorTransportFuture[],
+      transports: row.transports as AuthenticatorTransport[],
     })),
     attestationType: 'none',
     authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
@@ -186,7 +186,7 @@ export async function beginWebAuthnAuthentication(
     rpID: rp.id,
     allowCredentials: credentials.map((row) => ({
       id: row.credentialId,
-      transports: row.transports as AuthenticatorTransportFuture[],
+      transports: row.transports as AuthenticatorTransport[],
     })),
     userVerification: 'preferred',
   });
@@ -296,7 +296,7 @@ export function webauthnVerifier(): FactorVerifier {
             // wants a number. Exact well past uint32, so the conversion cannot
             // lose a step.
             counter: Number(row.counter),
-            transports: row.transports as AuthenticatorTransportFuture[],
+            transports: row.transports as AuthenticatorTransport[],
           },
           requireUserVerification: false,
         });
