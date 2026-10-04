@@ -29,12 +29,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: gitleaks/gitleaks-action@v3
-        # Keep the expression out of a YAML flow mapping. The two closing
-        # braces are otherwise parsed as mapping delimiters, so GitHub rejects
-        # the whole workflow before creating even one job.
+      # The gitleaks CLI directly: gitleaks-action needs a paid license on a
+      # repository owned by an organization. Pinned by version and checksum.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.24.3
+          GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+        run: |
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+          rm gitleaks.tar.gz
+      # Whole history, every run. Fixtures are allowlisted in .gitleaks.toml.
+      - name: Scan history
+        run: $RUNNER_TEMP/gitleaks git --redact --verbose --exit-code 1 .
 
   dependencies:
     name: Dependency vulnerabilities
