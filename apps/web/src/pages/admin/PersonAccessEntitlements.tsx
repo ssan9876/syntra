@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Field, FilterBar, FilterChips, Segmented, Status, Table, type ActiveFilter } from '@syntra/ui';
+import type { PersonExclusion } from './PersonAccessExclusion.js';
 
 /**
  * One rule that asks for a holding **today**, with the contract of this person
@@ -48,6 +49,8 @@ export interface Holding {
 
 export interface Access {
   personId: string;
+  /** The targets this person is left out of, with or without an account there. */
+  exclusions?: PersonExclusion[];
   accounts: {
     targetSystemId: string;
     targetName: string;

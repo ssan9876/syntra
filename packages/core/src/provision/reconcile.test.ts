@@ -1280,3 +1280,39 @@ describe('Ruling P9, narrowed', () => {
     expect([...result.containersToCreate]).toHaveLength(1);
   });
 });
+
+describe('reconcile — a person left out of the target', () => {
+  const leftOut = new Set(['person-1']);
+
+  it('records no drift and holds nothing revocable for their account', () => {
+    const result = run({
+      leftOut,
+      enforcementMode: 'authoritative',
+      known: [known({ status: 'disabled' })],
+      objects: [object({ entitlementIds: ['ent-finance', 'ent-teaching'] })],
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.extraUnprocessable.size).toBe(0);
+    const state = result.actual.get('person-1')!;
+    expect(state.accountId).toBe('account-1');
+    expect(state.existsAtTarget).toBe(true);
+    expect([...state.heldWithinRemit]).toEqual([]);
+    expect([...state.heldEntitlements]).toEqual([]);
+  });
+
+  it('does not report their account as an orphan', () => {
+    const result = run({ leftOut });
+    expect(result.findings.filter((f) => f.kind === 'orphan_account')).toEqual([]);
+  });
+
+  it('does not refuse them for a conflict or a missing container', () => {
+    const result = run({
+      leftOut,
+      known: [known({ status: 'conflict', anchor: null })],
+      objects: [],
+      existingContainers: new Set(),
+    });
+    expect(result.extraUnprocessable.size).toBe(0);
+    expect(result.findings).toEqual([]);
+  });
+});

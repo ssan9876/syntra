@@ -78,6 +78,8 @@ export async function pushPasswordToTargets(
           ...(input.excludePairedSourceId
             ? { NOT: { pairedDirectorySourceId: input.excludePairedSourceId } }
             : {}),
+          // A target this person is left out of manages nothing of theirs.
+          personExclusions: { none: { personId: user.personId } },
         },
       },
       select: {

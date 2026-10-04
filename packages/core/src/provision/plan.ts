@@ -136,8 +136,21 @@ export interface PlanInput {
    * rule.
    */
   revocationOrders: readonly RevocationOrderFacts[];
+  /**
+   * People left out of this target (`TargetPersonExclusion`). Nothing is
+   * proposed for their account. Their Syntra sign-ins are still deactivated
+   * and reactivated with their employment: a login is not an account on the
+   * target. Absent means nobody.
+   */
+  leftOut?: ReadonlySet<string>;
   now: Date;
 }
+
+/** The only actions planned for a person left out of the target. */
+export const SYNTRA_LOGIN_ACTIONS: ReadonlySet<ProvisionActionType> = new Set([
+  'deactivate_syntra_user',
+  'reactivate_syntra_user',
+]);
 
 /**
  * Attribute names, folded.
@@ -342,10 +355,16 @@ export function planActions(input: PlanInput): PlannedAction[] {
     const attributedFor = (entitlementId: string) =>
       (state.attribution.get(entitlementId) ?? []).map((a) => a.ruleId);
 
+    const leftOut = input.leftOut?.has(personId) ?? false;
+
     const push = (
       actionType: ProvisionActionType,
       over: Partial<PlannedAction> = {},
     ) => {
+      // Filtered here, at the one place every per-person action passes
+      // through, so no branch above can propose a write for them by forgetting
+      // to check.
+      if (leftOut && !SYNTRA_LOGIN_ACTIONS.has(actionType)) return;
       actions.push({
         actionType,
         personId,

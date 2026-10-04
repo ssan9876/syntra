@@ -109,6 +109,7 @@ An erasure finds rows through each table's *subject links* and then, per table, 
 | `SweepException` | person: `personId` | pseudonymize | The message can name the person and is replaced. |
 | `SyncChange` | any: `targetId` | pseudonymize | Kept as the record of what a sync did; the before and after values are cleared. |
 | `TargetAccount` | person: `personId` | pseudonymize | Accounts are disabled or archived before an erasure. The login Syntra generated and the attributes it last wrote are replaced; the target's immutable object id is kept so a later run recognises the account. The copy in the target system itself must be erased there, unless the target's `deleteAfterDays` has already deleted it (Active Directory and Entra ID only). |
+| `TargetPersonExclusion` | person: `personId`; user: `createdByUserId` | retain | That a person is left out of one target, who decided it and why. Kept through an erasure: removing it would hand the person back to the business rules and create an account for them. |
 | `TotpCredential` | user: `userId` | delete | Credential material; the vault secret it names is deleted with it. |
 | `UpstreamLink` | user: `userId` | pseudonymize | The upstream provider's subject identifier is replaced by a pseudonym so the binding can no longer be used to recognise the person. |
 | `User` | person: `personId` | pseudonymize | Accounts are deactivated before an erasure and kept afterwards (deactivate, never delete); login, email and display name are replaced by pseudonyms. The directory anchor is kept so a directory sync recognises the account and the restriction refuses its changes. |
@@ -778,6 +779,21 @@ Linked to a data subject by person: `personId`. Erasure: **pseudonymize** -- Acc
 | `lastAppliedAttributes` | operational | cleared |  |
 | `createdAt` | operational | retained |  |
 | `updatedAt` | operational | retained |  |
+
+Not personal data: `tenantId`.
+
+#### `TargetPersonExclusion`
+
+Linked to a data subject by person: `personId`; user: `createdByUserId`. Erasure: **retain** -- That a person is left out of one target, who decided it and why. Kept through an erasure: removing it would hand the person back to the business rules and create an account for them.
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `id` | identity | retained |  |
+| `targetSystemId` | operational | retained |  |
+| `personId` | identity | retained |  |
+| `reason` | operational | retained |  |
+| `createdByUserId` | identity | retained |  |
+| `createdAt` | operational | retained |  |
 
 Not personal data: `tenantId`.
 

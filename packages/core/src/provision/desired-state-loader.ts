@@ -5,6 +5,7 @@ import { conditionSchema } from './condition.js';
 import { desiredState } from './desired.js';
 import type { ContractFacts, GrantFacts, PersonFacts, RuleFacts } from './types.js';
 import { verifiedEmailDomains } from '../tenant/email-domains.js';
+import { listPersonExclusions } from './exclusion-service.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -49,6 +50,11 @@ export interface PersonTargetProjection {
   } | null;
   notYetStarted: boolean;
   unprocessable: { kind: string; message: string } | null;
+  /**
+   * Why the person is left out of this target, or null. When set, `desired`
+   * is null: no rule is evaluated and nothing is proposed for the account.
+   */
+  leftOut: string | null;
   /** The account Syntra has recorded for this person here, if any. */
   held: {
     accountId: string;
@@ -115,8 +121,9 @@ export async function projectPersonOnTargets(
   options: ProjectionOptions = {},
 ): Promise<PersonTargetProjection[]> {
   const now = options.now ?? new Date();
-  const { person, contracts, targets, users } = await withTenant(tenantId, async (tx) => ({
+  const { person, contracts, targets, users, exclusions } = await withTenant(tenantId, async (tx) => ({
     users: await tx.user.findMany({ where: { personId }, select: { id: true } }),
+    exclusions: await listPersonExclusions(tx, personId),
     person: await tx.person.findUniqueOrThrow({ where: { id: personId } }),
     contracts: await tx.contract.findMany({ where: { personId }, orderBy: { sequence: 'asc' } }),
     targets: await tx.targetSystem.findMany({
@@ -167,10 +174,13 @@ export async function projectPersonOnTargets(
     options.contractOverride,
   );
 
+  const leftOut = new Map(exclusions.map((e) => [e.targetSystemId, e.message]));
   const projections: PersonTargetProjection[] = [];
   for (const target of targets) {
     projections.push(
-      await withTenant(tenantId, (tx) => projectOne(tx, target, facts, contractFacts, person.orgUnitId, now)),
+      await withTenant(tenantId, (tx) =>
+        projectOne(tx, target, facts, contractFacts, person.orgUnitId, now, leftOut.get(target.id) ?? null),
+      ),
     );
   }
   return projections;
@@ -197,6 +207,7 @@ async function projectOne(
   contracts: ContractFacts[],
   orgUnitId: string | null,
   now: Date,
+  leftOut: string | null,
 ): Promise<PersonTargetProjection> {
   const ladder = {
     preHireDays: target.preHireDays,
@@ -269,7 +280,20 @@ async function projectOne(
     held,
     entitlements,
     ladder,
+    leftOut,
   };
+
+  // Ahead of every rule: nothing is evaluated for somebody left out.
+  if (leftOut !== null) {
+    return {
+      ...base,
+      hasProfile: profile !== null,
+      desired: null,
+      notYetStarted: false,
+      unprocessable: null,
+      catalogUnverified: false,
+    };
+  }
 
   if (!profile) {
     return {
@@ -378,6 +402,8 @@ export interface AccessDelta {
   remove: { entitlementId: string; displayName: string; privileged: boolean }[];
   unverified: boolean;
   unprocessable: { kind: string; message: string } | null;
+  /** Why the person is left out of this target, or null. Nothing changes there when set. */
+  leftOut: string | null;
 }
 
 /**
@@ -386,6 +412,20 @@ export interface AccessDelta {
  * removal; in authoritative mode everything the account holds is.
  */
 export function accessDeltaFor(projection: PersonTargetProjection): AccessDelta {
+  if (projection.leftOut !== null) {
+    return {
+      targetSystemId: projection.targetSystemId,
+      targetName: projection.targetName,
+      accountStatus: projection.held?.status ?? 'absent',
+      account: 'none',
+      add: [],
+      retain: [],
+      remove: [],
+      unverified: false,
+      unprocessable: null,
+      leftOut: projection.leftOut,
+    };
+  }
   const name = (id: string) => {
     const facts = projection.entitlements.get(id);
     return {
@@ -428,5 +468,6 @@ export function accessDeltaFor(projection: PersonTargetProjection): AccessDelta 
     remove,
     unverified: projection.catalogUnverified,
     unprocessable: projection.unprocessable,
+    leftOut: null,
   };
 }

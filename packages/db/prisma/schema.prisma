@@ -193,6 +193,7 @@ model Tenant {
   authPolicyRules           AuthPolicyRule[]
   applications              Application[]
   accountPlacements         AccountPlacement[]
+  targetPersonExclusions    TargetPersonExclusion[]
   orgUnitContainers         OrgUnitContainer[]
   appAssignments            AppAssignment[]
   emailOtpCredentials       EmailOtpCredential[]
@@ -505,6 +506,7 @@ model Person {
   provisionReceipts   PersonProvisionReceipt[]
   lifecycleOperations LifecycleOperation[]
   placements          AccountPlacement[]
+  targetExclusions    TargetPersonExclusion[]
   duplicateReviewCandidates PersonDuplicateReview[]
   sourceLinks PersonSourceLink[]
 
@@ -1285,6 +1287,31 @@ model AccountPlacement {
   @@unique([personId, targetSystemId])
   @@index([tenantId])
   @@index([targetSystemId])
+}
+
+/// One person left out of one target: Provision creates nothing for them
+/// there and stops managing the account they have, whatever the business
+/// rules say. Rules are additive and match contracts, so they cannot name one
+/// person; this row can, and it wins over every rule.
+///
+/// The account row is kept as it is. Deleting this row hands the person back
+/// to the rules on the next run.
+model TargetPersonExclusion {
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @db.Uuid
+  tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetSystemId  String       @db.Uuid
+  targetSystem    TargetSystem @relation(fields: [targetSystemId], references: [id], onDelete: Cascade)
+  personId        String       @db.Uuid
+  person          Person       @relation(fields: [personId], references: [id], onDelete: Cascade)
+  /// Why, in the administrator's own words. Required, and on the audit event.
+  reason          String
+  createdByUserId String?      @db.Uuid
+  createdAt       DateTime     @default(now())
+
+  @@unique([targetSystemId, personId])
+  @@index([tenantId])
+  @@index([personId])
 }
 
 /// The container one OrgUnit corresponds to on one target.
@@ -2264,6 +2291,7 @@ model TargetSystem {
   accounts     TargetAccount[]
   runs         ProvisionRun[]
   placements   AccountPlacement[]
+  personExclusions TargetPersonExclusion[]
   containers   OrgUnitContainer[]
   actionApprovals ProvisionActionApproval[]
 

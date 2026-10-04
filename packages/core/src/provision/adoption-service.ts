@@ -4,6 +4,7 @@ import { recordEvent } from '../audit/audit-service.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
 import { targetWithCredential } from './target-service.js';
 import { observedCorrelationKey } from './observed-key.js';
+import { assertNotLeftOut } from './exclusion-service.js';
 
 /**
  * Binding a conflicted account to the object that caused the collision.
@@ -165,6 +166,7 @@ async function conflictedAccount(
     });
     if (account === null) throw new NoAccountToAdoptError();
     if (account.status !== 'conflict') throw new NotInConflictError(account.status);
+    await assertNotLeftOut(tx, personId, targetSystemId);
     const target = await tx.targetSystem.findUniqueOrThrow({
       where: { id: targetSystemId },
       select: { type: true, config: true },
@@ -438,7 +440,9 @@ async function conflictAdoptions(
       select: { type: true },
     }),
     accounts: await tx.targetAccount.findMany({
-      where: { targetSystemId, status: 'conflict' },
+      // Nobody left out of this target: adopting their account would be
+      // Syntra taking charge of it.
+      where: { targetSystemId, status: 'conflict', person: { targetExclusions: { none: { targetSystemId } } } },
       select: {
         id: true,
         correlationKey: true,

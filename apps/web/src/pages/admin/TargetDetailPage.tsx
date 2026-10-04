@@ -27,6 +27,7 @@ import { TargetHealthPanel } from './TargetHealthPanel.js';
 import { TargetWriteStopPanel } from './TargetWriteStopPanel.js';
 import { TargetMaintenancePanel } from './TargetMaintenancePanel.js';
 import { TargetConflictsPanel } from './TargetConflictsPanel.js';
+import { TargetExclusionsPanel } from './TargetExclusionsPanel.js';
 import { OrgUnitMirrorPreview } from './OrgUnitMirrorPreview.js';
 import { TestReport, type TestResult } from './TargetTestReport.js';
 import { StaleBadge, draftKey, draftStatus, summaryOf } from './DraftState.js';
@@ -1113,6 +1114,9 @@ export function TargetDetailPage() {
         {!isNew && data && <TargetMaintenancePanel target={data} onChanged={reload} />}
         {!isNew && targetId !== null && <TargetHealthPanel targetId={targetId} />}
         {!isNew && targetId !== null && can('provision.manage') && <TargetConflictsPanel targetId={targetId} />}
+        {!isNew && targetId !== null && (
+          <TargetExclusionsPanel targetId={targetId} canManage={can('provision.manage')} />
+        )}
         {!isNew && targetId !== null && data?.type === 'httpJson' && (
           <TargetMigrationPanel targetId={targetId} onApplied={reload} />
         )}

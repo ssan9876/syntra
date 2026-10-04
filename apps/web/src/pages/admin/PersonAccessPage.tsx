@@ -5,6 +5,7 @@ import { PageHeader } from './PageHeader.js';
 import { Adoption } from './PersonAccessAdoption.js';
 import { Placement } from './PersonAccessPlacement.js';
 import { LoginInfo } from './PersonAccessLoginInfo.js';
+import { LeaveOut } from './PersonAccessExclusion.js';
 import {
   HoldingsTable,
   accountStatus,
@@ -13,8 +14,16 @@ import {
 
 export function PersonAccessPage() {
   const { id } = useParams<{ id: string }>();
-  const { data, error, loading } = useApiResource<Access>(
+  const { data, error, loading, reload } = useApiResource<Access>(
     `/api/admin/persons/${id}/access`,
+  );
+  const exclusions = data?.exclusions ?? [];
+  const exclusionFor = (targetSystemId: string) =>
+    exclusions.find((e) => e.targetSystemId === targetSystemId) ?? null;
+  // Left out of a target where they hold no account: still said, because
+  // "why has this person no account there" is the question.
+  const withoutAccount = exclusions.filter(
+    (e) => !(data?.accounts ?? []).some((a) => a.targetSystemId === e.targetSystemId),
   );
 
   return (
@@ -32,7 +41,7 @@ export function PersonAccessPage() {
           </Panel>
         )}
 
-        {!error && !loading && data && data.accounts.length === 0 && (
+        {!error && !loading && data && data.accounts.length === 0 && withoutAccount.length === 0 && (
           <Panel>
             <div className="p-6">
               {/* Not the same statement as "no such person", which the API
@@ -101,11 +110,32 @@ export function PersonAccessPage() {
                 another. Renders nothing for somebody who may not read it.
               */}
               <LoginInfo personId={id!} targetSystemId={account.targetSystemId} />
+              <LeaveOut
+                personId={id!}
+                targetSystemId={account.targetSystemId}
+                targetName={account.targetName}
+                exclusion={exclusionFor(account.targetSystemId)}
+                onChanged={reload}
+              />
               {account.entitlements.length === 0 ? (
                 <div className="p-4 text-muted">No entitlements</div>
               ) : (
                 <HoldingsTable holdings={account.entitlements} />
               )}
+            </Panel>
+          ))}
+
+        {!error &&
+          !loading &&
+          withoutAccount.map((exclusion) => (
+            <Panel key={exclusion.targetSystemId} title={exclusion.targetName}>
+              <LeaveOut
+                personId={id!}
+                targetSystemId={exclusion.targetSystemId}
+                targetName={exclusion.targetName}
+                exclusion={exclusion}
+                onChanged={reload}
+              />
             </Panel>
           ))}
 

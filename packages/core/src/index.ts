@@ -279,6 +279,7 @@ export * from './provision/write-stop-expiry.js';
 export * from './provision/target-maintenance.js';
 export * from './provision/adapter-rollout.js';
 export * from './provision/placement-service.js';
+export * from './provision/exclusion-service.js';
 export * from './provision/adoption-service.js';
 export * from './provision/entitlement-service.js';
 // Grepped as well: `previewProvisionRun`, `ProvisionRunInFlightError`,

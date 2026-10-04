@@ -72,6 +72,13 @@ export interface ReconcileInput {
    */
   containerBaseDn?: string;
   enforcementMode: EnforcementMode;
+  /**
+   * People left out of this target (`TargetPersonExclusion`). Their account
+   * is not compared, reported or refused: it gets an `actual` entry that
+   * holds nothing revocable and nothing else. Their anchors stay claimed, so
+   * the account is not reported as an orphan either. Absent means nobody.
+   */
+  leftOut?: ReadonlySet<string>;
 }
 
 export interface ReconcileOutput {
@@ -352,6 +359,28 @@ export function reconcile(input: ReconcileInput): ReconcileOutput {
   for (const state of input.desired) {
     const account = knownByPerson.get(state.personId) ?? null;
     const object = account?.anchor ? objectByAnchor.get(account.anchor) : undefined;
+
+    // Left out of this target: nothing about their account is Provision's
+    // business any more, so nothing is checked or recorded. The entry exists
+    // only so the planner can still follow their Syntra sign-in, and it
+    // carries nothing the planner could grant against or revoke.
+    if (input.leftOut?.has(state.personId)) {
+      actual.set(state.personId, {
+        personId: state.personId,
+        accountId: account?.id ?? null,
+        anchor: account?.anchor ?? null,
+        correlationKey: account?.correlationKey ?? null,
+        status: account?.status ?? 'absent',
+        existsAtTarget: object !== undefined,
+        enabledAtTarget: object?.enabled ?? false,
+        disabledAt: account?.disabledAt ?? null,
+        dn: object?.dn ?? null,
+        attributes: account?.lastAppliedAttributes ?? {},
+        heldEntitlements: new Set(),
+        heldWithinRemit: new Set(),
+      });
+      continue;
+    }
 
     // How much of this person's plan the verdict poisons, if there is one.
     //

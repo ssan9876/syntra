@@ -9,6 +9,7 @@ import {
   provenanceActionId,
   SYNTRA_ONLY_ACTION_TYPES,
   type ConnectorReleaseCatalog,
+  type ProvisionActionType,
   type SourceRecord,
   type TargetConnector,
   type WriteOperation,
@@ -36,6 +37,7 @@ import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { escapeDnValue } from './templates.js';
 import { observedCorrelationKey } from './observed-key.js';
 import { movesContainer } from './guard.js';
+import { SYNTRA_LOGIN_ACTIONS } from './plan.js';
 import { targetWithCredential } from './target-service.js';
 import { assertExternalWritesAllowed } from './tenant-write-stop.js';
 import { MaintenanceWindowClosedError, maintenanceWindowOpen, urgentLeaverOverrideAllowed } from './target-maintenance.js';
@@ -624,6 +626,16 @@ export async function applyProvisionRun(
     // there; because the filter is per account, widening it here reclassifies
     // nobody else's holdings. See `grantedEntitlementsFor`.
     const grantedEntitlements = await grantedEntitlementsFor(tx, run.targetSystemId);
+    // Read at apply, not trusted from the preview: somebody left out after
+    // the plan was computed must not have it applied to their account.
+    const leftOut = new Map(
+      (
+        await tx.targetPersonExclusion.findMany({
+          where: { targetSystemId: run.targetSystemId },
+          select: { personId: true, person: { select: { givenName: true, familyName: true } } },
+        })
+      ).map((row) => [row.personId, `${row.person.givenName} ${row.person.familyName}`.trim()]),
+    );
 
     // Conditional on the status just checked and on no cancellation waiting.
     // An unconditional write here raced a cancel: the cancel committed
@@ -651,7 +663,7 @@ export async function applyProvisionRun(
       const now = await tx.provisionRun.findUniqueOrThrow({ where: { id: runId } });
       throw new ProvisionRunNotAppliableError(runId, now.status);
     }
-    return { run, target, config, profile, remit, grantedEntitlements, adapter };
+    return { run, target, config, profile, remit, grantedEntitlements, adapter, leftOut };
   });
 
   const connector = (options.connector ??
@@ -690,6 +702,7 @@ export async function applyProvisionRun(
   let inFlight = 0;
   const deferredIds: string[] = [];
   const refusedNow: { id: string; reason: string }[] = [];
+  const leftOutNow: { id: string; message: string }[] = [];
   let heartbeatAt = Date.now();
   let cancelled = false;
 
@@ -705,6 +718,22 @@ export async function applyProvisionRun(
     ) {
       cancelled = true;
       break;
+    }
+
+    // Left out of this target since the plan was computed. Not attempted,
+    // and not a failure: nothing was asked of the target. Their Syntra
+    // sign-in still follows their employment.
+    const leftOutName =
+      action.personId === null ? undefined : prepared.leftOut.get(action.personId);
+    if (
+      leftOutName !== undefined &&
+      !SYNTRA_LOGIN_ACTIONS.has(action.actionType as ProvisionActionType)
+    ) {
+      leftOutNow.push({
+        id: action.id,
+        message: `Not attempted: ${leftOutName} is left out of this target.`,
+      });
+      continue;
     }
 
     // Re-checked here, not trusted from the preview: the release is the same
@@ -817,6 +846,13 @@ export async function applyProvisionRun(
           message:
             'Not attempted: requires confirmation.',
         },
+      });
+    }
+
+    for (const excluded of leftOutNow) {
+      await tx.provisionAction.updateMany({
+        where: { runId, id: excluded.id, status: { in: ['proposed', 'pending_retry'] } },
+        data: { status: 'superseded', message: excluded.message },
       });
     }
 

@@ -8,6 +8,7 @@ import { targetWithCredential } from './target-service.js';
 import { placeAt } from './apply.js';
 import { assertExternalWritesAllowed } from './tenant-write-stop.js';
 import { AdapterWritesBlockedError, adapterWriteContext } from './adapter-rollout.js';
+import { assertNotLeftOut } from './exclusion-service.js';
 
 /**
  * Moving one person's account to a container somebody chose.
@@ -132,6 +133,7 @@ export async function setPlacement(
   input: SetPlacementInput,
 ): Promise<PlacementView> {
   const tenantId = await currentTenant(tx);
+  await assertNotLeftOut(tx, input.personId, input.targetSystemId);
 
   const wanted = input.container.trim().toLowerCase();
   const canonical = input.existingContainers.find(

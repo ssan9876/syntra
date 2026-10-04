@@ -2542,3 +2542,90 @@ describe('planActions — a flat target (Entra ID, SCIM)', () => {
     expect(movesContainer(actions[0]!.before as Record<string, unknown>, actions[0]!.after as Record<string, unknown>)).toBe(false);
   });
 });
+
+describe('planActions — a person left out of the target', () => {
+  const leftOut = new Set(['person-1']);
+
+  it('proposes no create for a joiner', () => {
+    const actions = plan({
+      leftOut,
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            accountId: null,
+            anchor: null,
+            status: 'absent',
+            existsAtTarget: false,
+            enabledAtTarget: false,
+            dn: null,
+            attributes: {},
+            heldEntitlements: new Set(),
+            heldWithinRemit: new Set(),
+          }),
+        ],
+      ]),
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('proposes no update, rename, enable or grant for somebody employed', () => {
+    const actions = plan({
+      leftOut,
+      ladder: { ...ladder, renameEnabled: true },
+      desired: [desired({ entitlements: new Set(['ent-finance', 'ent-sales']) })],
+      actual: new Map([
+        [
+          'person-1',
+          actual({
+            correlationKey: 'anovak',
+            enabledAtTarget: false,
+            status: 'disabled',
+            disabledAt: day('2026-06-14'),
+            attributes: { displayName: ['Old Name'] },
+          }),
+        ],
+      ]),
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('proposes no revoke, disable, archive or delete for a leaver, but still ends their Syntra login', () => {
+    const actions = plan({
+      leftOut,
+      ladder: { ...ladder, archiveAfterDays: 0, deleteAfterDays: 0 },
+      desired: [desired({ account: null, entitlements: new Set() })],
+      contractsByPerson: new Map([['person-1', [contract({ endDate: day('2026-01-01') })]]]),
+      pairedDirectorySource: true,
+      syntraUserByPerson: new Map([['person-1', [{ id: 'user-1', status: 'active' }]]]),
+    });
+    expect(types(actions)).toEqual(['deactivate_syntra_user']);
+  });
+
+  it('ignores a revocation order against their account', () => {
+    const actions = plan({
+      leftOut,
+      desired: [desired({ entitlements: new Set() })],
+      revocationOrders: [
+        {
+          orderId: 'order-1',
+          accountId: 'account-1',
+          entitlementId: 'ent-finance',
+          decidedByPersonName: 'Jane Doe',
+          campaignName: 'Q3 review',
+          campaignDecisionId: 'decision-1',
+          reason: 'not needed',
+        },
+      ],
+    });
+    expect(actions).toEqual([]);
+  });
+
+  it('plans everybody else as before', () => {
+    const actions = plan({
+      leftOut: new Set(['person-2']),
+      desired: [desired({ entitlements: new Set(['ent-finance', 'ent-sales']) })],
+    });
+    expect(types(actions)).toEqual(['grant_entitlement']);
+  });
+});

@@ -653,4 +653,30 @@ describe('the adoption control', () => {
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.body).toEqual({ reason: 'IT deleted it', ifNoCandidate: 'reset' });
   });
+
+  it('marks a target the person is left out of, with or without an account there', async () => {
+    const leftOut = (targetSystemId: string, targetName: string) => ({
+      targetSystemId,
+      targetName,
+      reason: 'Bootstrap administrator',
+      createdByName: 'Jane Doe',
+      createdAt: '2026-10-03T10:00:00.000Z',
+      message: 'Left out of this target by Jane Doe on 3 Oct 2026: Bootstrap administrator.',
+    });
+    mockFetch({
+      personId: 'p1',
+      exclusions: [leftOut('t1', 'Samba AD'), leftOut('t9', 'fmx.ssander.xyz')],
+      accounts: [account()],
+    });
+    renderPage();
+
+    expect(await screen.findByText('fmx.ssander.xyz')).toBeVisible();
+    expect(screen.getAllByText('Left out')).toHaveLength(2);
+    expect(
+      screen.getAllByText('Left out of this target by Jane Doe on 3 Oct 2026: Bootstrap administrator.'),
+    ).toHaveLength(2);
+    // Read-only here: no session grants provision.manage.
+    expect(screen.queryByRole('button', { name: 'Include again' })).toBeNull();
+    expect(screen.queryByText('No target accounts')).toBeNull();
+  });
 });
