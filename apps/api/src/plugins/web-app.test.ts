@@ -102,6 +102,19 @@ describe('what the fallback must NOT swallow', () => {
     }
   });
 
+  it('answers an unknown SCIM path and an unregistered /metrics with problem+json', async () => {
+    // Both were once missing from SERVER_PATH_PREFIXES. An IdP reading a 200
+    // and a page of HTML as a SCIM response reports a healthy sync, and
+    // Prometheus records a successful scrape with no samples. `/metrics` is
+    // only registered when METRICS_TOKEN is set, and this app sets none.
+    for (const url of ['/scim/v2/Nope', '/scim/nope', '/metrics', '/metrics/x']) {
+      const res = await page(url);
+      expect(res.statusCode, url).toBe(404);
+      expect(res.headers['content-type'], url).toContain('application/problem+json');
+      expect(res.body, url).not.toContain('<title>Syntra</title>');
+    }
+  });
+
   it('leaves the OIDC provider to answer for its own unknown paths', async () => {
     // Everything under /oidc is oidc-provider's, including what it says about
     // a path it does not have. What is asserted is ONLY the property this file
