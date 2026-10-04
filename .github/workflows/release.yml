@@ -416,7 +416,7 @@ jobs:
       # Into the build context root, which the api Dockerfile copies to /app:
       # the install root the API reads its version from.
       - name: Fetch RELEASE.json from the build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-json
           path: .
