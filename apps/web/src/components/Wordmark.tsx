@@ -1,9 +1,9 @@
 import { brandName, useBrand } from '../branding/BrandProvider.js';
+import { INTERLOCK_MARK } from '../branding/interlock.js';
 
 /**
- * The mark is three converging strokes: separate identities resolving into a
- * single point of access. Drawn rather than lettered so it holds at 20px in a
- * browser tab and at 32px in the sidebar.
+ * Two interlocking links form an S: identities joined at one point of access.
+ * Shared vector geometry keeps the console and exported assets consistent.
  */
 export function Wordmark({ className = '' }: { className?: string }) {
   const brand = useBrand();
@@ -26,21 +26,21 @@ export function Wordmark({ className = '' }: { className?: string }) {
   return (
     <div className={`flex items-center gap-2.5 ${className}`}>
       <svg
-        viewBox="0 0 28 28"
+        viewBox="0 0 40 40"
         className="size-7 shrink-0"
         aria-hidden="true"
         fill="none"
       >
         <path
-          d="M4 5.5h9a7 7 0 0 1 0 14H8"
+          d={INTERLOCK_MARK.orange}
           stroke="var(--color-primary)"
-          strokeWidth="3"
+          strokeWidth="7"
           strokeLinecap="round"
         />
         <path
-          d="M24 22.5h-9a7 7 0 0 1 0-14h5"
+          d={INTERLOCK_MARK.blue}
           stroke="var(--color-accent)"
-          strokeWidth="3"
+          strokeWidth="7"
           strokeLinecap="round"
         />
       </svg>

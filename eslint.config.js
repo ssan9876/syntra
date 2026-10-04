@@ -62,6 +62,7 @@ export default tseslint.config(
             'eslint.config.js',
             'apps/web/vite.config.ts',
             'apps/web/vitest.config.ts',
+            'scripts/export-interlock.ts',
             // The browser suite is a project of its own that no tsconfig
             // references, and it is the only place several whole journeys are
             // exercised end to end.
