@@ -7,7 +7,7 @@ departure), puts the sign-in details on the sign-in page, sends all mail to a
 bundled MailDev, and wipes everything back to that state every night.
 
 It is not a production deployment. For that, see the
-[Quickstart](../../docs/install.md#quickstart-10-minutes).
+[Quickstart](../../docs/install.md#quickstart).
 
 ## Run it
 

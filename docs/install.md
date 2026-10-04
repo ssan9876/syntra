@@ -1,6 +1,6 @@
 # Installing Syntra
 
-The [Quickstart](#quickstart-10-minutes) takes a machine with Docker to a
+The [Quickstart](#quickstart) takes a machine with Docker to a
 signed-in console in about ten minutes. Below it: a development install that
 runs everything from source with hot reload, and three ways to run it for
 real: the built application as one process, the container path behind Docker
@@ -8,9 +8,9 @@ Compose (which the Quickstart sets up), and a Helm chart for Kubernetes. Pick
 the development install to work on Syntra itself; pick one of the others to
 put it in front of people.
 
-## Quickstart (10 minutes)
+## Quickstart
 
-Needs Docker with the Compose plugin (v2.24 or later) and, for a real
+About 10 minutes. Needs Docker with the Compose plugin (v2.24 or later) and, for a real
 hostname, ports 80 and 443 reachable from the internet.
 
 ```bash

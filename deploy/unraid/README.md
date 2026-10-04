@@ -67,7 +67,7 @@ publishes plain HTTP on every interface beside the proxy.
 
 ## Create the first administrator
 
-Follow [the Quickstart](../../docs/install.md#quickstart-10-minutes) from
+Follow [the Quickstart](../../docs/install.md#quickstart) from
 "Create your organization": if the API log shows a First-run setup link, open
 it; otherwise run the bootstrap command from that directory.
 
