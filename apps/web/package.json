@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/browser": "14.0.0",
     "@syntra/contracts": "workspace:*",
     "@syntra/ui": "workspace:*",
     "react": "^19.3.0",
