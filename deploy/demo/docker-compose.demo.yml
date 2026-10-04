@@ -1,0 +1,86 @@
+# A public demo of Syntra: the published images, the demo seed (SEED_DEMO=1),
+# and a MailDev that catches every message. Not a production deployment --
+# see README.md beside this file for what to expose and what not to.
+#
+# Run it through reset.sh, which writes .env on first use, wipes the data,
+# starts the stack, seeds it and brands the sign-in page:
+#
+#   deploy/demo/reset.sh
+#
+# Everything except `web` and MailDev's web UI stays on the compose network,
+# and both of those bind to loopback only.
+name: syntra-demo
+
+services:
+  postgres:
+    restart: unless-stopped
+    image: postgres:16
+    environment:
+      POSTGRES_USER: syntra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: syntra
+      SYNTRA_APP_PASSWORD: ${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}
+    volumes:
+      - ../../infra/initdb:/docker-entrypoint-initdb.d:ro
+      - demo-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U syntra']
+      interval: 5s
+      retries: 20
+
+  api:
+    restart: unless-stopped
+    image: ghcr.io/ssan9876/syntra-api:${SYNTRA_VERSION:-latest}
+    environment:
+      DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}@postgres:5432/syntra
+      PORT: '3000'
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
+      # Every message goes to MailDev and nowhere else.
+      SMTP_URL: smtp://maildev:1025
+      MAIL_FROM: Syntra demo <demo@syntra.invalid>
+      NODE_ENV: production
+      # The docker bridge ranges nginx (`web`) connects from; see the root
+      # docker-compose.yml. Add the address of your own proxy if it sets
+      # X-Forwarded-For and is not on this host's docker network.
+      TRUST_PROXY: '172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      maildev:
+        condition: service_started
+
+  web:
+    restart: unless-stopped
+    image: ghcr.io/ssan9876/syntra-web:${SYNTRA_VERSION:-latest}
+    # Loopback only. Put your TLS proxy on this host in front of it.
+    ports: ['127.0.0.1:${DEMO_PORT:-8090}:8080']
+    depends_on:
+      api:
+        condition: service_healthy
+
+  maildev:
+    restart: unless-stopped
+    image: maildev/maildev:2.1.0
+    # The web UI on loopback only: it shows every message the demo sends,
+    # including password-reset links. SMTP (1025) is not published at all.
+    ports: ['127.0.0.1:${MAILDEV_PORT:-1080}:1080']
+    # The image's own check asks for localhost, which resolves to ::1 where
+    # MailDev is not listening, so it never turns healthy.
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO /dev/null http://127.0.0.1:1080/healthz || exit 1']
+      interval: 10s
+      timeout: 2s
+      retries: 5
+
+volumes:
+  demo-data:

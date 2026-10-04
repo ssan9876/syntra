@@ -10,5 +10,5 @@
 # its own. SYNTRA_DOMAIN has to be a name the world can resolve to this host
 # on ports 80 and 443, or the challenge cannot complete.
 {$SYNTRA_DOMAIN} {
-	reverse_proxy web:80
+	reverse_proxy web:8080
 }
