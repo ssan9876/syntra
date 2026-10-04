@@ -20,6 +20,7 @@ export * from './health/version.js';
 export * from './health/metrics.js';
 export * from './health/error-class.js';
 export * from './health/status.js';
+export * from './health/insecure-defaults.js';
 export * from './directory/user-service.js';
 export * from './directory/directory-writeback.js';
 export * from './directory/group-service.js';

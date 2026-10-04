@@ -11,6 +11,7 @@ import {
   onSigningKeysChanged,
   readiness,
   redactReport,
+  insecureDefaults,
   mailSinkWarning,
   mailTransport,
   type Config,
@@ -87,11 +88,15 @@ import { registerFederationRoutes } from './routes/federation.js';
 import { invalidateProvider } from '@syntra/protocols';
 import { captureRouteCatalog, type CatalogRoute } from './openapi/route-catalog.js';
 import { registerOpenApiRoute } from './openapi/route.js';
+import { registerSetupRoutes } from './routes/setup.js';
+import { createFirstRunSetup, type FirstRunSetup } from './first-run-setup.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     /** Every route this app registered. See openapi/route-catalog.ts. */
     routeCatalog: CatalogRoute[];
+    /** The first-run setup link; `server.ts` opens it at startup. */
+    firstRunSetup: FirstRunSetup;
   }
 }
 
@@ -130,6 +135,11 @@ export interface AppOptions {
    * the tests pass a fake so none of them depends on a real zone.
    */
   txtLookup?: TxtLookup;
+  /**
+   * The first-run setup state. Defaults to a fresh one; the tests pass their
+   * own to move its clock.
+   */
+  firstRunSetup?: FirstRunSetup;
 }
 
 /**
@@ -237,8 +247,16 @@ export async function buildApp(
 
   const web = config.webRoot ? await registerWebApp(app, config.webRoot) : null;
 
+  // Built before tenant resolution, which asks it whether the setup page may
+  // be served on a hostname no tenant answers for.
+  const firstRunSetup = options.firstRunSetup ?? createFirstRunSetup();
+  app.decorate('firstRunSetup', firstRunSetup);
+
   registerProblemJson(app, web ? { notFound: web.notFound } : {});
-  registerTenantContext(app, web ? { unknownHostPage: web.unknownHostPage } : {});
+  registerTenantContext(
+    app,
+    web ? { unknownHostPage: web.unknownHostPage, setupPending: () => firstRunSetup.pending() } : {},
+  );
 
   // LIVENESS. Deliberately a constant, and deliberately cheap: it answers "is
   // a process listening", which is the question the tunnel and `deploy.sh`
@@ -319,6 +337,17 @@ export async function buildApp(
   // outside tenant resolution (see UNSCOPED_PATHS): it describes the product,
   // not any tenant, and an integrator generating a client has no session yet.
   registerOpenApiRoute(app, routeCatalog);
+
+  // First-run setup. Unauthenticated and outside tenant resolution: it
+  // creates the first tenant, holds the link the API printed at startup,
+  // and answers 404 once any tenant exists. See routes/setup.ts.
+  await app.register(registerSetupRoutes, {
+    setup: firstRunSetup,
+    publicUrl: config.publicUrl,
+    keyProvider,
+    keyManagement: config.keyManagement,
+    authRateLimitMax: config.authRateLimitMax,
+  });
 
   // Before the auth routes and outside every session guard: this is what the
   // sign-in page reads in order to render itself.
@@ -434,6 +463,7 @@ export async function buildApp(
   await app.register(registerAdminIncidentRoutes, {
     prefix: '/api/admin',
     mailSink,
+    insecureDefaults: insecureDefaults(config),
     ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
   });
   // Outgoing mail as configured, and the console's test send.

@@ -11,6 +11,8 @@ the variables; this page collects them in one place.
   [bootstrap](#bootstrap-variables) and [seed](#seed-variables)
 - [Where the variables go](#where-the-variables-go) — `.env`, Compose, Helm,
   the release layout
+- [First-run setup](#first-run-setup) — the first tenant and administrator,
+  from the browser — and [insecure-default warnings](#insecure-default-warnings)
 - [Key management](#key-management) — `MASTER_KEY`, Vault Transit, AWS KMS
 - [Tenants and hostnames](#tenants-and-hostnames)
 - [Connecting a directory source](#connecting-a-directory-source), and
@@ -65,7 +67,7 @@ supported, working configuration.
 |---|---|---|
 | `PORT` | `3000` | The port the API listens on. |
 | `SHADOW_DATABASE_URL` | — | The database `prisma migrate dev` builds and tears down to diff against. Needed only for `pnpm --filter @syntra/db migrate:dev`, not for `pnpm db:migrate`. `syntra-update` passes it to the migration step when `shared/.env` sets it, and falls back to `DATABASE_URL`. |
-| `SUPERUSER_DATABASE_URL` | — | Owns the `CREATE DATABASE` the test harness performs for each worker's shard — simulates an attacker with direct database access, the threat the audit hash chain exists to detect. Never used by the API itself. On the release layout, `syntra-update` and `syntra-backup` take the **role** from it to run `pg_dump`, because a dump taken as `syntra_app` sees no rows under row-level security; without it they fall back to a role named after the database. |
+| `SUPERUSER_DATABASE_URL` | — | Owns the `CREATE DATABASE` the test harness performs for each worker's shard — simulates an attacker with direct database access, the threat the audit hash chain exists to detect. The API never connects with it; it reads it only to [warn about a default password](#insecure-default-warnings). On the release layout, `syntra-update` and `syntra-backup` take the **role** from it to run `pg_dump`, because a dump taken as `syntra_app` sees no rows under row-level security; without it they fall back to a role named after the database. |
 | `AUTH_RATE_LIMIT_MAX` | `10` | Authentication attempts per minute, per tenant per address. |
 | `AUTH_RATE_LIMIT_TENANT_MAX` | 10× `AUTH_RATE_LIMIT_MAX` | Attempts per minute, per tenant, across every address at once — the ceiling that does not move when an attacker rents more addresses. |
 | `RATE_LIMIT_STORE` | `postgres` | Where rate-limit counters live. `postgres` shares one counter per key across every API process, so the limits above apply to the deployment as a whole. `memory` keeps per-process counters, which is correct only with a single process; with N processes each limit is effectively N times larger. |
@@ -248,7 +250,8 @@ Cloudflare's is `cf-ipcountry`.
 Read once, by `pnpm --filter @syntra/db bootstrap` (`packages/db/src/bootstrap.ts`),
 to create the first tenant and its first administrator in a production
 deployment — the dev `pnpm seed` is demo data and is not this. All required
-when bootstrapping; there is no default tenant.
+when bootstrapping; there is no default tenant. [First-run setup](#first-run-setup)
+does the same from the browser, with no variables to set.
 
 | Variable | Meaning |
 |---|---|
@@ -367,6 +370,68 @@ from depends on how Syntra runs:
   `existingSecret` (or `secret.create=true`, for a disposable environment) and
   an absolute `publicUrl`. The chart's own
   [README](../deploy/helm/syntra/README.md) has every value.
+
+## First-run setup
+
+On a database with no tenant, the API prints a one-time link at startup:
+
+```
+First-run setup: open https://idm.contoso.com/setup?token=… within 1 hour. The link works once.
+```
+
+Find it with `docker compose logs api | grep "First-run setup"` (or
+`journalctl -u syntra` on the release layout). The line goes to standard
+output as plain text, outside the JSON log, because the logger removes tokens
+from every line it writes.
+
+The page asks for:
+
+| Field | Becomes |
+|---|---|
+| **Organization name** | The tenant's display name. |
+| **Slug** | The tenant's slug: one DNS label, lowercase letters, digits and hyphens. A hostname whose leftmost label is the slug reaches the tenant. |
+| **Primary domain** | The tenant's primary domain, prefilled with `PUBLIC_URL`'s hostname. It is also the WebAuthn relying party, so set it to the name people will use. |
+| **Admin email** | The first administrator's email address and login. |
+| **Display name** | The first administrator's name. |
+| **Password** | The first administrator's password: at least 12 characters, and not the email address or its local part. |
+
+**Create organization** makes the tenant and its first administrator with the
+built-in Owner role, exactly as the [bootstrap script](#bootstrap-variables)
+does — it runs the same code — establishes the SAML signing key, records
+`tenant.created` in the tenant's audit log, and opens the sign-in page on the
+primary domain.
+
+The link:
+
+- works for 1 hour after the API starts. After that the page says *Setup link
+  expired*; restart the API to print a new one.
+- works once. Once a tenant exists, `/api/setup` answers `404` and nothing is
+  printed at startup, however the tenant was made.
+- is held in the API's memory, as a hash. A restart replaces it. With more than
+  one API replica, each prints its own link, and a link works only on the
+  replica that printed it; set up with one replica running.
+- is checked on every call, and `/api/setup` is rate-limited per address at
+  `AUTH_RATE_LIMIT_MAX` a minute.
+
+The bootstrap script keeps working. Use it to set up without a browser, or
+call the API directly: `GET /api/setup?token=…` and `POST /api/setup` are in
+the published OpenAPI description.
+
+## Insecure-default warnings
+
+The API starts with each of these, logs a warning at startup, and raises an
+incident on the console's **Overview** for administrators who hold
+`deployment.manage` (the Owner role does):
+
+| Incident | Raised when | Fix |
+|---|---|---|
+| **Database password is a default** (`database_default_password`) | `DATABASE_URL` or `SUPERUSER_DATABASE_URL` uses the password `syntra`, `syntra_app`, `postgres`, `password` or `changeme`, URL-encoded or not. | Change the role's password in PostgreSQL (`ALTER ROLE … PASSWORD …`), update the variable, restart the API. |
+| **Site is not served over HTTPS** (`public_url_not_https`) | `PUBLIC_URL` is `http://` on a hostname other than `localhost`, `*.localhost` or a loopback address. | Put TLS in front of Syntra, set `PUBLIC_URL` to the `https://` address, restart the API. |
+
+The log line and the incident carry the same text, for example
+`DATABASE_URL uses the password "syntra_app". Change it and update DATABASE_URL.`
+Only a password from the list above is ever named. Both incidents clear at the
+first restart after the fix; neither affects `/health/ready`.
 
 ## Key management
 
@@ -2222,6 +2287,7 @@ list. This slice adds:
 | `access.claim_mapping_changed` | A claim or attribute released to an application was added or removed |
 | `access.upstream_configured` | An upstream identity provider was registered or changed. **Never the client secret, and never its vault name** |
 | `policy.rule_added` / `policy.rule_updated` / `policy.rule_deleted` / `policy.rules_reordered` / `policy.default_set` | The policy changed, and who changed it |
+| `tenant.created` | The tenant was made, by [first-run setup](#first-run-setup) (`via: setup`, with the address it came from) or the bootstrap script (`via: bootstrap`). The first event in every tenant's chain |
 | `tenant.settings_updated` | Admin MFA, self-enrolment, the password floor or the session lifetimes changed |
 | `tenant.admin_webauthn_required` / `tenant.admin_webauthn_relaxed` | The security-key requirement for the console was switched on or off. **Alert on the second** |
 | `change_request.created` / `.approved` / `.rejected` / `.withdrawn` / `.expired` / `.approve_refused` | A privileged change was held for a second administrator, and what became of it |

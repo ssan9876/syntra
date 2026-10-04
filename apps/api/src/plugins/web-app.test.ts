@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { prisma } from '@syntra/db';
 import { buildTestApp, TEST_HOST } from '../test-support.js';
 
 /**
@@ -251,5 +252,36 @@ describe('the API-only deployment', () => {
     expect(res.statusCode).toBe(404);
     expect(res.headers['content-type']).toContain('application/problem+json');
     await api.app.close();
+  });
+});
+
+describe('a fresh install, with no tenant at all', () => {
+  const fresh = 'idm.unconfigured.test';
+  const get = (app: Awaited<ReturnType<typeof buildTestApp>>['app'], url: string, accept = 'text/html') =>
+    app.inject({ method: 'GET', url, headers: { host: fresh, accept } });
+
+  it('serves the setup page and its files on any hostname, and nothing else', async () => {
+    const dist = makeDist();
+    const install = await buildTestApp({ withoutTenant: true, env: { WEB_ROOT: dist } });
+    try {
+      const setup = await get(install.app, '/setup?token=abc');
+      expect(setup.statusCode).toBe(200);
+      expect(setup.body).toContain('<title>Syntra</title>');
+      expect((await get(install.app, '/assets/index-abc123.js', '*/*')).statusCode).toBe(200);
+
+      // Every other page and every API call still finds no tenant.
+      expect((await get(install.app, '/')).statusCode).toBe(404);
+      expect((await get(install.app, '/admin/users')).statusCode).toBe(404);
+      expect((await get(install.app, '/api/admin/users', '*/*')).json()).toMatchObject({ title: 'Unknown tenant' });
+
+      // Once a tenant exists, the setup page is just another unknown page.
+      await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+      const after = await get(install.app, '/setup');
+      expect(after.statusCode).toBe(404);
+      expect(after.body).toContain('No tenant answers');
+    } finally {
+      await install.app.close();
+      rmSync(dist, { recursive: true, force: true });
+    }
   });
 });

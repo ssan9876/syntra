@@ -72,6 +72,9 @@
       "name": "Exports"
     },
     {
+      "name": "First-run setup"
+    },
+    {
       "name": "Govern"
     },
     {
@@ -34668,6 +34671,186 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/setup": {
+      "get": {
+        "operationId": "getApiSetup",
+        "tags": [
+          "First-run setup"
+        ],
+        "summary": "Check a first-run setup link",
+        "description": "Answers only while the database has no tenant, and only with the token the API printed to its log at startup. `403 setup-link-invalid` for a missing or wrong token, `410 setup-link-expired` an hour after startup, and `404` once any tenant exists, whatever the token. Answers carry `Cache-Control: no-store`.\n\nUnauthenticated; no tenant is resolved from the hostname.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "x-syntra-public": true,
+        "x-syntra-rate-limit": {
+          "max": 10,
+          "window": "1 minute"
+        },
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{20,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "primaryDomain": {
+                      "type": "string"
+                    },
+                    "passwordMinLength": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "primaryDomain",
+                    "passwordMinLength",
+                    "expiresAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postApiSetup",
+        "tags": [
+          "First-run setup"
+        ],
+        "summary": "Create the first tenant and its Owner",
+        "description": "Creates the tenant and its first administrator, who holds the built-in Owner role and signs in with the admin email, and records `tenant.created`. The token is spent on success: a second call answers `404`, as does any call once a tenant exists. Refusals are those of `GET /api/setup`, plus `400 weak-password` for a password the policy refuses and `409 setup-in-progress` while another call is creating the tenant.\n\nUnauthenticated; no tenant is resolved from the hostname.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "x-syntra-public": true,
+        "x-syntra-rate-limit": {
+          "max": 10,
+          "window": "1 minute"
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{20,128}$"
+                  },
+                  "organizationName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "slug": {
+                    "type": "string",
+                    "maxLength": 63,
+                    "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+                  },
+                  "primaryDomain": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+                  },
+                  "adminEmail": {
+                    "type": "string",
+                    "maxLength": 320,
+                    "format": "email",
+                    "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+                  },
+                  "adminDisplayName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "token",
+                  "organizationName",
+                  "slug",
+                  "primaryDomain",
+                  "adminEmail",
+                  "adminDisplayName",
+                  "password"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "login": {
+                      "type": "string"
+                    },
+                    "signInUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "login",
+                    "signInUrl"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"

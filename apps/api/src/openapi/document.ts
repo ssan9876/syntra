@@ -214,7 +214,9 @@ function operation(route: CatalogRoute, described: DescribedRoute): Record<strin
   responses.default = { $ref: '#/components/responses/Problem' };
 
   const permissionLine = described.public
-    ? 'Unauthenticated; the tenant is the hostname the request is sent to.'
+    ? described.noTenant
+      ? 'Unauthenticated; no tenant is resolved from the hostname.'
+      : 'Unauthenticated; the tenant is the hostname the request is sent to.'
     : route.permissions.length === 0
       ? 'Requires an administrative session; no further permission.'
       : `Requires ${route.permissions.map((permission) => `\`${permission}\``).join(' and ')}.`;

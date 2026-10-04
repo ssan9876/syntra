@@ -11,6 +11,7 @@ import {
   recordEvent,
   resolveIncident,
   type IncidentKind,
+  type InsecureDefault,
   type MailSinkWarning,
   type Permission,
 } from '@syntra/core';
@@ -50,7 +51,17 @@ const CHANGE_APPROVER_PERMISSIONS: Permission[] = [
  */
 export async function registerAdminIncidentRoutes(
   app: FastifyInstance,
-  options: { schedulerRunning?: () => boolean; mailSink?: MailSinkWarning | null } = {},
+  options: {
+    schedulerRunning?: () => boolean;
+    mailSink?: MailSinkWarning | null;
+    /**
+     * `insecureDefaults(config)`. Listed only to a caller holding
+     * `deployment.manage`: the database credential and the installation's
+     * transport are the operator's, and in a shared deployment a tenant's
+     * administrator is not the operator.
+     */
+    insecureDefaults?: readonly InsecureDefault[];
+  } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -59,7 +70,16 @@ export async function registerAdminIncidentRoutes(
     { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
     async (request) => {
       const now = new Date();
-      const incidents = await request.db((tx) => listIncidents(tx, now, { mailSink: options.mailSink ?? null }));
+      const operator =
+        (options.insecureDefaults?.length ?? 0) > 0 &&
+        tokenScopeAllows(request, PERMISSIONS.DEPLOYMENT_MANAGE) &&
+        (await request.db((tx) => hasPermission(tx, request.session.userId, PERMISSIONS.DEPLOYMENT_MANAGE)));
+      const incidents = await request.db((tx) =>
+        listIncidents(tx, now, {
+          mailSink: options.mailSink ?? null,
+          insecureDefaults: operator ? (options.insecureDefaults ?? []) : [],
+        }),
+      );
       // Names for whoever acknowledged, read once. An id on screen is
       // something the reader has to go and look up.
       const ackBy = [

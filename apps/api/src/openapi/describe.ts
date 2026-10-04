@@ -50,6 +50,12 @@ export interface RouteDescription {
    * after the deprecation.
    */
   deprecated?: RouteDeprecation;
+  /**
+   * A public route that resolves no tenant from the hostname -- first-run
+   * setup, which runs before any tenant exists. Only meaningful with
+   * `describePublicRoutes`.
+   */
+  noTenant?: true;
 }
 
 export interface RouteDeprecation {

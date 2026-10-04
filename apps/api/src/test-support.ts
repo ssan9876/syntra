@@ -2,6 +2,7 @@ import { prisma } from '@syntra/db';
 import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
 import { loadConfig, memoryTransport, type Scheduler, type Transport, type TxtLookup } from '@syntra/core';
 import { buildApp } from './app.js';
+import type { FirstRunSetup } from './first-run-setup.js';
 
 export const TEST_HOST = 'acme.syntra.test';
 
@@ -124,13 +125,20 @@ export async function buildTestApp(
      * that refuses. `mail` then records nothing.
      */
     transport?: Transport;
+    /**
+     * No tenant at all: a fresh install, for the first-run setup tests.
+     * `tenantId` then comes back empty.
+     */
+    withoutTenant?: boolean;
+    /** The first-run setup state, for a test that moves its clock. */
+    firstRunSetup?: FirstRunSetup;
   } = {},
 ) {
   await resetDatabase();
-  const tenant = await prisma.tenant.create({
-    data: { name: 'Acme', slug: 'acme' },
-  });
-  await verifyTestEmailDomains(tenant.id, options.verifiedDomains);
+  const tenant = options.withoutTenant
+    ? null
+    : await prisma.tenant.create({ data: { name: 'Acme', slug: 'acme' } });
+  if (tenant) await verifyTestEmailDomains(tenant.id, options.verifiedDomains);
 
   const config = loadConfig({
     DATABASE_URL:
@@ -158,8 +166,9 @@ export async function buildTestApp(
     transport: options.transport ?? mail,
     txtLookup: options.txtLookup ?? (async () => []),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+    ...(options.firstRunSetup ? { firstRunSetup: options.firstRunSetup } : {}),
   });
   // `config` too, so a test about running several replicas can build a second
   // app over the same database without resetting it.
-  return { app, tenantId: tenant.id, host: TEST_HOST, mail, config };
+  return { app, tenantId: tenant?.id ?? '', host: TEST_HOST, mail, config };
 }

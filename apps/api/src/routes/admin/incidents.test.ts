@@ -38,6 +38,46 @@ describe('scheduler incident', () => {
   });
 });
 
+describe('insecure-default incidents', () => {
+  it('lists a default database password and plain HTTP to the operator only', async () => {
+    ctx = await buildTestApp({
+      env: {
+        DATABASE_URL: 'postgresql://syntra_app:syntra_app@postgres:5432/syntra',
+        PUBLIC_URL: 'http://idm.contoso.com',
+      },
+    });
+    const sessionFor = (login: string, permissions: string[]) =>
+      withTenant(ctx.tenantId, async (tx) => {
+        const user = await createUser(tx, { login, email: `${login}@acme.test`, displayName: login });
+        const role = await createRole(tx, `${login} role`, permissions as never);
+        await assignRole(tx, user.id, role.id);
+        const session = await createSession(tx, {
+          status: 'allow', userId: user.id, mayElevate: true,
+          scope: 'admin', applicationId: null, satisfiedFactor: null,
+        }, { ip: null, userAgent: null });
+        return `syntra_session=${session.token}`;
+      });
+    const operator = await sessionFor('operator', [PERMISSIONS.AUDIT_READ, PERMISSIONS.DEPLOYMENT_MANAGE]);
+    const auditor = await sessionFor('auditor', [PERMISSIONS.AUDIT_READ]);
+    const read = async (cookie: string) =>
+      ((await ctx.app.inject({
+        method: 'GET', url: '/api/admin/incidents', headers: { host: ctx.host, cookie },
+      })).json().incidents as { kind: string; title: string; detail: string }[]);
+
+    const seen = await read(operator);
+    expect(seen).toContainEqual(expect.objectContaining({
+      kind: 'database_default_password',
+      title: 'Database password is a default',
+      detail: 'DATABASE_URL uses the password "syntra_app". Change it and update DATABASE_URL.',
+    }));
+    expect(seen).toContainEqual(expect.objectContaining({ kind: 'public_url_not_https' }));
+
+    const hidden = (await read(auditor)).map((i) => i.kind);
+    expect(hidden).not.toContain('database_default_password');
+    expect(hidden).not.toContain('public_url_not_https');
+  });
+});
+
 describe('attention summary', () => {
   it('lists runs held for review only to a caller who may read provisioning', async () => {
     ctx = await buildTestApp();

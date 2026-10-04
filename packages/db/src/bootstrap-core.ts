@@ -1,5 +1,8 @@
 /**
- * The testable half of `bootstrap.ts`.
+ * The testable half of `bootstrap.ts`, and the one way the first tenant is
+ * made: the API's first-run setup (`apps/api/src/routes/setup.ts`) calls
+ * `bootstrapTenant` too, so a tenant made in the browser and one made from
+ * the command line are the same tenant.
  *
  * Split out for the same reason `seedMarkerFound` was pulled out of
  * `seed.ts`: the script itself reads `process.env` and calls `process.exit`
@@ -13,15 +16,24 @@ import {
   ensureActiveKey,
   parseKeyManagement,
   type KeyManagementConfig,
+  type MasterKeyProvider,
   assignRole,
   createBuiltInRoles,
   createUser,
   hashPassword,
+  recordEvent,
   setPasswordHash,
 } from '@syntra/core';
 import { prisma } from './client.js';
 import { withTenant } from './with-tenant.js';
 import { seedMarkerFound } from './seed-guard.js';
+
+/**
+ * The shortest first administrator password either path accepts. The same
+ * figure as `Tenant.passwordMinLength`'s default, so the first password is
+ * held to the policy every later one is.
+ */
+export const BOOTSTRAP_PASSWORD_MIN_LENGTH = 12;
 
 export interface BootstrapConfig {
   tenantName: string;
@@ -30,6 +42,8 @@ export interface BootstrapConfig {
   adminLogin: string;
   adminEmail: string;
   adminPassword: string;
+  /** Defaults to the login, which is what the script has always done. */
+  adminDisplayName?: string;
   /**
    * The same master-key configuration the API boots with -- MASTER_KEY, or
    * MASTER_KEY_PROVIDER and its variables -- so the tenant's first signing
@@ -66,10 +80,10 @@ export function parseBootstrapConfig(env: NodeJS.ProcessEnv): ConfigResult {
     return { ok: false, reason: 'BOOTSTRAP_ADMIN_EMAIL must be set. Refusing to bootstrap.' };
   }
 
-  if (!adminPassword || adminPassword.length < 12) {
+  if (!adminPassword || adminPassword.length < BOOTSTRAP_PASSWORD_MIN_LENGTH) {
     return {
       ok: false,
-      reason: 'BOOTSTRAP_ADMIN_PASSWORD must be set and at least 12 characters. Refusing to bootstrap.',
+      reason: `BOOTSTRAP_ADMIN_PASSWORD must be set and at least ${BOOTSTRAP_PASSWORD_MIN_LENGTH} characters. Refusing to bootstrap.`,
     };
   }
 
@@ -97,9 +111,24 @@ export function parseBootstrapConfig(env: NodeJS.ProcessEnv): ConfigResult {
 
 export interface BootstrapResult {
   created: boolean;
+  tenantId: string;
   tenantSlug: string;
   tenantDomain: string | null;
   adminLogin: string;
+  /** The administrator made by this call; null when `created` is false. */
+  adminUserId: string | null;
+}
+
+export interface BootstrapOptions {
+  /** Which path made the tenant, recorded on the `tenant.created` audit event. */
+  via?: 'bootstrap' | 'setup';
+  /** The address the setup request came from. Null from the command line. */
+  sourceIp?: string | null;
+  /**
+   * The provider to seal the first signing key with. The API passes the one
+   * it already holds; the script builds one from `config.keyManagement`.
+   */
+  keyProvider?: MasterKeyProvider;
 }
 
 /**
@@ -110,7 +139,10 @@ export interface BootstrapResult {
  * step, and a tenant bootstrapped before MASTER_KEY was wired up should not
  * stay without one forever).
  */
-export async function bootstrapTenant(config: BootstrapConfig): Promise<BootstrapResult> {
+export async function bootstrapTenant(
+  config: BootstrapConfig,
+  options: BootstrapOptions = {},
+): Promise<BootstrapResult> {
   const tenant = await prisma.tenant.upsert({
     where: { slug: config.tenantSlug },
     create: {
@@ -129,7 +161,7 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
   // interactive-transaction budget.
   const adminHash = await hashPassword(config.adminPassword);
 
-  let created = false;
+  let adminUserId: string | null = null;
 
   await withTenant(tenant.id, async (tx) => {
     const seeded = seedMarkerFound({
@@ -141,7 +173,7 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
     const admin = await createUser(tx, {
       login: config.adminLogin,
       email: config.adminEmail,
-      displayName: config.adminLogin,
+      displayName: config.adminDisplayName ?? config.adminLogin,
     });
     await setPasswordHash(tx, admin.id, adminHash);
 
@@ -150,7 +182,25 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
     const { owner: adminRole } = await createBuiltInRoles(tx);
     await assignRole(tx, admin.id, adminRole.id);
 
-    created = true;
+    // The first row in the tenant's audit chain. No actor: nobody was signed
+    // in, and the account this made is the target, not the author.
+    await recordEvent(tx, {
+      actorUserId: null,
+      action: 'tenant.created',
+      targetType: 'Tenant',
+      targetId: tenant.id,
+      outcome: 'success',
+      sourceIp: options.sourceIp ?? null,
+      payload: {
+        via: options.via ?? 'bootstrap',
+        slug: tenant.slug,
+        primaryDomain: tenant.primaryDomain,
+        ownerUserId: admin.id,
+        ownerRoleId: adminRole.id,
+      },
+    });
+
+    adminUserId = admin.id;
   });
 
   // Outside the transaction for the same reason as seed.ts: RSA-2048
@@ -159,15 +209,17 @@ export async function bootstrapTenant(config: BootstrapConfig): Promise<Bootstra
   // so running bootstrap again is a single read.
   await ensureActiveKey(
     tenant.id,
-    createMasterKeyProvider(config.keyManagement),
+    options.keyProvider ?? createMasterKeyProvider(config.keyManagement),
     'saml',
     { commonName: tenant.primaryDomain ?? config.tenantSlug },
   );
 
   return {
-    created,
+    created: adminUserId !== null,
+    tenantId: tenant.id,
     tenantSlug: tenant.slug,
     tenantDomain: tenant.primaryDomain,
     adminLogin: config.adminLogin,
+    adminUserId,
   };
 }
