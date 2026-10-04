@@ -61,3 +61,7 @@ values.local.yaml
 
 # Local map of real names to stand-ins for scripts/docs-screenshots.mjs
 .docs-redactions.json
+
+# MkDocs output (mkdocs build)
+/site/
+__pycache__/
