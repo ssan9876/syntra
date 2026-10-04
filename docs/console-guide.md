@@ -30,7 +30,7 @@ Where the console opens.
 
 - **Needs you** lists everything waiting on a person — overdue or blocked
   employee work, stopped writes, unreachable connectors, connector tests to
-  repeat, locked accounts, accounts with no person. Each card links to the
+  repeat, mail going to a test server, locked accounts, accounts with no person. Each card links to the
   screen where it is dealt with. When nothing is waiting it says so.
 - **Sign-in security** lists the sign-in checks that fail, for holders of
   `tenant.manage`:
@@ -222,6 +222,13 @@ Sign-in and session rules, the verified email domains every address must be
 in (see [configure.md](configure.md#email-domains)), branding, webhooks, stored
 credentials, security alerts, change control, break-glass access and
 offboarding.
+
+**Email** (with `deployment.manage`) shows how outgoing mail is sent — SMTP or
+Microsoft 365, the server and the From address — and **Send test email**, which
+mails your own address and shows the server's answer. When `SMTP_URL` is a local
+test server such as MailDev on a real install, the tab, the Overview and
+**Activity → Attention** say *Mail goes to a test server* (see
+[configure.md](configure.md#outgoing-mail)).
 
 ### Updates
 

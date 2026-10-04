@@ -277,6 +277,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/tenant/deletion/requests', 'Requests erasure of the calling tenant; carries digests, not ids.'],
   ['POST /api/admin/webhooks', 'Creates an endpoint from a name, URL and event groups.'],
   ['POST /api/admin/email-domains', 'Adds a domain by name; takes no object id.'],
+  ['POST /api/admin/mail/test', "Mails the caller's own address; takes no body."],
   ['POST /api/admin/roles', 'Creates a role from a name and permission keys.'],
   ['POST /api/admin/sessions/revoke', 'Revokes every session of the calling tenant; takes no id (and would end the probe\'s own).'],
   ['PUT /api/admin/audit/views', 'Saves the caller\'s own filter; the filter\'s ids are search terms matched under RLS.'],

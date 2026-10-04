@@ -1,5 +1,6 @@
 import { scrubText } from '@syntra/connectors';
 import type { TenantClient } from '@syntra/db';
+import type { MailSinkWarning } from '../notify/mail-check.js';
 
 /**
  * Everything in this tenant that has quietly stopped working.
@@ -20,6 +21,7 @@ import type { TenantClient } from '@syntra/db';
 
 export type IncidentKind =
   | 'scheduler_unavailable'
+  | 'mail_to_test_server'
   | 'webhook_undelivered'
   | 'notification_undelivered'
   | 'target_runs_skipped'
@@ -92,6 +94,7 @@ export interface Incident {
 
 export const INCIDENT_KINDS: readonly IncidentKind[] = [
   'scheduler_unavailable',
+  'mail_to_test_server',
   'webhook_undelivered',
   'notification_undelivered',
   'target_runs_skipped',
@@ -149,13 +152,39 @@ const since = (windowStart: Date | null, state: StoredState | undefined): Date |
   return resolved > windowStart ? resolved : windowStart;
 };
 
-export async function listIncidents(tx: TenantClient, now: Date): Promise<Incident[]> {
+export async function listIncidents(
+  tx: TenantClient,
+  now: Date,
+  options: {
+    /**
+     * `mailSinkWarning(config)`: the installation's mail goes to a local test
+     * server. Configuration, not tenant data, so the route passes it in.
+     */
+    mailSink?: MailSinkWarning | null;
+  } = {},
+): Promise<Incident[]> {
   const stored = await tx.incidentState.findMany();
   const stateOf = new Map<string, StoredState>(stored.map((row) => [row.kind, row]));
   const weekAgo = new Date(now.getTime() - WEEK_MS);
 
   type Draft = Omit<Incident, 'resolvable' | 'acknowledged'>;
   const drafts: Draft[] = [];
+
+  // --- Mail going to a local test server -----------------------------------
+  // A condition: every message since the install was configured has gone
+  // nowhere, and every one until SMTP_URL changes will.
+  if (options.mailSink) {
+    drafts.push({
+      kind: 'mail_to_test_server',
+      severity: 'critical',
+      title: 'Mail goes to a test server',
+      detail: `SMTP_URL is ${options.mailSink.server}. Set it to a real mail server.`,
+      count: 1,
+      lastAt: null,
+      href: '/admin/settings?tab=email',
+      items: [],
+    });
+  }
 
   // --- Webhooks that gave up -------------------------------------------
   {

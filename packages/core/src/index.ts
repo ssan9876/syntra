@@ -127,6 +127,7 @@ export * from './policy/context.js';
 export * from './policy/impact.js';
 export * from './notify/notification-service.js';
 export * from './notify/mail-transport.js';
+export * from './notify/mail-check.js';
 export * from './notify/delivery.js';
 export * from './notify/templates/index.js';
 export * from './notify/webhook-event.js';

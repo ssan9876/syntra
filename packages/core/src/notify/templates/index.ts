@@ -313,6 +313,16 @@ export const TEMPLATES = {
     text: 'Hello {{displayName}},\n\nEmergency (break-glass) console access for {{accountName}} ({{login}}) is now active ({{activatedBy}}) until {{expiresAt}}.\n\nReason given: {{reason}}\n\nEnd it early under Settings → Break-glass. Afterwards, a different administrator must complete the review.',
     html: '<p>Hello {{displayName}},</p><p>Emergency (break-glass) console access for <strong>{{accountName}}</strong> ({{login}}) is now active ({{activatedBy}}) until <strong>{{expiresAt}}</strong>.</p><p>Reason given: {{reason}}</p><p>End it early under Settings → Break-glass. Afterwards, a different administrator must complete the review.</p>',
   },
+  /**
+   * The console's "Send test email", to the administrator who pressed it.
+   * Names the server it went through, so a message that arrives also says
+   * which configuration delivered it.
+   */
+  'mail-test': {
+    subject: 'Test email from {{tenantName}}',
+    text: 'Hello {{displayName}},\n\nThis test email was sent through {{server}} at {{sentAt}}. Mail delivery works.',
+    html: '<p>Hello {{displayName}},</p><p>This test email was sent through {{server}} at {{sentAt}}. Mail delivery works.</p>',
+  },
 } satisfies Record<string, Template>;
 
 export type TemplateName = keyof typeof TEMPLATES;

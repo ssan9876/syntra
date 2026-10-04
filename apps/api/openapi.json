@@ -87,6 +87,9 @@
       "name": "Lifecycle operations"
     },
     {
+      "name": "Mail"
+    },
+    {
       "name": "Operations"
     },
     {
@@ -16940,6 +16943,107 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/mail": {
+      "get": {
+        "operationId": "getMail",
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Read how outgoing mail is sent",
+        "description": "The installation's mail transport (`smtp` or `graph`), the `server` it reaches (`smtp://host:port` or `Microsoft Graph as <mailbox>`, never a credential), the From address, the caller's own address as `recipient`, and `warning` when SMTP_URL points at a local test server such as MailDev while PUBLIC_URL is a real address.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/mail/test": {
+      "post": {
+        "operationId": "postMailTest",
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Send a test email to the caller's own address",
+        "description": "Sends one message through the configured transport and answers `ok`, the `server` it went through and a one-line `message`; a failure carries the transport's own error. Always the caller's address: nothing in the request names a recipient. Waits up to 30 seconds for the server. Audited as `notify.test_email`, `success` or `failure`.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "x-syntra-rate-limit": {
+          "max": 5,
+          "window": "1 minute"
+        },
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

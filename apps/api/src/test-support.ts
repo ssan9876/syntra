@@ -1,6 +1,6 @@
 import { prisma } from '@syntra/db';
 import { resetDatabase, verifyTestEmailDomains } from '@syntra/db/src/test-support.js';
-import { loadConfig, memoryTransport, type Scheduler, type TxtLookup } from '@syntra/core';
+import { loadConfig, memoryTransport, type Scheduler, type Transport, type TxtLookup } from '@syntra/core';
 import { buildApp } from './app.js';
 
 export const TEST_HOST = 'acme.syntra.test';
@@ -119,6 +119,11 @@ export async function buildTestApp(
      * fixtures use; pass `[]` for a tenant with none.
      */
     verifiedDomains?: readonly string[];
+    /**
+     * A transport in place of the memory one, for a test about a mail server
+     * that refuses. `mail` then records nothing.
+     */
+    transport?: Transport;
   } = {},
 ) {
   await resetDatabase();
@@ -150,7 +155,7 @@ export async function buildTestApp(
   const mail = memoryTransport();
   const app = await buildApp(config, {
     logger: false,
-    transport: mail,
+    transport: options.transport ?? mail,
     txtLookup: options.txtLookup ?? (async () => []),
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });

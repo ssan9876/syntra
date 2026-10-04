@@ -11,6 +11,8 @@ import { ChangeControlTab } from './ChangeControlTab.js';
 import { BreakGlassTab } from './BreakGlassTab.js';
 import { DomainsTab } from './DomainsTab.js';
 import { PersonPurgeTab } from './PersonPurgeTab.js';
+import { MailTab } from './MailTab.js';
+import { useCan } from '../../session/SessionProvider.js';
 
 /**
  * Settings: how this organization signs in, what it looks like, and where it
@@ -28,6 +30,7 @@ import { PersonPurgeTab } from './PersonPurgeTab.js';
  * changes it, and a card counting "3 webhooks" would be decoration.
  */
 export function TenantSettingsPage() {
+  const can = useCan();
   return (
     <>
       <PageHeader title="Settings" />
@@ -51,6 +54,9 @@ export function TenantSettingsPage() {
           // events (backlog #52). The expiry alert mails link here.
           { id: 'credentials', label: 'Credentials', content: <CredentialsTab /> },
           { id: 'security-alerts', label: 'Security alerts', content: <SecurityAlertsTab /> },
+          // Outgoing mail and the test send. The transport is the
+          // installation's, set in its environment, so `deployment.manage`.
+          { id: 'email', label: 'Email', content: <MailTab />, hidden: !can('deployment.manage') },
           // Separation of duties for privileged changes, and emergency access.
           { id: 'change-control', label: 'Change control', content: <ChangeControlTab /> },
           { id: 'break-glass', label: 'Break-glass', content: <BreakGlassTab /> },
