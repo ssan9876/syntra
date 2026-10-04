@@ -429,7 +429,8 @@ test('configure a target, write a rule, review a run, apply part of it', async (
   // The account was created; the entitlement was deliberately left out of the
   // apply, so it is not held. An access view that showed it anyway would be
   // reporting what Syntra intended rather than what the person has.
-  await expect(page.getByText(TARGET_NAME)).toBeVisible();
+  // The heading, not any text: "Leave out of <target>" names the target too.
+  await expect(page.getByRole('heading', { name: TARGET_NAME })).toBeVisible();
   await expect(page.getByText(ACCOUNT_NAME)).toBeVisible();
   await expect(page.getByRole('cell', { name: GROUP_CN })).toHaveCount(0);
 });
