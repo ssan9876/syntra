@@ -8,6 +8,22 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-10-04
+
+### Added
+- First-run setup in the browser: while no tenant exists, the API log shows a one-time link (valid 1 hour) to create the organisation and its first Owner. The bootstrap script still works; both record `tenant.created`.
+- Critical incidents for insecure defaults: "Database password is a default" and "Site is not served over HTTPS".
+- `scripts/quickstart.sh` and `scripts/quickstart.ps1`: secrets, `.env`, start and health check in one step, for localhost, a real domain with automatic TLS, or behind your own proxy.
+- `deploy/demo` (a public demo that resets nightly) and `deploy/unraid` notes.
+- Releases carry SPDX SBOMs for the tarball and both images, and signed build provenance (`gh attestation verify`).
+- The Helm chart is published to `oci://ghcr.io/ssan9876/charts/syntra`.
+- Docs site at https://ssan9876.github.io/syntra/ with task guides, a compatibility table and a comparison page.
+- SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, issue templates, release policy and roadmap.
+
+### Fixed
+- The TLS overlay answered 502 to every request: Caddy now reaches the web container on 8080.
+- The container images reported their version as `dev`.
+
 ## [1.19.1] - 2026-10-03
 
 ### Changed
@@ -442,7 +458,8 @@ Not published. The changes below first install with 1.0.4.
 ### Added
 - First release: SCIM 2.0 target connector, compound AND/OR/NOT business rules, and the self-updater (`syntra-update`) with rollback.
 
-[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.19.1...HEAD
+[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.20.0...HEAD
+[1.20.0]: https://github.com/ssan9876/syntra/compare/v1.19.1...v1.20.0
 [1.19.1]: https://github.com/ssan9876/syntra/compare/v1.19.0...v1.19.1
 [1.19.0]: https://github.com/ssan9876/syntra/compare/v1.18.6...v1.19.0
 [1.18.6]: https://github.com/ssan9876/syntra/compare/v1.18.5...v1.18.6
