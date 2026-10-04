@@ -273,7 +273,7 @@ jobs:
       # The images need the same file. Without it the API in the container
       # finds no RELEASE.json at /app and reports itself as `dev`.
       - name: Hand RELEASE.json to the image job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-json
           path: RELEASE.json
