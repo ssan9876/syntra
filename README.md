@@ -1,101 +1,124 @@
-# Syntra
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/syntra-logo-dark.svg">
+    <img src="docs/assets/syntra-logo.svg" alt="Syntra" width="296">
+  </picture>
+</p>
 
-Open-source Identity and Access Management. One place to hold an
-organisation's people, decide what they may reach, and give them a single
-front door to every application they use.
+<p align="center">
+  <strong>Free, self-hosted identity and access management: single sign-on, provisioning, lifecycle and access reviews in one install.</strong>
+</p>
 
-Self-hosted · multi-tenant · Apache-2.0
+<p align="center">
+  <a href="https://github.com/ssan9876/syntra/actions/workflows/ci.yml"><img src="https://github.com/ssan9876/syntra/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/ssan9876/syntra/releases/latest"><img src="https://img.shields.io/github/v/release/ssan9876/syntra" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ssan9876/syntra" alt="License: Apache-2.0"></a>
+  <a href="https://ssan9876.github.io/syntra/"><img src="https://img.shields.io/badge/docs-ssan9876.github.io%2Fsyntra-16588E" alt="Documentation"></a>
+</p>
+
+Syntra holds your people, signs them in to applications over SAML 2.0 and
+OpenID Connect, and creates, changes and disables their accounts in Active
+Directory, Microsoft Entra ID, SCIM 2.0 and REST systems. Apache-2.0, with no
+paid edition.
 
 ![The Syntra administration console](docs/images/console/03-overview.png)
 
+## Quickstart
+
+Requires Docker with Compose.
+
+```bash
+git clone https://github.com/ssan9876/syntra.git && cd syntra
+scripts/quickstart.sh --domain localhost --email you@example.com
+# then open http://localhost:8080
+```
+
+On Windows, use `scripts/quickstart.ps1`. A real hostname gets a Let's
+Encrypt certificate. Options, TLS and production installs:
+[Install → Quickstart](docs/install.md#quickstart).
+
+## Why Syntra
+
+- **Preview before apply.** Every directory sync and provisioning run is a plan
+  first: creates, updates, disables, group changes. A run that would change
+  more than its safety threshold waits for a person, and so does the first run
+  on every target.
+- **People are not logins.** A person (who someone is), their contracts (what
+  they do) and their accounts (how they sign in) are separate records. A
+  contractor with two engagements, a mover, or a service account with nobody
+  behind it all fit.
+- **Lifecycle that finishes.** Joiners, movers and leavers come from HR
+  contracts and stay open as employee work until every target confirms, with
+  service levels and second-approval rules.
+- **Governance built in.** Access reviews, segregation of duties, orphan
+  accounts and a tamper-evident audit log, in the same database as the access
+  they describe.
+
 ## What it does
-
-**For employees** — one sign-in and a portal of tiles, one per application they
-have been given. Second factors (authenticator app, security key, recovery
-codes), self-service password reset, and access requests with approvals.
-
-**For administrators** — a console that opens on what needs a person, and:
 
 | Area | What you get |
 |---|---|
-| **Directory** | People, contracts and accounts kept apart (a person is not a login), groups, an org-unit tree, CSV import, service accounts, and a privacy-request workflow |
-| **Access** | SAML 2.0 and OpenID Connect identity provider, an application catalog (Slack, Google Workspace, Salesforce, Zoom, GitLab, Grafana, AWS IAM Identity Center, Nextcloud, Snipe-IT), assignment by person, group or org unit, an ordered authentication policy, and upstream federation to another SAML or OIDC provider |
-| **Sources** | Directory sync from LDAP or Active Directory, an HR feed read over SFTP, and inbound SCIM 2.0 — every run previewed as a reviewable diff before anything changes |
-| **Provisioning** | Accounts created, updated and disabled in Active Directory, Microsoft Entra ID, any SCIM 2.0 service or any REST API described by a connector document, driven by business rules and org units, guarded by thresholds, held for approval where it matters |
-| **Lifecycle** | Joiners, movers and leavers tracked as employee work until every target confirms, with service levels and second-approval rules |
-| **Govern** | Reconciliation, segregation of duties, recertification campaigns and a tamper-evident evidence chain |
-| **Operate** | A tamper-evident audit log, incidents you can acknowledge and resolve, background-work health with safe repairs, emergency write stops, break-glass access, backups that verify themselves, and updates installed from the console |
+| **Sign-in** | SAML 2.0, OpenID Connect and WS-Federation identity provider. Authenticator apps, security keys, recovery codes, self-service password reset. An ordered sign-in policy. Upstream SAML or OIDC federation. |
+| **Applications** | A 17-entry catalog (Slack, Google Workspace, Salesforce, Zoom, GitLab, Grafana, AWS IAM Identity Center, Snipe-IT and more), any other SAML or OIDC application by hand, assignment by person, group or org unit. |
+| **Directory** | People, contracts and accounts, groups with membership rules, an org-unit tree, CSV import, service accounts, privacy requests. |
+| **Sources** | LDAP or Active Directory sync, an HR export over SFTP, inbound SCIM 2.0. Each run is a reviewable diff. |
+| **Provisioning** | Active Directory, Microsoft Entra ID, any SCIM 2.0 service, any REST API described by a connector document. Business rules, safety thresholds, **Stop writes**. |
+| **Governance** | Access reviews, segregation of duties, reconciliation, a tamper-evident evidence chain. |
+| **Operations** | Incidents in the console, background-job health with safe repairs, backups that verify themselves, break-glass access, updates installed from the console. |
 
-See every screen in the **[console guide](docs/console-guide.md)**.
+What is tested against what: [Compatibility](docs/compatibility.md).
+
+## Screenshots
+
+| | |
+|---|---|
+| ![People](docs/images/console/04-people.png) | ![Applications](docs/images/console/07-applications.png) |
+| People, kept apart from their accounts | Applications and the catalog |
+| ![Target systems](docs/images/console/09-targets.png) | ![Provisioning setup](docs/images/console/10-provisioning-setup.png) |
+| Target systems and their runs | A checklist per target, to the first applied run |
+
+Every screen: [Console tour](docs/console-guide.md).
 
 ## Documentation
 
-| Guide | For |
+Online at **[ssan9876.github.io/syntra](https://ssan9876.github.io/syntra/)**, or in [`docs/`](docs/):
+
+| Read | For |
 |---|---|
-| [Console guide](docs/console-guide.md) | Every console screen, with screenshots, in the order you would set one up |
-| [Install](docs/install.md) | Development install, the container path, TLS, Kubernetes, the single-process release layout |
-| [Configure](docs/configure.md) | Every setting, tenants and hostnames, sources, connectors, sign-in and policy, SSO and federation, the administration API |
-| [Operate](docs/operate.md) | Updates, backups, monitoring, incidents, troubleshooting, and the runbooks |
-
-## Quickstart (development)
-
-Requires Node 22+ and Docker; `corepack enable` picks up the pinned pnpm.
-
-```bash
-pnpm install
-pnpm db:up
-cp .env.example .env && cp packages/db/.env.example packages/db/.env
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"  # twice: SESSION_SECRET and MASTER_KEY in .env
-pnpm db:generate && pnpm db:migrate
-SEED_ADMIN_PASSWORD='choose-a-long-one' pnpm seed
-pnpm dev                                    # api on :3000, web on :5173
-```
-
-Open **http://acme.localhost:5173**, sign in as `admin`, and choose
-**Administration**. For a real installation — containers behind TLS, or the
-release layout with updates from the console — follow [Install](docs/install.md).
+| [Install](docs/install.md) | Quickstart, containers, TLS, Kubernetes, the single-process layout |
+| [Guides](docs/guides/index.md) | One task each: SSO from the catalog, AD provisioning, Mattermost SAML, access reviews, backups |
+| [Configure](docs/configure.md) | Every setting, sources, connectors, SSO, the administration API |
+| [Operate](docs/operate.md) | Updates, backups, monitoring, incidents, runbooks |
+| [Compatibility](docs/compatibility.md) | Every connector and catalog app, with status and limits |
+| [Comparison](docs/comparison.md) | Syntra next to Keycloak, Authentik, Zitadel and midPoint |
+| [Roadmap](ROADMAP.md) | What is planned |
 
 ## How it is put together
 
 ```
-apps/
-  api/          Fastify: the REST API, SAML and OIDC endpoints, federation
-  web/          One React application: the portal at /, the console at /admin
-packages/
-  db/           Prisma schema and migrations
-  core/         Domain services; knows nothing about HTTP
-  contracts/    Zod schemas shared by the API and the web app
-  connectors/   LDAP/AD, Entra ID, SCIM, REST and SFTP clients
-  protocols/    SAML, WS-Federation, OIDC and XML signing
-  ui/           The design system
+apps/api        Fastify: REST API, SAML, OIDC and WS-Federation endpoints
+apps/web        One React app: the portal at /, the console at /admin
+packages/core   Domain services; knows nothing about HTTP
+packages/db     Prisma schema and migrations (PostgreSQL 16)
+packages/connectors  LDAP/AD, Entra ID, SCIM, REST and SFTP clients
+packages/protocols   SAML, WS-Federation, OIDC and XML signing
 ```
 
-Three decisions shape everything else:
+- **Tenant isolation is enforced by PostgreSQL** row-level security. A query
+  that forgets its tenant returns nothing.
+- **Every authentication goes through one `authorize()`**: sign-in, console
+  elevation and every application launch.
 
-- **Tenant isolation is enforced by PostgreSQL.** Every tenant table has
-  `FORCE ROW LEVEL SECURITY` and the application connects as a role that
-  cannot bypass it, so a query that forgets its tenant returns nothing rather
-  than another tenant's rows.
-- **A person is not an account.** `Person` is who someone is, `Contract` is
-  what they do, `User` is how they sign in — so a contractor with two
-  engagements, a mover and a service account with nobody behind it are all
-  representable.
-- **Every authentication goes through one function.** Sign-in, elevation to
-  the console and every application launch reach the same `authorize()`, so
-  policy and auditing live in one place.
+Working on Syntra itself: [development install](docs/install.md#development-install).
 
-## Tests
+## Community
 
-```bash
-pnpm test                       # domain, API and database integration tests
-pnpm --filter @syntra/web test  # console component tests
-pnpm e2e                        # browser tests against a running stack
-pnpm typecheck
-```
+- Questions and ideas: [GitHub Discussions](https://github.com/ssan9876/syntra/discussions)
+- Bugs: [issues](https://github.com/ssan9876/syntra/issues)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reports: [SECURITY.md](SECURITY.md), not public issues
 
-The integration tests run against a real PostgreSQL: row-level security,
-partial unique indexes and append-only rules only exist in the database. More
-in [Operate](docs/operate.md).
+Syntra is maintained by one person and will stay free.
 
 ## License
 

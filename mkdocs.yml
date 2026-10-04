@@ -1,0 +1,91 @@
+site_name: Syntra
+site_description: Free, self-hosted identity and access management. Apache-2.0.
+site_url: https://ssan9876.github.io/syntra/
+repo_url: https://github.com/ssan9876/syntra
+repo_name: ssan9876/syntra
+edit_uri: edit/main/docs/
+copyright: Syntra is free software under the Apache License 2.0.
+
+docs_dir: docs
+exclude_docs: |
+  requirements.txt
+
+theme:
+  name: material
+  logo: assets/syntra-mark.svg
+  favicon: assets/syntra-mark.svg
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - search.suggest
+    - search.highlight
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - assets/extra.css
+
+plugins:
+  - search
+
+hooks:
+  - tools/docs/repo_links.py
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Install: install.md
+      - Console tour: console-guide.md
+  - Guides:
+      - guides/index.md
+      - Add SSO to an application: guides/sso-from-catalog.md
+      - Provision into Active Directory: guides/provision-active-directory.md
+      - Switch Mattermost users to SAML: guides/mattermost-saml.md
+      - Leave one person out of a target: guides/leave-person-out.md
+      - Run your first access review: guides/first-access-review.md
+      - Back up and copy backups off the host: guides/backups-off-host.md
+  - Reference:
+      - Configure: configure.md
+      - Operate: operate.md
+      - Compatibility: compatibility.md
+      - Brand assets: interlock-assets.md
+  - Compare: comparison.md

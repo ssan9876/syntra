@@ -1,0 +1,81 @@
+/* Interlock brand colours: blue #16588E, amber #C24D0C. */
+:root {
+  --md-primary-fg-color: #16588e;
+  --md-primary-fg-color--light: #2f7bc0;
+  --md-primary-fg-color--dark: #102b46;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+  --md-accent-fg-color: #c24d0c;
+  --md-accent-fg-color--transparent: rgba(194, 77, 12, 0.1);
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #16588e;
+  --md-primary-fg-color--light: #5b9bd5;
+  --md-primary-fg-color--dark: #102b46;
+  --md-accent-fg-color: #e07a3f;
+  --md-accent-fg-color--transparent: rgba(224, 122, 63, 0.1);
+  --md-typeset-a-color: #5b9bd5;
+}
+
+/* The header uses the page background so both links of the mark stay visible. */
+.md-header,
+.md-tabs {
+  background-color: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.md-header__button.md-logo img {
+  height: 1.6rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button:not(.md-button--primary) {
+  color: #5b9bd5;
+  border-color: #5b9bd5;
+}
+
+[data-md-color-scheme="slate"] .md-header__button.md-logo img {
+  content: url("syntra-mark-dark.svg");
+}
+
+.md-search__form {
+  background-color: var(--md-default-fg-color--lightest);
+}
+
+.md-search__input,
+.md-search__icon {
+  color: var(--md-default-fg-color);
+}
+
+.md-search__input::placeholder {
+  color: var(--md-default-fg-color--light);
+}
+
+/* Landing page feature grid. */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.feature-grid > div {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.4rem;
+  padding: 0.8rem 1rem;
+}
+
+.feature-grid > div > p:first-child {
+  margin-top: 0;
+  font-weight: 700;
+}
+
+.feature-grid > div > p:last-child {
+  margin-bottom: 0;
+}
+
+.hero-logo {
+  width: 14rem;
+  max-width: 100%;
+}
