@@ -11,6 +11,10 @@ import { describeAdminRoutes } from '../../openapi/describe.js';
  */
 export const tenantOpenApi = describeAdminRoutes('Tenant', {
   'GET /tenant': { summary: 'Get the tenant\'s settings' },
+  'GET /tenant/sign-in-security': {
+    summary: 'Get the tenant\'s sign-in security checks',
+    description: 'Active accounts holding any role with no confirmed authenticator app and no security key, whether the console requires a second factor, whether account lockout is on, and whether a break-glass account is designated.',
+  },
   'POST /tenant/offboarding/assess': {
     summary: 'Assess whether the tenant is ready to be offboarded',
     description: 'Inventories the tenant\'s records and refuses readiness while a legal hold or unresolved lifecycle work exists. The assessment is bound to a SHA-256 digest and recorded as an audit receipt.',

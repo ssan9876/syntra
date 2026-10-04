@@ -11,6 +11,7 @@ export * from './tenant/brand-service.js';
 export * from './tenant/offboarding-service.js';
 export * from './tenant/deletion-service.js';
 export * from './tenant/email-domains.js';
+export * from './tenant/sign-in-security.js';
 export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './health/attention.js';

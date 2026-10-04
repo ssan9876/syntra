@@ -32,6 +32,19 @@ Where the console opens.
   employee work, stopped writes, unreachable connectors, connector tests to
   repeat, locked accounts, accounts with no person. Each card links to the
   screen where it is dealt with. When nothing is waiting it says so.
+- **Sign-in security** lists the sign-in checks that fail, for holders of
+  `tenant.manage`:
+  - administrators (anybody holding a role) with no authenticator app and no
+    security key, each name linking to the account;
+  - the console does not require a second factor (**Require a second factor
+    for the console** and **Require a security key for the console** are both
+    off);
+  - account lockout is off (**Lock an account after repeated failures**);
+  - no break-glass account is designated.
+
+  The second and third link to **Settings → Sign-in**, the last to
+  **Settings → Break-glass**. When every check passes the section is not
+  shown. The same checks are at `GET /api/admin/tenant/sign-in-security`.
 - The figures below it count people, accounts, applications, target systems and
   sources, and link to each list.
 - **Connected systems** shows every target and source with its state and when
