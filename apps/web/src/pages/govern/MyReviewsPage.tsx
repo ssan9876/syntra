@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Check, Empty, Panel, SkeletonRows, StateBadge, useToast } from '@syntra/ui';
+import { AppShell } from '../../components/AppShell.js';
 import { api, ApiError } from '../../session/api.js';
 import { useApiResource } from '../../session/use-api-resource.js';
 
@@ -38,6 +39,14 @@ const carveOut = (item: ReviewItem): string | null => {
 };
 
 export function MyReviewsPage() {
+  return (
+    <AppShell>
+      <Reviews />
+    </AppShell>
+  );
+}
+
+function Reviews() {
   const { data, error, loading, reload } = useApiResource<{ items: ReviewItem[] }>(
     '/api/portal/govern/reviews',
   );

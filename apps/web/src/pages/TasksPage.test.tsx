@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { SessionProvider } from '../session/SessionProvider.js';
 import { TasksPage } from './TasksPage.js';
 
 const json = (body: unknown, status = 200) =>
@@ -74,7 +75,9 @@ function mockApi(options: { tasks?: unknown[]; run?: () => Response } = {}) {
 const renderPage = () =>
   render(
     <MemoryRouter>
-      <TasksPage />
+      <SessionProvider>
+        <TasksPage />
+      </SessionProvider>
     </MemoryRouter>,
   );
 
@@ -83,6 +86,19 @@ beforeEach(() => {
 });
 
 describe('TasksPage', () => {
+  it('keeps the portal navigation on the list and on an open task', async () => {
+    // Opening a task used to replace the whole page, header and navigation
+    // included, and the only way back was the browser's Back button.
+    const user = userEvent.setup();
+    mockApi();
+    renderPage();
+
+    expect(await screen.findByRole('navigation', { name: 'Portal' })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: /unlock an account/i }));
+    await screen.findByRole('button', { name: /^unlock an account$/i });
+    expect(screen.getByRole('navigation', { name: 'Portal' })).toBeInTheDocument();
+  });
+
   it('says nothing has been delegated when the list is empty', async () => {
     mockApi({ tasks: [] });
     renderPage();
