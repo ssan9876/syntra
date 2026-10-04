@@ -109,8 +109,8 @@ importers:
         specifier: ^5.12.5
         version: 5.12.5
       jose:
-        specifier: 6.2.9
-        version: 6.2.9
+        specifier: 6.2.12
+        version: 6.2.12
       oidc-provider:
         specifier: 9.12.2
         version: 9.12.2
@@ -250,8 +250,8 @@ importers:
         specifier: 2.5.0
         version: 2.5.0
       jose:
-        specifier: 6.2.9
-        version: 6.2.9
+        specifier: 6.2.12
+        version: 6.2.12
       ldapts:
         specifier: ^9.2.0
         version: 9.2.0
@@ -312,8 +312,8 @@ importers:
         specifier: 0.9.12
         version: 0.9.12
       jose:
-        specifier: 6.2.9
-        version: 6.2.9
+        specifier: 6.2.12
+        version: 6.2.12
       oidc-provider:
         specifier: 9.12.2
         version: 9.12.2
@@ -2383,9 +2383,6 @@ packages:
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
-
-  jose@6.2.9:
-    resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -5723,8 +5720,6 @@ snapshots:
   jiti@2.7.0: {}
 
   jose@6.2.12: {}
-
-  jose@6.2.9: {}
 
   js-tokens@4.0.0: {}
 
