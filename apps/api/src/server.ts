@@ -1,5 +1,12 @@
 import { prisma } from '@syntra/db';
-import { buildInfo, keyManagementWarnings, loadConfig, mailSinkWarning, masterKeyProviderFor } from '@syntra/core';
+import {
+  buildInfo,
+  insecureDefaults,
+  keyManagementWarnings,
+  loadConfig,
+  mailSinkWarning,
+  masterKeyProviderFor,
+} from '@syntra/core';
 import { setOperationalLog } from '@syntra/connectors';
 import { startTelemetry } from './telemetry.js';
 import { buildApp } from './app.js';
@@ -72,6 +79,27 @@ for (const warning of keyManagementWarnings(config.keyManagement)) app.log.warn(
 // else in the log would ever say that mail is going nowhere.
 const mailSink = mailSinkWarning(config);
 if (mailSink) app.log.warn({ smtpServer: mailSink.server }, `mail not delivered: ${mailSink.message}`);
+// The same text the Overview shows as an incident. Warnings, never a refusal
+// to start: a lab on plain HTTP is a supported way to try Syntra.
+for (const insecure of insecureDefaults(config)) {
+  app.log.warn({ variable: insecure.variable }, `insecure configuration: ${insecure.message}`);
+}
+
+// FIRST-RUN SETUP. Only when the database has no tenant at all. The link is
+// written to standard output directly, not through the logger: the logger
+// scrubs URL queries and long tokens from every line, which is right for
+// everything else and would leave this line without the one thing it is for.
+void app.firstRunSetup.open().then(
+  (link) => {
+    if (!link) return;
+    const url = new URL('/setup', config.publicUrl);
+    url.searchParams.set('token', link.token);
+    app.log.warn({ expiresAt: link.expiresAt.toISOString() }, 'first-run setup open: no tenant exists');
+    process.stdout.write(`First-run setup: open ${url.toString()} within 1 hour. The link works once.\n`);
+  },
+  (err: unknown) =>
+    app.log.error({ err: err instanceof Error ? err.message : String(err) }, 'first-run setup check failed'),
+);
 void masterKeyProviderFor(config)
   .check()
   .then(

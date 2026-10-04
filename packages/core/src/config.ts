@@ -18,6 +18,13 @@ const blankIsUnset = <T extends z.ZodType>(inner: T) => z.preprocess(blankToUnde
 
 const schema = z.object({
   DATABASE_URL: z.string().url(),
+  /**
+   * Read for one purpose only: the insecure-default check at startup
+   * (`health/insecure-defaults.ts`). The API never connects with it. Not
+   * validated as a URL, because a value this process does not use must not
+   * stop it from starting.
+   */
+  SUPERUSER_DATABASE_URL: blankIsUnset(z.string()),
   PORT: z.coerce.number().int().positive().default(3000),
   PUBLIC_URL: z.string().url(),
   SESSION_SECRET: z
@@ -370,6 +377,8 @@ function parseTrustProxy(raw: string | undefined): false | string {
 
 export interface Config {
   databaseUrl: string;
+  /** SUPERUSER_DATABASE_URL, where the process was given one. Never connected with. */
+  superuserDatabaseUrl: string | null;
   port: number;
   publicUrl: string;
   /**
@@ -460,6 +469,7 @@ export function loadConfig(
 
   return {
     databaseUrl: v.DATABASE_URL,
+    superuserDatabaseUrl: v.SUPERUSER_DATABASE_URL ?? null,
     port: v.PORT,
     publicUrl: v.PUBLIC_URL,
     cookieSecure: cookiesAreSecure(v.PUBLIC_URL),

@@ -1,6 +1,7 @@
 import { scrubText } from '@syntra/connectors';
 import type { TenantClient } from '@syntra/db';
 import type { MailSinkWarning } from '../notify/mail-check.js';
+import type { InsecureDefault } from './insecure-defaults.js';
 
 /**
  * Everything in this tenant that has quietly stopped working.
@@ -22,6 +23,8 @@ import type { MailSinkWarning } from '../notify/mail-check.js';
 export type IncidentKind =
   | 'scheduler_unavailable'
   | 'mail_to_test_server'
+  | 'database_default_password'
+  | 'public_url_not_https'
   | 'webhook_undelivered'
   | 'notification_undelivered'
   | 'target_runs_skipped'
@@ -95,6 +98,8 @@ export interface Incident {
 export const INCIDENT_KINDS: readonly IncidentKind[] = [
   'scheduler_unavailable',
   'mail_to_test_server',
+  'database_default_password',
+  'public_url_not_https',
   'webhook_undelivered',
   'notification_undelivered',
   'target_runs_skipped',
@@ -161,6 +166,12 @@ export async function listIncidents(
      * server. Configuration, not tenant data, so the route passes it in.
      */
     mailSink?: MailSinkWarning | null;
+    /**
+     * `insecureDefaults(config)`: a default database password, PUBLIC_URL on
+     * plain HTTP. Configuration again, and installation-wide: the route passes
+     * these only to a caller who holds `deployment.manage`.
+     */
+    insecureDefaults?: readonly InsecureDefault[];
   } = {},
 ): Promise<Incident[]> {
   const stored = await tx.incidentState.findMany();
@@ -184,6 +195,42 @@ export async function listIncidents(
       href: '/admin/settings?tab=email',
       items: [],
     });
+  }
+
+  // --- Insecure defaults in the configuration -------------------------------
+  // Conditions, like the mail sink: true from startup until the variable
+  // changes and the API restarts.
+  {
+    const insecure = options.insecureDefaults ?? [];
+    const passwords = insecure.filter((d) => d.kind === 'database_default_password');
+    if (passwords.length > 0) {
+      drafts.push({
+        kind: 'database_default_password',
+        severity: 'critical',
+        title: 'Database password is a default',
+        detail: passwords[0]!.message,
+        count: passwords.length,
+        lastAt: null,
+        href: '/admin/operations',
+        items:
+          passwords.length > 1
+            ? passwords.map((d) => ({ label: d.variable, detail: d.message, at: null, href: null }))
+            : [],
+      });
+    }
+    const http = insecure.find((d) => d.kind === 'public_url_not_https');
+    if (http) {
+      drafts.push({
+        kind: 'public_url_not_https',
+        severity: 'critical',
+        title: 'Site is not served over HTTPS',
+        detail: http.message,
+        count: 1,
+        lastAt: null,
+        href: '/admin/operations',
+        items: [],
+      });
+    }
   }
 
   // --- Webhooks that gave up -------------------------------------------

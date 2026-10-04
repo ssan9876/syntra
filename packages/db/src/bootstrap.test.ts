@@ -134,7 +134,14 @@ describe('bootstrapTenant', () => {
       expect(await tx.orgUnit.count()).toBe(0);
       expect(await tx.person.count()).toBe(0);
       expect(await tx.application.count()).toBe(0);
+
+      // One audit event, the first in the chain, saying how the tenant was made.
+      const events = await tx.auditEvent.findMany();
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ action: 'tenant.created', actorUserId: null, targetId: tenant.id, sequence: 1 });
+      expect(events[0]!.payload).toMatchObject({ via: 'bootstrap', ownerUserId: users[0]!.id, ownerRoleId: owner.id });
     });
+    expect(result).toMatchObject({ tenantId: tenant.id });
 
     // The SAML signing key was established from MASTER_KEY, same as
     // seed.ts. Read through withTenant: SigningKey carries FORCE ROW LEVEL
@@ -156,10 +163,13 @@ describe('bootstrapTenant', () => {
     const tenants = await prisma.tenant.findMany({ where: { slug: 'northwind' } });
     expect(tenants).toHaveLength(1);
 
+    expect(second.adminUserId).toBeNull();
+
     await withTenant(tenant.id, async (tx) => {
       expect(await tx.user.count()).toBe(1);
       expect(await tx.role.count()).toBe(2);
       expect(await tx.roleAssignment.count()).toBe(1);
+      expect(await tx.auditEvent.count()).toBe(1);
     });
   });
 });

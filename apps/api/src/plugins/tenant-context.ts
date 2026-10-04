@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { prisma, withTenant, type TenantClient } from '@syntra/db';
+import { isServerPath } from '@syntra/contracts';
 import { ProblemError } from './problem-json.js';
 
 declare module 'fastify' {
@@ -30,8 +31,11 @@ declare module 'fastify' {
  * API. It is the same document for every tenant and contains nothing from
  * any of them, and a client generator is pointed at an address long before
  * anybody has set up the hostname a tenant resolves from.
+ *
+ * `/api/setup` creates the first tenant, so there is none to resolve. It
+ * answers 404 by itself once any tenant exists (`routes/setup.ts`).
  */
-const UNSCOPED_PATHS = new Set(['/health', '/health/ready', '/metrics', '/api/openapi.json']);
+const UNSCOPED_PATHS = new Set(['/health', '/health/ready', '/metrics', '/api/openapi.json', '/api/setup']);
 
 /**
  * Resolves a tenant from the Host header, in three passes: the exact primary
@@ -84,6 +88,19 @@ export interface TenantContextOptions {
    * listed the name on the tenant. The page says that.
    */
   unknownHostPage?: (hostname: string) => string;
+  /**
+   * True while no tenant exists. Where this process serves the application,
+   * the setup page and the files it loads are then served on any hostname:
+   * a fresh install has no tenant for any hostname to resolve to.
+   */
+  setupPending?: () => Promise<boolean>;
+}
+
+/** The setup page itself, or a static file outside the server's own paths. */
+function isSetupPageRequest(request: FastifyRequest): boolean {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return false;
+  const path = request.url.split('?')[0]!;
+  return path === '/setup' || (!isServerPath(path) && /\.[A-Za-z0-9]+$/.test(path));
 }
 
 export function registerTenantContext(
@@ -101,6 +118,9 @@ export function registerTenantContext(
     if (UNSCOPED_PATHS.has(request.url.split('?')[0]!)) return;
 
     const tenantId = await resolveTenantId(request.headers.host);
+    if (!tenantId && options.setupPending && isSetupPageRequest(request) && (await options.setupPending())) {
+      return;
+    }
     if (!tenantId) {
       // A document request from a browser gets the explanation; everything
       // else gets the machine-readable refusal it can act on. `Accept` must

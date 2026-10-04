@@ -22,7 +22,12 @@ const SINK_PORTS = new Set(['1025']);
 /** The service names those catchers run under in a compose file. */
 const SINK_HOSTS = new Set(['maildev', 'mailhog', 'mailpit', 'smtp4dev']);
 
-function isLoopback(hostname: string): boolean {
+/**
+ * Whether a hostname names this machine: `localhost`, `*.localhost`, `::1`,
+ * `0.0.0.0` or anything in 127/8. Exported for `insecure-defaults.ts`, which
+ * asks the same question of PUBLIC_URL.
+ */
+export function isLoopback(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   return (
     host === 'localhost' ||

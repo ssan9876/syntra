@@ -26,7 +26,7 @@ export { isSupportUrl };
  * One definition for both the primary and the additional list. Two copies of
  * a validation rule are two rules as soon as somebody edits one.
  */
-const hostname = z
+export const tenantHostname = z
   .string()
   .max(253)
   .trim()
@@ -135,7 +135,7 @@ export const tenantSettingsRequest = z
      *
      * Nullable clears it, which turns WebAuthn off for the tenant.
      */
-    primaryDomain: hostname.nullable().optional(),
+    primaryDomain: tenantHostname.nullable().optional(),
     /**
      * How many registered passkeys the caller was told this would break.
      *
@@ -150,7 +150,7 @@ export const tenantSettingsRequest = z
      * primary, sent whole rather than as add/remove: the form owns the list, and
      * a partial update would need a merge rule nobody would remember.
      */
-    additionalDomains: z.array(hostname).max(20).optional(),
+    additionalDomains: z.array(tenantHostname).max(20).optional(),
     /**
      * Session lifetimes, in minutes, within `SESSION_POLICY_BOUNDS`. The
      * cross-field relations (idle within absolute, admin within portal) are

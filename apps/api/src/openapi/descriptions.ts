@@ -7,6 +7,7 @@ import { exportsOpenApi } from '../routes/admin/exports.openapi.js';
 import { credentialsOpenApi } from '../routes/admin/credentials.openapi.js';
 import { credentialPickupsOpenApi } from '../routes/admin/credential-pickups.openapi.js';
 import { credentialPickupOpenApi } from '../routes/credential-pickup.openapi.js';
+import { setupOpenApi } from '../routes/setup.openapi.js';
 import { automateOpenApi } from '../routes/admin/automate.openapi.js';
 import { employeeLifecycleOpenApi } from '../routes/admin/employee-lifecycle.openapi.js';
 import { governOpenApi } from '../routes/admin/govern.openapi.js';
@@ -91,10 +92,11 @@ export const ADMIN_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [
 
 /**
  * The unauthenticated routes that are part of the published contract: the
- * few a person reaches from a link in an email, without signing in. Checked
- * by `openapi.test.ts` like the administration routes above.
+ * few a person reaches from a link in an email, or in the log at first run,
+ * without signing in. Checked by `openapi.test.ts` like the administration
+ * routes above.
  */
-export const PUBLIC_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [...credentialPickupOpenApi];
+export const PUBLIC_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [...credentialPickupOpenApi, ...setupOpenApi];
 
 /** Everything the published document describes. */
 export const ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [

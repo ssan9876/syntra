@@ -23,3 +23,4 @@ export * from './credentials.js';
 export * from './http.js';
 export * from './rbac.js';
 export * from './person-deletion.js';
+export * from './setup.js';

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { prisma, withTenant } from '@syntra/db';
 import { resetDatabase } from '@syntra/db/src/test-support.js';
 import { acknowledgeIncident, listIncidents, resolveIncident } from './incidents.js';
+import { insecureDefaults } from './insecure-defaults.js';
 
 let tenantId: string;
 const NOW = new Date('2026-08-26T12:00:00.000Z');
@@ -313,6 +314,44 @@ describe('listIncidents', () => {
 
     // Fixed: SMTP_URL changed, so the route passes nothing.
     expect(await kinds()).not.toContain('mail_to_test_server');
+  });
+
+  it('reports insecure defaults as conditions, one incident per kind', async () => {
+    const insecure = insecureDefaults({
+      databaseUrl: 'postgresql://syntra_app:syntra_app@postgres:5432/syntra',
+      superuserDatabaseUrl: 'postgresql://syntra:syntra@postgres:5432/syntra',
+      publicUrl: 'http://idm.contoso.com',
+    });
+    const list = await withTenant(tenantId, (tx) => listIncidents(tx, NOW, { insecureDefaults: insecure }));
+    expect(list.find((i) => i.kind === 'database_default_password')).toMatchObject({
+      severity: 'critical',
+      title: 'Database password is a default',
+      detail: 'DATABASE_URL uses the password "syntra_app". Change it and update DATABASE_URL.',
+      count: 2,
+      resolvable: false,
+      items: [
+        { label: 'DATABASE_URL', detail: 'DATABASE_URL uses the password "syntra_app". Change it and update DATABASE_URL.' },
+        {
+          label: 'SUPERUSER_DATABASE_URL',
+          detail: 'SUPERUSER_DATABASE_URL uses the password "syntra". Change it and update SUPERUSER_DATABASE_URL.',
+        },
+      ],
+    });
+    expect(list.find((i) => i.kind === 'public_url_not_https')).toMatchObject({
+      severity: 'critical',
+      title: 'Site is not served over HTTPS',
+      detail: 'PUBLIC_URL is http://idm.contoso.com. Serve Syntra over HTTPS and set PUBLIC_URL to the https:// address.',
+      resolvable: false,
+    });
+
+    // One variable at fault: the detail says it all, so no item list.
+    const single = await withTenant(tenantId, (tx) =>
+      listIncidents(tx, NOW, { insecureDefaults: insecure.filter((d) => d.variable === 'DATABASE_URL') }),
+    );
+    expect(single.find((i) => i.kind === 'database_default_password')).toMatchObject({ count: 1, items: [] });
+
+    // Fixed: nothing passed, nothing listed.
+    expect(await kinds()).not.toContain('database_default_password');
   });
 
   it('offers no resolution for a condition, which clears when fixed', async () => {

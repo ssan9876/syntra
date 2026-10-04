@@ -12,6 +12,7 @@ import { RenewPassword } from './pages/RenewPassword.js';
 import { ResetPassword } from './pages/ResetPassword.js';
 import { CredentialPickup } from './pages/CredentialPickup.js';
 import { BreakGlass } from './pages/BreakGlass.js';
+import { Setup } from './pages/Setup.js';
 import { CatalogPage } from './pages/automate/CatalogPage.js';
 import { RequestFormPage } from './pages/automate/RequestFormPage.js';
 import { MyRequestsPage } from './pages/automate/MyRequestsPage.js';
@@ -106,6 +107,11 @@ export function AppRoutes() {
         nobody can sign in to the console. It grants nothing by itself.
       */}
       <Route path="/break-glass" element={<BreakGlass />} />
+      {/*
+        Outside RequireSession: first-run setup runs before any tenant or
+        account exists. The token in its link is the only credential.
+      */}
+      <Route path="/setup" element={<Setup />} />
       <Route
         path="/security"
         element={
