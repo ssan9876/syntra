@@ -1,10 +1,89 @@
 # Installing Syntra
 
-A development install that runs everything from source with hot reload, and
-three ways to run it for real: the built application as one process, the
-container path behind Docker Compose, and a Helm chart for Kubernetes. Pick
+The [Quickstart](#quickstart) takes a machine with Docker to a
+signed-in console in about ten minutes. Below it: a development install that
+runs everything from source with hot reload, and three ways to run it for
+real: the built application as one process, the container path behind Docker
+Compose (which the Quickstart sets up), and a Helm chart for Kubernetes. Pick
 the development install to work on Syntra itself; pick one of the others to
 put it in front of people.
+
+## Quickstart
+
+About 10 minutes. Needs Docker with the Compose plugin (v2.24 or later) and, for a real
+hostname, ports 80 and 443 reachable from the internet.
+
+```bash
+git clone https://github.com/ssan9876/syntra.git && cd syntra
+scripts/quickstart.sh --domain localhost --email you@example.com --version 1.19.1
+```
+
+On Windows, `powershell -ExecutionPolicy Bypass -File scripts\quickstart.ps1 -Domain localhost -Email you@example.com`
+does the same. Without flags, either script asks.
+
+The script:
+
+1. Writes `.env` beside `docker-compose.yml`, readable by you only, with
+   generated `POSTGRES_PASSWORD`, `SYNTRA_APP_PASSWORD`, `SESSION_SECRET` and
+   `MASTER_KEY`. It refuses to overwrite an existing `.env`.
+2. Starts the stack and waits until `/health/ready` passes.
+3. Prints the next step.
+
+**Back up `MASTER_KEY` from `.env` straight away**, somewhere other than this
+host. It encrypts every stored credential; without it the database cannot be
+read back.
+
+| `--domain` | Runs | `PUBLIC_URL` |
+|---|---|---|
+| `localhost` (default) | Plain HTTP on `127.0.0.1:8080`, to try it on this machine. | `http://localhost:8080` |
+| A real name, e.g. `idm.example.com` | Caddy in front (`docker-compose.tls.yml`), with a Let's Encrypt certificate. The name must resolve to this host on ports 80 and 443. | `https://idm.example.com` |
+| A real name with `--own-proxy` | Plain HTTP on `127.0.0.1:8080` for your own TLS proxy on this host. | `https://idm.example.com` |
+
+Other flags: `--smtp-url` (outgoing mail; without it `SMTP_URL` is a
+placeholder and no mail is delivered), `--version` (pins `SYNTRA_VERSION`;
+without it `:latest` runs), `--project` (Compose project name), `--no-start`
+(write `.env` only). `scripts/quickstart.sh --help` lists them all.
+
+With Caddy, `.env` sets `COMPOSE_FILE` so plain `docker compose ...` in this
+directory includes the overlay. Setting it switches off the automatic
+`docker-compose.override.yml`: append `:docker-compose.override.yml` to that
+line if you create one.
+
+### Create your organization
+
+If the API log shows a First-run setup link, open it:
+
+```bash
+docker compose logs api | grep "First-run setup"
+```
+
+Otherwise run, with a password of 12 or more characters:
+
+```bash
+docker compose exec \
+  -e BOOTSTRAP_TENANT_NAME='Example Ltd' -e BOOTSTRAP_TENANT_SLUG=example \
+  -e BOOTSTRAP_TENANT_DOMAIN=localhost -e BOOTSTRAP_ADMIN_EMAIL=you@example.com \
+  -e BOOTSTRAP_ADMIN_PASSWORD='...' \
+  api pnpm --filter @syntra/db bootstrap
+```
+
+`BOOTSTRAP_TENANT_DOMAIN` is the `--domain` you gave the script. Then open
+`PUBLIC_URL` and sign in as `admin`. `scripts/quickstart.sh --bootstrap` runs
+this step for you with a generated password, printed once.
+
+### Next
+
+- Set a real `SMTP_URL` in `.env` and run `docker compose up -d`; **Settings**
+  sends a test email.
+- [Configuration](configure.md) has every variable; the ones Compose does not
+  pass through go in `docker-compose.override.yml`
+  ([Where the variables go](configure.md#where-the-variables-go)).
+- [Backups](operate.md#backups) and [upgrades](operate.md#upgrades).
+- A public demo with sample data: [`deploy/demo`](../deploy/demo/README.md).
+  Unraid: [`deploy/unraid`](../deploy/unraid/README.md).
+
+To start again from nothing: `docker compose down -v`, delete `.env`, run the
+script again. `down -v` deletes the database.
 
 ## Development install
 
