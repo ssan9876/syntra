@@ -87,5 +87,6 @@ nav:
       - Configure: configure.md
       - Operate: operate.md
       - Compatibility: compatibility.md
+      - Releases and support: releases.md
       - Brand assets: interlock-assets.md
   - Compare: comparison.md
