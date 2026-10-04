@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Check, Empty, Field, Panel, Select, SkeletonRows } from '@syntra/ui';
+import { AppShell } from '../components/AppShell.js';
 import { ApiError, api } from '../session/api.js';
 import { useApiResource } from '../session/use-api-resource.js';
 
@@ -56,6 +57,16 @@ function visible(field: FormFieldSpec, values: Values, schema: FormFieldSpec[]):
  * their organisation has delegated to them, and nothing else.
  */
 export function TasksPage() {
+  // The shell wraps both views, the list and an open task, so the portal
+  // navigation is there whichever one is showing.
+  return (
+    <AppShell>
+      <Tasks />
+    </AppShell>
+  );
+}
+
+function Tasks() {
   const { data, error, loading } = useApiResource<{ tasks: Task[] }>('/api/portal/tasks');
   const [open, setOpen] = useState<Task | null>(null);
 

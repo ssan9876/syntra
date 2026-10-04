@@ -1,7 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import { SessionProvider } from '../../session/SessionProvider.js';
 import { MyReviewsPage } from './MyReviewsPage.js';
+
+// The page renders the portal shell, which needs a router and a session.
+const renderPage = () =>
+  render(
+    <MemoryRouter>
+      <SessionProvider>
+        <MyReviewsPage />
+      </SessionProvider>
+    </MemoryRouter>,
+  );
 
 const campaign = {
   id: 'c-1',
@@ -89,8 +101,16 @@ beforeEach(() => {
 });
 
 describe('MyReviewsPage', () => {
+  it('keeps the portal navigation', async () => {
+    // The page used to render without the shell, so opening Reviews took the
+    // header and navigation away.
+    renderPage();
+    await panelFor('Anna Admin');
+    expect(screen.getByRole('navigation', { name: 'Portal' })).toBeInTheDocument();
+  });
+
   it('carves a high-risk item out IN WORDS, and takes its bulk checkbox away', async () => {
-    render(<MyReviewsPage />);
+    renderPage();
 
     const privileged = await panelFor('Anna Admin');
     // A SENTENCE. A disabled checkbox with no explanation teaches a reviewer
@@ -109,7 +129,7 @@ describe('MyReviewsPage', () => {
   });
 
   it('tells a reviewer the age of the data AND the SLA it breached, before they decide', async () => {
-    render(<MyReviewsPage />);
+    renderPage();
 
     const partial = await panelFor('Cora Clark');
     const banner = within(partial).getByText(/was last read/);
@@ -123,7 +143,7 @@ describe('MyReviewsPage', () => {
   });
 
   it('renders the provenance SENTENCE, never the attribution kind behind it', async () => {
-    render(<MyReviewsPage />);
+    renderPage();
 
     const ordinary = await panelFor('Ben Baker');
     expect(
@@ -208,7 +228,7 @@ describe('a selection spanning two campaigns', () => {
    */
   it('sends one request per campaign, so nothing is dropped', async () => {
     const sent = mockReviews(acrossTwoCampaigns);
-    render(<MyReviewsPage />);
+    renderPage();
     await screen.findByText('Ben Baker');
 
     for (const box of screen.getAllByLabelText('Include in bulk')) {
@@ -229,7 +249,7 @@ describe('a selection spanning two campaigns', () => {
         refused: [{ itemId: 'x', reason: 'this item is already certified' }],
       },
     });
-    render(<MyReviewsPage />);
+    renderPage();
     await screen.findByText('Ben Baker');
 
     for (const box of screen.getAllByLabelText('Include in bulk')) {
@@ -250,7 +270,7 @@ describe('a selection spanning two campaigns', () => {
       { ...items[0]!, campaign: { ...campaign, allowBulkCertify: false } },
       { ...items[1]!, campaign: otherCampaign },
     ]);
-    render(<MyReviewsPage />);
+    renderPage();
     await screen.findByText('Ben Baker');
     expect(screen.getByRole('button', { name: /Certify selected/ })).toBeInTheDocument();
   });
@@ -264,7 +284,7 @@ describe('a double-click', () => {
    */
   it('does not submit a decision twice', async () => {
     const sent = mockReviews([items[1]!], { slowDecide: true });
-    render(<MyReviewsPage />);
+    renderPage();
     await screen.findByText('Ben Baker');
 
     const keep = screen.getByRole('button', { name: 'Keep' });
