@@ -1568,6 +1568,7 @@ describe('GET /api/admin/persons/:id/access', () => {
     );
     expect((await get(`/api/admin/persons/${personId}/access`, cookie)).json()).toEqual({
       personId,
+      exclusions: [],
       accounts: [],
     });
   });

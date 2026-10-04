@@ -12,6 +12,9 @@ import {
   adoptAccountRequest,
   validateConnectorDocumentRequest,
   adoptConflictsRequest,
+  addTargetExclusionRequest,
+  removeTargetExclusionRequest,
+  targetExclusionResponse,
 } from '@syntra/contracts';
 import {
   BUILTIN_CONNECTOR_DOCUMENTS,
@@ -38,6 +41,14 @@ import {
   NoAccountToAdoptError,
   NotInConflictError,
   TargetNotFoundError,
+  AlreadyLeftOutError,
+  ExclusionSubjectNotFoundError,
+  NotLeftOutError,
+  PersonLeftOutError,
+  addTargetExclusion,
+  listTargetExclusions,
+  removeTargetExclusion,
+  type TargetExclusionView,
   adoptAccount,
   adoptConflicts,
   adoptionCandidate,
@@ -243,7 +254,34 @@ export const placementParams = z.object({
  * submits to the POST, and an administrator told two stories about one state
  * stops believing either.
  */
+/** Refused because the person is left out of the target. */
+function leftOutProblem(cause: PersonLeftOutError): ProblemError {
+  return new ProblemError(409, 'person-left-out', 'Person left out of this target', cause.message);
+}
+
+/** The exclusion refusals, as problems. Anything else is rethrown. */
+function exclusionProblem(cause: unknown): unknown {
+  if (cause instanceof ExclusionSubjectNotFoundError) {
+    return new ProblemError(
+      404,
+      'not-found',
+      cause.subject === 'target' ? 'Target not found' : 'Person not found',
+    );
+  }
+  if (cause instanceof AlreadyLeftOutError) {
+    return new ProblemError(409, 'already-left-out', 'Already left out', cause.message);
+  }
+  if (cause instanceof NotLeftOutError) {
+    return new ProblemError(404, 'not-left-out', 'Not left out', cause.message);
+  }
+  return cause;
+}
+
+const exclusionBody = (view: TargetExclusionView) =>
+  targetExclusionResponse.parse({ ...view, createdAt: view.createdAt.toISOString() });
+
 function adoptionProblem(cause: unknown): unknown {
+  if (cause instanceof PersonLeftOutError) return leftOutProblem(cause);
   if (cause instanceof NoAccountToAdoptError) {
     return new ProblemError(
       409,
@@ -459,6 +497,7 @@ export async function registerAdminTargetRoutes(
             cause.message,
           );
         }
+        if (cause instanceof PersonLeftOutError) throw leftOutProblem(cause);
         if (cause instanceof NoAccountToMoveError || cause instanceof NoCorrelationKeyError) {
           throw new ProblemError(409, 'nothing-to-move', 'No account to move', cause.message);
         }
@@ -569,6 +608,76 @@ export async function registerAdminTargetRoutes(
         sourceIp: request.ip,
       });
       return { results };
+    },
+  );
+
+  /**
+   * Everybody left out of this target. A target this tenant does not have is
+   * a 404, not an empty list.
+   */
+  app.get(
+    '/targets/:id/exclusions',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_READ) },
+    async (request) => {
+      const { id } = idParam.parse(request.params);
+      const found = await request.db(async (tx) => {
+        const target = await tx.targetSystem.findUnique({ where: { id }, select: { id: true } });
+        return target === null ? null : listTargetExclusions(tx, id);
+      });
+      if (found === null) throw new ProblemError(404, 'not-found', 'Target not found');
+      return { exclusions: found.map(exclusionBody) };
+    },
+  );
+
+  /**
+   * Leave one person out of this target: no account is created for them and
+   * the one they have is no longer managed, whatever the business rules say.
+   * Nothing is written to the target here.
+   */
+  app.post(
+    '/targets/:id/exclusions',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id } = idParam.parse(request.params);
+      const body = addTargetExclusionRequest.parse(request.body);
+      const view = await request
+        .db((tx) =>
+          addTargetExclusion(tx, {
+            targetSystemId: id,
+            personId: body.personId,
+            reason: body.reason,
+            actorUserId: request.session.userId,
+            sourceIp: request.ip,
+          }),
+        )
+        .catch((cause: unknown) => {
+          throw exclusionProblem(cause);
+        });
+      return reply.status(201).send(exclusionBody(view));
+    },
+  );
+
+  /** Hand the person back to the rules from the next run. */
+  app.delete(
+    '/targets/:id/exclusions/:personId',
+    { preHandler: requirePermission(PERMISSIONS.PROVISION_MANAGE) },
+    async (request, reply) => {
+      const { id, personId } = placementParams.parse(request.params);
+      const body = removeTargetExclusionRequest.parse(request.body);
+      await request
+        .db((tx) =>
+          removeTargetExclusion(tx, {
+            targetSystemId: id,
+            personId,
+            reason: body.reason,
+            actorUserId: request.session.userId,
+            sourceIp: request.ip,
+          }),
+        )
+        .catch((cause: unknown) => {
+          throw exclusionProblem(cause);
+        });
+      return reply.status(204).send();
     },
   );
 

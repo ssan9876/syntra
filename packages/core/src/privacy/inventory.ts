@@ -754,6 +754,19 @@ const RAW = {
     erasure: 'retain',
     why: "The container (organisational unit) an account is placed in; not about the person beyond their unit.",
   }),
+  TargetPersonExclusion: table('provisioning', {
+    id: 'identity',
+    tenantId: 'none',
+    targetSystemId: 'operational',
+    personId: 'identity',
+    reason: 'operational',
+    createdByUserId: 'identity',
+    createdAt: 'operational',
+  }, {
+    links: {person: ['personId'], user: ['createdByUserId']},
+    erasure: 'retain',
+    why: "That a person is left out of one target, who decided it and why. Kept through an erasure: removing it would hand the person back to the business rules and create an account for them.",
+  }),
   OrgUnitContainer: table('configuration', {
     id: 'none',
     tenantId: 'none',

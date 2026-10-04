@@ -278,6 +278,9 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   await tx.targetAccount.create({
     data: { tenantId, targetSystemId: target.id, personId: person.id, correlationKey: `${tag}-account` },
   });
+  await tx.targetPersonExclusion.create({
+    data: { tenantId, targetSystemId: target.id, personId: person.id, reason: `${tag} left out` },
+  });
 
   // ---- lifecycle -------------------------------------------------------------------
   const operation = await tx.lifecycleOperation.create({

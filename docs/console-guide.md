@@ -161,6 +161,15 @@ A target's record holds its connection, schedule, safety thresholds, account
 profile (names and placement), access rules, org-unit mirroring, and its runs.
 **Stop writes** halts every change to that system at once.
 
+- **Left out** lists the people kept out of this target whatever the rules
+  say. **Add**, pick a person and say why: no account is created for them, and
+  the account they have is no longer changed. **Remove**, with a reason, hands
+  them back to the rules on the next run. See
+  [Leaving one person out of a target](configure.md#leaving-one-person-out-of-a-target).
+- On a person's **Access explained** page, each account has **Leave out of
+  <target>**, and an excluded target shows **Left out** with who, when and
+  why, and **Include again**.
+
 ### Provisioning setup
 
 ![Provisioning setup](images/console/10-provisioning-setup.png)

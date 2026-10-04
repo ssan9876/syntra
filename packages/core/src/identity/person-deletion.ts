@@ -13,6 +13,7 @@ import { deactivateUser } from '../directory/user-service.js';
  *
  *  - cascade, counted then left to the cascade: `Contract`,
  *    `AccountPlacement`, `PersonProvisionReceipt`, `PersonSourceLink`;
+ *  - cascade, not counted: `TargetPersonExclusion`;
  *  - `LifecycleOperation` (ON DELETE SET NULL): deleted instead -- an
  *    operation about nobody is noise. Its steps, notifications and case events
  *    cascade from it;

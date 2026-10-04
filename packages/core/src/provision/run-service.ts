@@ -25,6 +25,7 @@ import { planActions } from './plan.js';
 import { baseDnOf, syncMirroredContainers } from './org-unit-mirror.js';
 import { reconcile, unprocessableScope } from './reconcile.js';
 import { conditionSchema } from './condition.js';
+import { leftOutPersonIds } from './exclusion-service.js';
 import { grantedEntitlementsFor, remitFor } from './entitlement-service.js';
 import { targetWithCredential } from './target-service.js';
 import { adapterWriteContext, summariseRefusals } from './adapter-rollout.js';
@@ -913,6 +914,9 @@ export async function previewProvisionRun(
           previousDn: true,
         },
       });
+      // In the same transaction as the persons: somebody left out a second
+      // after this read is left out from the next run, never half of this one.
+      const leftOut = await leftOutPersonIds(tx, targetSystemId);
       return {
         persons,
         rules,
@@ -922,6 +926,7 @@ export async function previewProvisionRun(
         grants,
         placements,
         orgUnitContainers,
+        leftOut,
         // In the same transaction as the persons: the domains an address may
         // be written in are decided by the state this plan is computed from.
         verifiedEmailDomains: await verifiedEmailDomains(tx),
@@ -1169,27 +1174,45 @@ export async function previewProvisionRun(
         horizon,
       });
       const generatedKey = state.account?.correlationKey;
-      if (typeof generatedKey === 'string' && generatedKey !== '') {
+      // Somebody left out of this target is given no name here: a name
+      // generated for an account that is never created would push the next
+      // person with the same name to `anna.novak2` for nothing. A key they
+      // already hold is in `takenKeys` from the seed and stays there.
+      if (typeof generatedKey === 'string' && generatedKey !== '' && !snapshot.leftOut.has(person.id)) {
         takenKeys.add(generatedKey);
       }
       desired.push(state);
     }
 
-    const known: KnownAccount[] = snapshot.accounts.map((a) => ({
-      id: a.id,
-      personId: a.personId,
-      anchor: a.anchor,
-      correlationKey: a.correlationKey,
-      status: a.status as KnownAccount['status'],
-      disabledAt: a.disabledAt,
-      lastAppliedAttributes: (a.lastAppliedAttributes ?? {}) as Record<string, string[]>,
-      holdings: a.entitlements.map((h) => ({
-        entitlementId: h.entitlementId,
-        origin: h.origin as 'rule' | 'request' | 'manual' | 'discovered',
-        grantedByRuleId: h.grantedByRuleId,
-        grantedByRequestId: h.grantedByRequestId,
-      })),
-    }));
+    /**
+     * Reservations held for somebody left out of this target: a `pending` row
+     * with no anchor, which names nothing at the target. Removed in phase 7,
+     * and left out of `known` now so nothing planned below points at a row
+     * that will be gone. Leaving one out of the console removes it at once;
+     * this catches a row a run reserved while that was happening.
+     */
+    const staleReservations = snapshot.accounts.filter(
+      (a) => snapshot.leftOut.has(a.personId) && a.status === 'pending' && a.anchor === null,
+    );
+    const staleReservationIds = new Set(staleReservations.map((a) => a.id));
+
+    const known: KnownAccount[] = snapshot.accounts
+      .filter((a) => !staleReservationIds.has(a.id))
+      .map((a) => ({
+        id: a.id,
+        personId: a.personId,
+        anchor: a.anchor,
+        correlationKey: a.correlationKey,
+        status: a.status as KnownAccount['status'],
+        disabledAt: a.disabledAt,
+        lastAppliedAttributes: (a.lastAppliedAttributes ?? {}) as Record<string, string[]>,
+        holdings: a.entitlements.map((h) => ({
+          entitlementId: h.entitlementId,
+          origin: h.origin as 'rule' | 'request' | 'manual' | 'discovered',
+          grantedByRuleId: h.grantedByRuleId,
+          grantedByRequestId: h.grantedByRequestId,
+        })),
+      }));
 
     const reconciled = reconcile({
       desired,
@@ -1214,6 +1237,7 @@ export async function previewProvisionRun(
       // Below which a mirrored container's missing ancestors may be created.
       containerBaseDn: baseDnOf(config),
       enforcementMode: prepared.target.enforcementMode as 'additive' | 'authoritative',
+      leftOut: snapshot.leftOut,
     });
 
     /**
@@ -1247,6 +1271,7 @@ export async function previewProvisionRun(
       syntraUserByPerson,
       pairedDirectorySource: prepared.target.pairedDirectorySourceId !== null,
       revocationOrders,
+      leftOut: snapshot.leftOut,
       ladder: {
         entitlementRevocationDelayDays: prepared.target.entitlementRevocationDelayDays,
         disableGraceDays: prepared.target.disableGraceDays,
@@ -1327,6 +1352,14 @@ export async function previewProvisionRun(
      * schedule waives it: an unattended run is the case the control exists
      * for, and confirmation is a person reading numbers, which a scheduler
      * cannot do.
+     *
+     * People left out of this target move no number here but their own
+     * actions, which are not planned and so not counted. The denominators are
+     * what the target returns and the HR population, and leaving somebody out
+     * changes neither: their account is still at the target (as an orphan's
+     * is), and `personsWithActiveContract` above counts every person. So an
+     * exclusion can neither read as a mass leave nor make a real one look
+     * smaller.
      */
     const guardVerdict = evaluateProvisionGuard({
       actions,
@@ -1462,8 +1495,11 @@ export async function previewProvisionRun(
             reasons: [...(sodVerdict.blocked ? sodVerdict.reasons : []), adapter.writesBlockedReason],
           };
 
+    // Nobody left out of this target is a working-list item for it: nothing
+    // is being done for them here, so nothing is stuck.
+    const managed = desired.filter((d) => !snapshot.leftOut.has(d.personId));
     const exceptions = [
-      ...desired
+      ...managed
         .filter((d) => d.unprocessable !== null)
         .map((d) => ({ personId: d.personId, ...d.unprocessable! })),
       // A grant that named an entitlement the catalog does not hold. Skipped
@@ -1471,7 +1507,7 @@ export async function previewProvisionRun(
       // must not revoke everything else the person holds -- and surfaced here
       // so somebody works it down. The alternative is a request that was
       // approved, produced no action, and said nothing.
-      ...desired.flatMap((d) =>
+      ...managed.flatMap((d) =>
         d.grantExceptions.map((g) => ({
           personId: d.personId,
           kind: 'unresolvable_grant' as const,
@@ -1558,7 +1594,18 @@ export async function previewProvisionRun(
        * belong to the apply, not to a preview — so `skipDuplicates` says
        * exactly the same thing in one statement.
        */
-      const needReservation = desired.filter((state) => {
+      if (staleReservations.length > 0) {
+        await tx.targetAccount.deleteMany({
+          where: {
+            id: { in: staleReservations.map((a) => a.id) },
+            status: 'pending',
+            anchor: null,
+          },
+        });
+      }
+
+      // `managed`: nobody left out of this target is given a reservation.
+      const needReservation = managed.filter((state) => {
         // RULING P23. `state.unprocessable` is not a blanket skip: it carries
         // a scope, and at `grants` scope only the person's entitlement set is
         // unknown. Skipping every unprocessable person here reserves no row,
@@ -1760,9 +1807,11 @@ export async function previewProvisionRun(
       if (options.receiptId) {
         const receipt = await tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: options.receiptId } });
         const state = desired.find((item) => item.personId === receipt.personId);
+        const leftOut = snapshot.leftOut.has(receipt.personId);
         await tx.personProvisionReceipt.update({ where: { id: receipt.id }, data: {
           evidence: {
-            accountRequired: state?.account?.required ?? false,
+            accountRequired: !leftOut && (state?.account?.required ?? false),
+            leftOut,
             notYetStarted: state?.notYetStarted ?? false,
             evaluated: state !== undefined,
             exceptions: exceptions.filter((item) => item.personId === receipt.personId),

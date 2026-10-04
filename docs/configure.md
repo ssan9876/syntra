@@ -899,6 +899,51 @@ profile's **Preview** (`POST /api/admin/targets/:id/profile/preview`) show the
 name and container each person would get, and **Preview impact** on a
 business rule shows exactly who it matches.
 
+### Leaving one person out of a target
+
+Business rules cannot keep one named person out of a target. A rule matches
+contract fields and `person.status`, and rules only add: any enabled rule that
+matches grants the account, and no rule takes one away. To keep one person out
+— say the application's own bootstrap administrator, which the application
+refuses to let anybody else manage — leave them out of that target instead of
+inventing a cost centre for a `notEquals` clause.
+
+On the target's page, **Left out → Add**, pick the person and say why; or on
+the person's **Access explained** page, **Leave out of <target>** on that
+target's account. The API is `GET`, `POST /api/admin/targets/:id/exclusions`
+(`personId`, `reason`) and `DELETE /api/admin/targets/:id/exclusions/:personId`
+(`reason` in the body); changes need `provision.manage`, reading needs
+`provision.read`. Each change is audited as `provision.target.exclusion.add`
+or `.remove` and is in the *Configuration changes* webhook group.
+
+What it does, from the next run:
+
+- **It wins over every business rule.** No account is created for the person
+  on that target, whatever matches.
+- **The account they have is left exactly as it is.** No update, enable,
+  disable, archive, delete, rename, entitlement grant or revoke, and no move,
+  adoption or password sync. Its row in Syntra stays, and so does the account.
+  A plan applied after somebody is left out skips their actions with
+  `Not attempted: <name> is left out of this target.`
+- **A reservation is removed.** A `pending` account with no anchor names
+  nothing at the target, so it is deleted when the person is left out and no
+  create is retried.
+- **No exceptions, drift findings or receipts wait on them.** A receipt for
+  them on that target finishes as `Left out of this target.`
+- **Their Syntra sign-in still follows their employment.** On a target paired
+  with a directory source, their Syntra logins are still deactivated when they
+  leave and reactivated when they return: a login is not an account on the
+  target.
+- **Safety thresholds are unchanged.** Only the person's own actions leave the
+  plan. The denominators are the accounts the target returns and the people
+  with an active contract, and leaving somebody out changes neither, so it can
+  neither read as a mass leave nor hide one.
+
+**Access explained** and the mover preview say why:
+`Left out of this target by Jane Doe on 3 Oct 2026: <reason>.` Removing the
+exclusion (**Remove**, or **Include again**, with a reason) hands the person
+back to the rules on the next run, through the guard like any other change.
+
 ### Active Directory
 
 | Key | Default | Meaning |

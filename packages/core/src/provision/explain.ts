@@ -20,6 +20,7 @@ import {
   type BusinessRuleInput,
 } from './target-service.js';
 import type { ContractFacts } from './types.js';
+import { listPersonExclusions } from './exclusion-service.js';
 
 export interface PersonAccessEntitlement {
   entitlementId: string;
@@ -82,6 +83,20 @@ export interface PersonAccessEntitlement {
 
 export interface PersonAccess {
   personId: string;
+  /**
+   * The targets this person is left out of, whether or not they hold an
+   * account there: "why does this person have no account" is answered here
+   * before any rule is looked at.
+   */
+  exclusions: {
+    targetSystemId: string;
+    targetName: string;
+    reason: string;
+    createdByName: string | null;
+    createdAt: Date;
+    /** `Left out of this target by Jane Doe on 3 Oct 2026: <reason>.` */
+    message: string;
+  }[];
   accounts: {
     targetSystemId: string;
     targetName: string;
@@ -329,8 +344,18 @@ export async function explainPersonAccess(
       };
     };
 
+    const exclusions = (await listPersonExclusions(tx, personId)).map((e) => ({
+      targetSystemId: e.targetSystemId,
+      targetName: e.targetName,
+      reason: e.reason,
+      createdByName: e.createdByName,
+      createdAt: e.createdAt,
+      message: e.message,
+    }));
+
     return {
       personId,
+      exclusions,
       accounts: accounts.map((account) => ({
         targetSystemId: account.target.id,
         targetName: account.target.name,
@@ -491,7 +516,10 @@ export async function previewRuleImpact(
   const ruleId = rule.id;
 
   return withTenant(tenantId, async (tx) => {
-    const persons = await tx.person.findMany({ include: { contracts: true } });
+    // Nobody left out of this target: no rule reaches them, so an edit grants
+    // and revokes nothing of theirs.
+    const managed = { targetExclusions: { none: { targetSystemId } } };
+    const persons = await tx.person.findMany({ where: managed, include: { contracts: true } });
 
     /**
      * The target's enforcement mode, and every OTHER enabled rule on it.
@@ -573,7 +601,7 @@ export async function previewRuleImpact(
             where: {
               state: 'held',
               entitlementId: { in: affectedEntitlementIds },
-              account: { targetSystemId },
+              account: { targetSystemId, person: managed },
             },
             include: { account: { select: { personId: true } } },
           });
@@ -584,7 +612,7 @@ export async function previewRuleImpact(
             where: {
               state: 'held',
               grantedByRuleId: ruleId,
-              account: { targetSystemId },
+              account: { targetSystemId, person: managed },
             },
             include: { account: { select: { personId: true } } },
           });

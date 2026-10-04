@@ -223,7 +223,7 @@ describe('explainPersonAccess', () => {
 
   it('answers for a person with no accounts at all', async () => {
     const access = await explainPersonAccess(tenantId, personId);
-    expect(access).toEqual({ personId, accounts: [] });
+    expect(access).toEqual({ personId, exclusions: [], accounts: [] });
   });
 
   it('does not reach into another tenant', async () => {
@@ -233,6 +233,7 @@ describe('explainPersonAccess', () => {
     // where-clause, is what makes this empty.
     expect(await explainPersonAccess(other.id, personId)).toEqual({
       personId,
+      exclusions: [],
       accounts: [],
     });
   });

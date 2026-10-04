@@ -213,6 +213,11 @@ export const WEBHOOK_EVENT_GROUPS = {
       'provision.target.adapter.rollback',
       'provision.target.adapter.deprecation_override.grant',
       'provision.target.adapter.deprecation_override.clear',
+      // One person taken out of, or handed back to, a target's business
+      // rules. It overrides every rule for that person, so whoever watches
+      // configuration should see it.
+      'provision.target.exclusion.add',
+      'provision.target.exclusion.remove',
     ],
   },
   /**

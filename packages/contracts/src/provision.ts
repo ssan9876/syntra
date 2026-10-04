@@ -569,6 +569,48 @@ export const containerListResponse = z.object({
   containers: z.array(z.string()),
 });
 
+/**
+ * Leaving one person out of one target, and including them again.
+ *
+ * `reason` is required both ways, for the argument a manual move makes: the
+ * row overrides every business rule for as long as it stands, and "who left
+ * this person out and why" is the only question anybody asks about it.
+ */
+export const addTargetExclusionRequest = z
+  .object({
+    personId: z.string().uuid(),
+    reason: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export const removeTargetExclusionRequest = z
+  .object({
+    reason: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export const targetExclusionResponse = z.object({
+  targetSystemId: z.string().uuid(),
+  targetName: z.string(),
+  personId: z.string().uuid(),
+  personName: z.string(),
+  businessEmail: z.string().nullable(),
+  reason: z.string(),
+  createdByUserId: z.string().uuid().nullable(),
+  createdByName: z.string().nullable(),
+  createdAt: z.string(),
+  /** `Left out of this target by Jane Doe on 3 Oct 2026: <reason>.` */
+  message: z.string(),
+});
+
+export const targetExclusionListResponse = z.object({
+  exclusions: z.array(targetExclusionResponse),
+});
+
+export type AddTargetExclusionRequest = z.infer<typeof addTargetExclusionRequest>;
+export type RemoveTargetExclusionRequest = z.infer<typeof removeTargetExclusionRequest>;
+export type TargetExclusionResponse = z.infer<typeof targetExclusionResponse>;
+
 export type MovePlacementRequest = z.infer<typeof movePlacementRequest>;
 export type PlacementResponse = z.infer<typeof placementResponse>;
 

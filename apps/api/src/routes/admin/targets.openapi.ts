@@ -3,6 +3,10 @@ import {
   adoptAccountRequest,
   validateConnectorDocumentRequest,
   adoptConflictsRequest,
+  addTargetExclusionRequest,
+  removeTargetExclusionRequest,
+  targetExclusionListResponse,
+  targetExclusionResponse,
   containerListResponse,
   createTargetRequestSchema,
   idParam,
@@ -96,6 +100,29 @@ export const targetsOpenApi = describeAdminRoutes('Target systems', {
       'Each entry names a person and the object seen in the preview; one whose candidate has changed is not adopted. A recorded reason is required. Answers 200 with a result per person.',
     body: adoptConflictsRequest,
     params: idParam,
+  },
+  'GET /targets/:id/exclusions': {
+    summary: 'List the people left out of a target system',
+    description: 'A person left out gets no account on the target, and the account they have is no longer managed, whatever the business rules say.',
+    params: idParam,
+    response: targetExclusionListResponse,
+  },
+  'POST /targets/:id/exclusions': {
+    summary: 'Leave a person out of a target system',
+    description:
+      'Takes precedence over every business rule from the next run. The account row is kept; a `pending` reservation with no anchor is removed. Nothing is written to the target. A recorded reason is required. 409 `already-left-out` when the person already is.',
+    body: addTargetExclusionRequest,
+    params: idParam,
+    response: targetExclusionResponse,
+    status: 201,
+  },
+  'DELETE /targets/:id/exclusions/:personId': {
+    summary: 'Include a person in a target system again',
+    description:
+      'The next run evaluates the business rules for the person again. A recorded reason is required in the body. 404 `not-left-out` when the person is not left out.',
+    body: removeTargetExclusionRequest,
+    params: placementParams,
+    status: 204,
   },
   'DELETE /targets/:id/placements/:personId': {
     summary: "Clear a person's manual account placement",

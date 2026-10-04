@@ -84,6 +84,7 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
   ['persons/:id', 'person'],
   ['person/:personId', 'person'],
   ['placements/:personId', 'person'],
+  ['exclusions/:personId', 'person'],
   ['accounts/:personId', 'person'],
   ['credential-pickup/:token', {
     static: 'A'.repeat(43),

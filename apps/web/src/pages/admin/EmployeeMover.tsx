@@ -26,6 +26,8 @@ interface AccessDelta {
   remove: Named[];
   unverified: boolean;
   unprocessable: { kind: string; message: string } | null;
+  /** Why the person is left out of this target; nothing changes there. */
+  leftOut?: string | null;
 }
 
 interface MoverPreview {
@@ -217,7 +219,7 @@ export function EmployeeMover({
                 <thead><tr><th scope="col">Target</th><th scope="col">Account</th><th scope="col">Add</th><th scope="col">Retain</th><th scope="col">Remove</th></tr></thead>
                 <tbody>
                   {access.map((delta) => <tr key={delta.targetSystemId}>
-                    <td>{delta.targetName}{delta.unverified ? <> <Status tone="warning">unverified</Status></> : null}{delta.unprocessable ? <p className="text-muted">{delta.unprocessable.message}</p> : null}</td>
+                    <td>{delta.targetName}{delta.unverified ? <> <Status tone="warning">unverified</Status></> : null}{delta.unprocessable ? <p className="text-muted">{delta.unprocessable.message}</p> : null}{delta.leftOut ? <p className="text-muted">{delta.leftOut}</p> : null}</td>
                     <td>{ACCOUNT_LABEL[delta.account]} <span className="text-muted">({delta.accountStatus})</span></td>
                     <td>{names(delta.add)}</td>
                     <td>{names(delta.retain)}</td>

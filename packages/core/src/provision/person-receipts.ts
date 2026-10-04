@@ -323,7 +323,7 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
       actions: await tx.provisionAction.findMany({ where: { runId: run.id, personId: receipt.personId } }),
       receipt: await tx.personProvisionReceipt.findUniqueOrThrow({ where: { id: receiptId } }),
     }));
-    const evidence = plan.receipt.evidence as { accountRequired?: boolean; evaluated?: boolean; notYetStarted?: boolean; exceptions?: unknown[] } | null;
+    const evidence = plan.receipt.evidence as { accountRequired?: boolean; leftOut?: boolean; evaluated?: boolean; notYetStarted?: boolean; exceptions?: unknown[] } | null;
     // A preview this receipt started that planned nothing for ANYBODY is
     // closed here, before any of the outcomes below. Left `previewed`, it
     // counts as "awaiting review" to every later receipt and scheduled run on
@@ -338,7 +338,8 @@ export async function runPersonProvision(scheduler: Scheduler, provider: MasterK
     }
     if ((evidence?.exceptions?.length ?? 0) > 0) { await finish('blocked', 'Planning exceptions for this person. Review the linked run.'); return; }
     if (!plan.actions.length) {
-      if (evidence?.notYetStarted) await finish('pending', 'Start date is outside the provisioning window. Retry when due.');
+      if (evidence?.leftOut) await finish('no_match', 'Left out of this target.');
+      else if (evidence?.notYetStarted) await finish('pending', 'Start date is outside the provisioning window. Retry when due.');
       else if (!evidence?.evaluated) await finish('blocked', 'Target did not evaluate this person.');
       else if (!evidence.accountRequired) await finish('no_match', 'No rule requires an account.');
       else {
