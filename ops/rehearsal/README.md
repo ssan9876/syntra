@@ -27,6 +27,7 @@ Nothing it does should be able to reach the live install:
 | Port | 3000 | 3999 |
 | Database | `syntra` | `syntra_rehearsal` |
 | Releases | GitHub | a stub on `127.0.0.1:8899` |
+| Backup units | refreshed in `/etc/systemd/system` by each update | not refreshed: the root is not `/opt/syntra` and `SYNTRA_UNIT_DIR` is unset |
 
 The stub matters for a second reason beyond isolation: the two deliberate
 breaks used in Steps 10 and 11 are releases (a migration that fails, and a

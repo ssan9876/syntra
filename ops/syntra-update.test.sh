@@ -562,6 +562,161 @@ DIE_OUT="$(
 )"
 ok "a failure once work began still records failed" "$DIE_OUT" failed
 
+# --- downloads_to_prune -----------------------------------------------------
+#
+# The download step removed only the target's own tarball, so every update
+# ever taken stayed in var/: one install held 30 of them, 94 MB.
+
+ok "keeps the running and previous downloads, removes older ones" \
+  "$(downloads_to_prune 1.5.0 1.4.0 \
+      syntra-1.3.0.tar.gz syntra-1.3.0.tar.gz.sha256 \
+      syntra-1.4.0.tar.gz syntra-1.4.0.tar.gz.sha256 \
+      syntra-1.5.0.tar.gz syntra-1.5.0.tar.gz.sha256 | tr '\n' ' ' | sed 's/ $//')" \
+  "syntra-1.3.0.tar.gz syntra-1.3.0.tar.gz.sha256"
+
+ok "a checksum without its tarball is still removed" \
+  "$(downloads_to_prune 1.5.0 1.4.0 syntra-1.1.0.tar.gz.sha256)" "syntra-1.1.0.tar.gz.sha256"
+
+# var/ also holds update.status, the lock and previous-version. None of them
+# is a download, and a name that only looks like one is not this function's.
+ok "never removes anything that is not a release download" \
+  "$(downloads_to_prune 1.5.0 1.4.0 update.status update.lock previous-version \
+      replaced-units syntra-update.log syntra-.tar.gz syntra-../x.tar.gz notes.tar.gz)" ""
+
+ok "versions compare exactly, not as prefixes" \
+  "$(downloads_to_prune 1.5.0 1.4.0 syntra-1.5.0.1.tar.gz syntra-1.4.tar.gz | tr '\n' ' ' | sed 's/ $//')" \
+  "syntra-1.5.0.1.tar.gz syntra-1.4.tar.gz"
+
+# After an adoption the previous version is `dev`, which has no download.
+ok "after an adoption only the running download is kept" \
+  "$(downloads_to_prune 1.0.0 dev syntra-1.0.0.tar.gz syntra-0.9.0.tar.gz)" "syntra-0.9.0.tar.gz"
+
+ok "nothing to prune in an empty var/" "$(downloads_to_prune 1.5.0 1.4.0)" ""
+
+# --- prune_downloads --------------------------------------------------------
+
+PD_ROOT="$(mktemp -d)"
+for v in 1.1.0 1.2.0 1.3.0 1.4.0 1.5.0; do
+  head -c 2048 /dev/zero > "$PD_ROOT/syntra-$v.tar.gz"
+  printf 'abc  syntra-%s.tar.gz\n' "$v" > "$PD_ROOT/syntra-$v.tar.gz.sha256"
+done
+printf 'x\tsucceeded\tnow running v1.5.0\n' > "$PD_ROOT/update.status"
+PD_OUT="$(VAR="$PD_ROOT"; prune_downloads 1.5.0 1.4.0 2>&1)"
+ok "prune_downloads leaves the running and previous downloads and nothing else of var/" \
+  "$(cd "$PD_ROOT" && printf '%s ' * | sed 's/ $//')" \
+  "syntra-1.4.0.tar.gz syntra-1.4.0.tar.gz.sha256 syntra-1.5.0.tar.gz syntra-1.5.0.tar.gz.sha256 update.status"
+ok "and says how many, from where, and what it kept" \
+  "$(printf '%s' "$PD_OUT" | grep -c "removed 6 old download file(s) from $PD_ROOT, .* KB; kept v1.5.0 and v1.4.0")" 1
+PD_OUT="$(VAR="$PD_ROOT"; prune_downloads 1.5.0 1.4.0 2>&1)"
+ok "and says nothing when there is nothing to remove" "$PD_OUT" ""
+rm -rf "$PD_ROOT"
+
+ok "sizes from 1 MB up read in MB" "$(human_size 98566144)" "94 MB"
+ok "sizes below 1 MB read in KB"   "$(human_size 6000)" "6 KB"
+
+# --- owned_unit -------------------------------------------------------------
+#
+# An update refreshes the units Syntra ships and nothing else. syntra.service
+# is the operator's, rewritten once by syntra-install; replacing it would undo
+# their WorkingDirectory, environment and hardening.
+
+ok "the backup service is Syntra's"          "$(yes_no owned_unit syntra-backup.service)" yes
+ok "the backup timer is Syntra's"            "$(yes_no owned_unit syntra-backup.timer)" yes
+ok "the verify service is Syntra's"          "$(yes_no owned_unit syntra-backup-verify.service)" yes
+ok "the verify timer is Syntra's"            "$(yes_no owned_unit syntra-backup-verify.timer)" yes
+ok "the OnFailure handler is Syntra's"       "$(yes_no owned_unit syntra-backup-failed@.service)" yes
+ok "syntra.service is never touched"         "$(yes_no owned_unit syntra.service)" no
+ok "the database unit is not refreshed"      "$(yes_no owned_unit syntra-postgres.service)" no
+ok "a drop-in directory is not a unit"       "$(yes_no owned_unit syntra-backup.service.d)" no
+ok "a README is not a unit"                  "$(yes_no owned_unit README)" no
+
+# --- refresh_units ----------------------------------------------------------
+#
+# The case that prompted it: an install whose units predate OnFailure=, with
+# the handler never installed, and syntra.service beside them.
+
+RU_ROOT="$(mktemp -d)"
+mkdir -p "$RU_ROOT/release/ops/systemd" "$RU_ROOT/etc" "$RU_ROOT/var"
+printf '[Service]\nExecStart=new-backup\nOnFailure=x\n' > "$RU_ROOT/release/ops/systemd/syntra-backup.service"
+printf '[Timer]\nOnCalendar=daily\n'     > "$RU_ROOT/release/ops/systemd/syntra-backup.timer"
+printf '[Service]\nExecStart=handler\n'  > "$RU_ROOT/release/ops/systemd/syntra-backup-failed@.service"
+printf '[Service]\nExecStart=release-copy-of-syntra\n' > "$RU_ROOT/release/ops/systemd/syntra.service"
+printf '[Service]\nExecStart=old-backup\n' > "$RU_ROOT/etc/syntra-backup.service"
+printf '[Timer]\nOnCalendar=daily\n'       > "$RU_ROOT/etc/syntra-backup.timer"
+printf '[Service]\nExecStart=operators-own\n' > "$RU_ROOT/etc/syntra.service"
+: > "$RU_ROOT/calls"
+
+ru_run() {
+  # systemctl is a function here, so the test records the call instead of
+  # reloading the machine it runs on.
+  # shellcheck disable=SC2329  # called by refresh_units
+  systemctl() { printf '%s\n' "$*" >> "$RU_ROOT/calls"; }
+  UNIT_DIR="$RU_ROOT/etc" UNIT_BACKUPS="$RU_ROOT/var/replaced-units"
+  refresh_units "$RU_ROOT/release/ops/systemd" 1.5.0 2>&1
+}
+RU_OUT="$(ru_run)"
+
+ok "a changed unit is replaced" \
+  "$(grep -c new-backup "$RU_ROOT/etc/syntra-backup.service")" 1
+ok "the file it replaced is kept" \
+  "$(grep -c old-backup "$RU_ROOT/var/replaced-units/syntra-backup.service")" 1
+ok "a missing unit is installed" \
+  "$([ -f "$RU_ROOT/etc/syntra-backup-failed@.service" ] && echo yes || echo no)" yes
+ok "syntra.service is left exactly as it was" \
+  "$(cat "$RU_ROOT/etc/syntra.service")" "$(printf '[Service]\nExecStart=operators-own')"
+ok "one daemon-reload, and no enable, disable, start or restart" \
+  "$(cat "$RU_ROOT/calls")" "daemon-reload"
+ok "the log names each unit it changed" \
+  "$(printf '%s\n' "$RU_OUT" | grep -cE 'unit syntra-backup(-failed@)?\.service (installed|updated) from v1\.5\.0')" 2
+ok "and totals what it did" \
+  "$(printf '%s\n' "$RU_OUT" | grep -c 'units from v1.5.0: 1 installed, 1 updated, 1 unchanged, 0 failed')" 1
+
+: > "$RU_ROOT/calls"
+RU_OUT="$(ru_run)"
+ok "a second run changes nothing and does not reload" "$(cat "$RU_ROOT/calls")" ""
+ok "and says so" \
+  "$(printf '%s\n' "$RU_OUT" | grep -c 'units from v1.5.0: 0 installed, 0 updated, 3 unchanged, 0 failed')" 1
+
+RU_OUT="$(UNIT_DIR="$RU_ROOT/etc"; refresh_units "$RU_ROOT/no-such-dir" 1.5.0 2>&1)"
+ok "a release with no ops/systemd is skipped, and says so" \
+  "$RU_OUT" "[syntra-update] unit refresh skipped: v1.5.0 has no ops/systemd"
+
+# The rehearsal runs under its own root on a host with a live install. The
+# shipped units name /opt/syntra, so they are the live install's, and an
+# update rehearsed elsewhere must not replace them.
+RU_OUT="$(
+  SYNTRA_ROOT=/opt/syntra-rehearsal SYNTRA_UNIT_DIR=""
+  # shellcheck source=/dev/null
+  . "$HERE/syntra-update"
+  refresh_units "$RU_ROOT/release/ops/systemd" 1.5.0 2>&1
+)"
+ok "an install under another root does not refresh the units, and says so" \
+  "$RU_OUT" \
+  "[syntra-update] unit refresh skipped: the units name /opt/syntra and this install is /opt/syntra-rehearsal; set SYNTRA_UNIT_DIR to refresh them"
+ok "and /opt/syntra itself refreshes /etc/systemd/system" \
+  "$(SYNTRA_ROOT=/opt/syntra SYNTRA_UNIT_DIR=""; . "$HERE/syntra-update"; echo "$UNIT_DIR")" \
+  "/etc/systemd/system"
+rm -rf "$RU_ROOT"
+
+# --- refresh_backup_tool ----------------------------------------------------
+#
+# The units run bin/syntra-backup, not the release's copy. Without this a fix
+# to the tool -- the copy step among them -- never reached a timer.
+
+RB_ROOT="$(mktemp -d)"
+mkdir -p "$RB_ROOT/bin" "$RB_ROOT/release/ops"
+printf '#!/bin/sh\necho new\n' > "$RB_ROOT/release/ops/syntra-backup"
+printf '#!/bin/sh\necho old\n' > "$RB_ROOT/bin/syntra-backup"
+RB_OUT="$(ROOT="$RB_ROOT"; refresh_backup_tool "$RB_ROOT/release/ops/syntra-backup" 1.5.0 2>&1)"
+ok "bin/syntra-backup is replaced when the release's differs" \
+  "$(grep -c new "$RB_ROOT/bin/syntra-backup")" 1
+ok "and is executable" "$([ -x "$RB_ROOT/bin/syntra-backup" ] && echo yes || echo no)" yes
+ok "and the log says where and from which version" \
+  "$RB_OUT" "[syntra-update] updated $RB_ROOT/bin/syntra-backup from v1.5.0"
+RB_OUT="$(ROOT="$RB_ROOT"; refresh_backup_tool "$RB_ROOT/release/ops/syntra-backup" 1.5.0 2>&1)"
+ok "an unchanged tool is left alone, silently" "$RB_OUT" ""
+rm -rf "$RB_ROOT"
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

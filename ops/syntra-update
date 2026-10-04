@@ -55,6 +55,25 @@ REPO="${SYNTRA_RELEASE_REPO:-ssan9876/syntra}"
 # cannot stage its own failures is a rehearsal of the happy path.
 RELEASE_API="${SYNTRA_RELEASE_API:-https://api.github.com}"
 KEEP=3
+# Where the ops units live. syntra-install puts them here once; every
+# successful update refreshes the ones Syntra owns (see owned_unit) from the
+# release it just switched to.
+#
+# Empty -- no refresh -- for an install under any root but /opt/syntra unless
+# SYNTRA_UNIT_DIR names a directory: the shipped units name
+# /opt/syntra/bin/syntra-backup, so they belong to that install, and the
+# rehearsal (its own root, on a host with a live install) must not replace the
+# live install's units.
+if [ -n "${SYNTRA_UNIT_DIR:-}" ]; then
+  UNIT_DIR="$SYNTRA_UNIT_DIR"
+elif [ "$ROOT" = /opt/syntra ]; then
+  UNIT_DIR=/etc/systemd/system
+else
+  UNIT_DIR=""
+fi
+# The unit file a refresh replaced, kept so a local edit made in the file
+# itself rather than in a drop-in is not simply gone.
+UNIT_BACKUPS="$VAR/replaced-units"
 # How long a new release gets to become ready before it is judged broken.
 # Long enough for a cold start with a large migration behind it; short enough
 # that nobody is signed out for a quarter of an hour while it fails.
@@ -353,6 +372,62 @@ empty_restore_reason() {
     return 1
   fi
   return 0
+}
+
+# The release downloads in var/ to delete, given the two versions whose
+# downloads stay ($1, $2) and the directory's entries.
+#
+# The download step removes only the target's own tarball before fetching it,
+# so before this existed every update ever taken stayed in var/: one install
+# held 30 of them, 94 MB. Only `syntra-<version>.tar.gz` and its `.sha256`
+# are candidates; update.status, the lock and anything else in var/ is not
+# this function's to judge.
+downloads_to_prune() {
+  local keep_a="$1" keep_b="$2" name ver
+  shift 2
+  for name in "$@"; do
+    case "$name" in
+      syntra-*.tar.gz)        ver="${name#syntra-}"; ver="${ver%.tar.gz}" ;;
+      syntra-*.tar.gz.sha256) ver="${name#syntra-}"; ver="${ver%.tar.gz.sha256}" ;;
+      *) continue ;;
+    esac
+    version_valid "$ver" || continue
+    if [ "$ver" = "$keep_a" ] || [ "$ver" = "$keep_b" ]; then
+      continue
+    fi
+    printf '%s\n' "$name"
+  done
+}
+
+# Whether a unit file in a release's ops/systemd is one an update may install:
+# the backup, its verify, their timers and the OnFailure handler. Never
+# syntra.service, which the operator wrote and syntra-install rewrote.
+owned_unit() {
+  case "$1" in
+    syntra-backup*.service|syntra-backup*.timer) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# What installing $1 over $2 would change: `new`, `changed` or `unchanged`.
+file_change() {
+  if [ ! -e "$2" ]; then
+    echo new
+  elif cmp -s "$1" "$2"; then
+    echo unchanged
+  else
+    echo changed
+  fi
+}
+
+# A byte count as an operator reads it: whole MB from 1 MB up, KB below.
+human_size() {
+  local bytes="${1:-0}"
+  if [ "$bytes" -ge 1048576 ]; then
+    printf '%s MB' "$(( (bytes + 524288) / 1048576 ))"
+  else
+    printf '%s KB' "$(( (bytes + 1023) / 1024 ))"
+  fi
 }
 
 # --- everything below does I/O ----------------------------------------------
@@ -819,12 +894,21 @@ do_update() {
 
   status "pruning" "removing old releases"
   prune "$target"
+  prune_downloads "$target" "$from"
 
   # The new release's updater becomes the one the NEXT update runs, and only
   # after this one has been proved good. Copied last, deliberately: an updater
   # replaced before the verification would be the new one rolling back on
   # behalf of a release that never worked.
   install -m 0755 "$dir/ops/syntra-update" "$ROOT/bin/syntra-update" 2>/dev/null || true
+
+  # The backup tool and its units, for the same reason and at the same moment.
+  # syntra-install copies them once; before this, a fix to either reached only
+  # installs converted after it -- an existing one kept a backup unit with no
+  # OnFailure= and never got the handler it names. Neither step can fail the
+  # update: the release is running and proved ready.
+  refresh_backup_tool "$dir/ops/syntra-backup" "$target"
+  refresh_units "$dir/ops/systemd" "$target"
 
   record_previous "$from"
   status "succeeded" "now running v$target"
@@ -906,6 +990,117 @@ prune() {
     log "pruning dump $(basename "$old")"
     rm -f "$old"
   done
+}
+
+# Deletes the release downloads in var/ other than those of the running
+# version ($1) and the one it replaced ($2). Never fails the update: it runs
+# after the new release has been proved ready.
+prune_downloads() {
+  local running="$1" previous="$2" doomed name bytes=0 count=0 size
+  # shellcheck disable=SC2046
+  doomed=$(downloads_to_prune "$running" "$previous" $(ls -1 "$VAR" 2>/dev/null))
+  [ -n "$doomed" ] || return 0
+  for name in $doomed; do
+    size=$(wc -c < "$VAR/$name" 2>/dev/null | tr -d ' ') || size=0
+    if rm -f "${VAR:?}/$name" 2>/dev/null && [ ! -e "$VAR/$name" ]; then
+      bytes=$(( bytes + ${size:-0} ))
+      count=$(( count + 1 ))
+    else
+      log "removing download failed: $VAR/$name"
+    fi
+  done
+  [ "$count" -gt 0 ] || return 0
+  local kept="v$running"
+  [ "$previous" = dev ] || kept="v$running and v$previous"
+  log "removed $count old download file(s) from $VAR, $(human_size "$bytes"); kept $kept"
+}
+
+# Installs $1 at $2 with mode $3 when the contents differ, and prints what it
+# did: new, changed, unchanged or failed. With $4, a file it replaces is
+# copied there first.
+install_if_changed() {
+  local src="$1" dest="$2" mode="$3" keep_dir="${4:-}" change
+  change=$(file_change "$src" "$dest")
+  [ "$change" != unchanged ] || { echo unchanged; return 0; }
+  if [ "$change" = changed ] && [ -n "$keep_dir" ]; then
+    if ! { mkdir -p "$keep_dir" && cp -p "$dest" "$keep_dir/$(basename "$dest")"; } 2>/dev/null; then
+      echo failed
+      return 0
+    fi
+  fi
+  if install -m "$mode" "$src" "$dest" 2>/dev/null; then
+    echo "$change"
+  else
+    echo failed
+  fi
+}
+
+# bin/syntra-backup from the release just switched to. The backup units run
+# this copy, not the release's, so a fix to the tool reaches the timer only
+# through here.
+refresh_backup_tool() {
+  local src="$1" version="$2" dest="$ROOT/bin/syntra-backup"
+  if [ ! -f "$src" ]; then
+    log "syntra-backup refresh skipped: v$version has no ops/syntra-backup"
+    return 0
+  fi
+  case "$(install_if_changed "$src" "$dest" 0755)" in
+    new)     log "installed $dest from v$version" ;;
+    changed) log "updated $dest from v$version" ;;
+    failed)  log "updating $dest failed: it could not be written; copy $src there by hand" ;;
+  esac
+}
+
+# The units Syntra owns (owned_unit), from the release's ops/systemd into
+# UNIT_DIR, when their contents differ. Then one daemon-reload.
+#
+# Installs, never enables or disables: whether the timers run is the
+# operator's decision, and a new unit file left disabled changes nothing until
+# something names it -- the OnFailure= handler is exactly that. Local changes
+# belong in a drop-in (`systemctl edit <unit>`), which this never touches; an
+# edit made in the file itself is copied to UNIT_BACKUPS before the file is
+# replaced.
+refresh_units() {
+  local src="$1" version="$2" path unit result
+  local installed=0 updated=0 unchanged=0 failed=0
+  if [ ! -d "$src" ]; then
+    log "unit refresh skipped: v$version has no ops/systemd"
+    return 0
+  fi
+  if [ -z "$UNIT_DIR" ]; then
+    log "unit refresh skipped: the units name /opt/syntra and this install is $ROOT; set SYNTRA_UNIT_DIR to refresh them"
+    return 0
+  fi
+  if [ ! -d "$UNIT_DIR" ]; then
+    log "unit refresh skipped: $UNIT_DIR does not exist"
+    return 0
+  fi
+  for path in "$src"/*; do
+    [ -f "$path" ] || continue
+    unit=$(basename "$path")
+    owned_unit "$unit" || continue
+    result=$(install_if_changed "$path" "$UNIT_DIR/$unit" 0644 "$UNIT_BACKUPS")
+    case "$result" in
+      unchanged) unchanged=$(( unchanged + 1 )) ;;
+      new)
+        installed=$(( installed + 1 ))
+        log "unit $unit installed from v$version"
+        ;;
+      changed)
+        updated=$(( updated + 1 ))
+        log "unit $unit updated from v$version; the previous file is in $UNIT_BACKUPS/$unit"
+        ;;
+      *)
+        failed=$(( failed + 1 ))
+        log "unit $unit update failed: $UNIT_DIR/$unit could not be written; install $path there by hand"
+        ;;
+    esac
+  done
+  if [ $(( installed + updated )) -gt 0 ]; then
+    systemctl daemon-reload 2>/dev/null \
+      || log "systemctl daemon-reload failed; run it by hand"
+  fi
+  log "units from v$version: $installed installed, $updated updated, $unchanged unchanged, $failed failed"
 }
 
 do_check() {

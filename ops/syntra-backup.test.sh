@@ -251,6 +251,89 @@ rm -rf "$SHARED"
 SHARED="$FP_SAVED_SHARED"
 MASTER_KEY=""
 
+# --- copy_backup ------------------------------------------------------------
+#
+# Backups used to live on the database's own host and nowhere else. The copy
+# step runs SYNTRA_BACKUP_COPY_COMMAND after each `create`, and a copy that
+# fails must fail the run, so syntra-backup.service's OnFailure= fires.
+
+CP_ROOT=$(mktemp -d)
+mkdir -p "$CP_ROOT/backups/syntra-20261003T021104Z" "$CP_ROOT/offsite" "$CP_ROOT/shared"
+printf 'PGDMP' > "$CP_ROOT/backups/syntra-20261003T021104Z/database.dump"
+printf '{}\n'  > "$CP_ROOT/backups/syntra-20261003T021104Z/manifest.json"
+CP_DIR="$CP_ROOT/backups/syntra-20261003T021104Z"
+
+# "<status>|<output>", in a subshell: die() exits.
+copy_result() {
+  local out code
+  out=$(COPY_COMMAND="$1"; copy_backup "$CP_DIR" 2>&1) && code=0 || code=$?
+  printf '%s|%s' "$code" "$out"
+}
+
+ok "no command configured copies nothing and succeeds silently" \
+   "$(copy_result '')" "0|"
+
+R=$(copy_result "cp -R \"\$1\" '$CP_ROOT/offsite/'")
+ok "the backup directory is passed as \$1" \
+   "$([ -f "$CP_ROOT/offsite/syntra-20261003T021104Z/database.dump" ] && echo yes || echo no)" yes
+ok "a copy that succeeds succeeds" "${R%%|*}" 0
+ok "and says which backup it copied" \
+   "$(printf '%s' "$R" | grep -c 'copied syntra-20261003T021104Z$')" 1
+
+# shellcheck disable=SC2016  # expanded by the copy command, not here
+ok "the name and path are in the environment too" \
+   "$(copy_result 'echo "$SYNTRA_BACKUP_NAME $SYNTRA_BACKUP_PATH"' | grep -cx "syntra-20261003T021104Z $CP_DIR")" 1
+
+R=$(copy_result 'echo "upload refused" >&2; exit 23')
+ok "a copy that fails fails the run" "$([ "${R%%|*}" != 0 ] && echo yes || echo no)" yes
+ok "and the command's own error is in the output" \
+   "$(printf '%s' "$R" | grep -c 'upload refused')" 1
+ok "and the failure names the backup, the exit status, where it is kept and how to retry" \
+   "$(printf '%s' "$R" | grep -c "copy of syntra-20261003T021104Z failed: SYNTRA_BACKUP_COPY_COMMAND exited 23. The backup is kept at $CP_DIR; retry with: syntra-backup copy syntra-20261003T021104Z")" 1
+ok "and the local backup is left where it was" \
+   "$([ -f "$CP_DIR/database.dump" ] && echo yes || echo no)" yes
+
+# Under a timer there is nobody to answer a prompt.
+ok "the command gets no stdin to wait on" \
+   "$(copy_result 'cat; echo done' | cut -d'|' -f2 | grep -c 'done')" 1
+
+# shared/.env is read for the setting, not sourced: MASTER_KEY must not reach
+# the command's environment.
+CP_SAVED_SHARED="$SHARED"
+SHARED="$CP_ROOT/shared"
+cat > "$SHARED/.env" <<'ENV'
+MASTER_KEY=must-not-leak
+SYNTRA_BACKUP_COPY_COMMAND='echo "key=${MASTER_KEY:-unset} dir=$1"'
+ENV
+# shellcheck disable=SC2016
+ok "the command is read from shared/.env when the environment has none" \
+   "$(COPY_COMMAND=''; resolve_copy_command; printf '%s' "$COPY_COMMAND")" \
+   'echo "key=${MASTER_KEY:-unset} dir=$1"'
+ok "and the environment wins over shared/.env" \
+   "$(COPY_COMMAND='from-env'; resolve_copy_command; printf '%s' "$COPY_COMMAND")" "from-env"
+ok "and the command does not see MASTER_KEY" \
+   "$(COPY_COMMAND=''; MASTER_KEY=must-not-leak; resolve_copy_command; copy_backup "$CP_DIR" 2>&1 | grep -c "key=unset dir=$CP_DIR")" 1
+
+# `copy` retries one by hand, and refuses what is not a finished backup.
+mkdir -p "$CP_ROOT/backups/syntra-20261004T021104Z.partial"
+copy_cmd() {
+  local out code
+  # shellcheck disable=SC2034  # read by cmd_copy
+  out=$(BACKUPS="$CP_ROOT/backups"; COPY_COMMAND="$1"; shift; cmd_copy "$@" 2>&1) && code=0 || code=$?
+  printf '%s|%s' "$code" "$out"
+}
+ok "copy with no command configured refuses and says where it looked" \
+   "$(: > "$SHARED/.env"; copy_cmd '' | grep -c "no SYNTRA_BACKUP_COPY_COMMAND in the environment or in $SHARED/.env")" 1
+# shellcheck disable=SC2016
+ok "copy defaults to the newest finished backup, not a partial one" \
+   "$(copy_cmd 'echo "$SYNTRA_BACKUP_NAME"' | grep -c '^syntra-20261003T021104Z$')" 1
+ok "copy refuses a partial backup" \
+   "$(copy_cmd 'true' syntra-20261004T021104Z.partial | grep -c 'is an interrupted backup')" 1
+ok "copy refuses a backup that does not exist" \
+   "$(copy_cmd 'true' syntra-19700101T000000Z | grep -c 'no such backup: syntra-19700101T000000Z')" 1
+SHARED="$CP_SAVED_SHARED"
+rm -rf "$CP_ROOT"
+
 # ---------------------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

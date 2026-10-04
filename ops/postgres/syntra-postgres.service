@@ -1,0 +1,33 @@
+# /etc/systemd/system/syntra-postgres.service
+#
+# Brings up ops/postgres/docker-compose.yml at boot and waits until PostgreSQL
+# accepts connections. An example to install by hand (docs/install.md, "The
+# database"); syntra-update does not install or refresh it.
+#
+# syntra.service then orders itself after this unit with a drop-in:
+#
+#   # /etc/systemd/system/syntra.service.d/10-postgres.conf
+#   [Unit]
+#   After=syntra-postgres.service
+#   Requires=syntra-postgres.service
+
+[Unit]
+Description=Syntra PostgreSQL
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/syntra/postgres
+# --wait returns once the healthcheck passes (pg_isready), so a unit ordered
+# after this one starts against a database that answers, not one that has
+# merely started.
+ExecStart=/usr/bin/docker compose up -d --wait
+# No ExecStop: restart: unless-stopped and Docker's own shutdown stop the
+# container, with the compose file's 60 s grace period.
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=multi-user.target
