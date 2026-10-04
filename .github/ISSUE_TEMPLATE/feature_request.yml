@@ -1,0 +1,33 @@
+name: Feature request
+description: Something Syntra should do that it does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not sure yet? Start a thread in Discussions → Ideas first. A new system to provision to is a connector request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What Syntra should do. Name the console page or API route if you know it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds and alternatives
+      description: What you do now, and other approaches you considered.
+  - type: input
+    id: version
+    attributes:
+      label: Syntra version
+      description: Administration → Updates.
+      placeholder: 1.19.1

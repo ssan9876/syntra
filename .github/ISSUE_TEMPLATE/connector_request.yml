@@ -1,0 +1,58 @@
+name: Connector request
+description: A system Syntra should read people from or provision accounts to.
+labels: [enhancement, connector]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Many REST APIs need no new code: Target systems → New target → REST API → Another application builds a connector document. If you got one working, a pull request with it is welcome.
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Product name, and cloud or self-hosted with the version.
+      placeholder: Snipe-IT 8.x, self-hosted
+    validations:
+      required: true
+  - type: input
+    id: api-docs
+    attributes:
+      label: API documentation
+      description: Link to the user and group API reference.
+      placeholder: https://
+    validations:
+      required: true
+  - type: dropdown
+    id: auth
+    attributes:
+      label: Authentication
+      options:
+        - API key or bearer token
+        - OAuth2 client credentials
+        - Basic (username and password)
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: objects
+    attributes:
+      label: Objects to manage
+      options:
+        - label: Users
+        - label: Groups
+        - label: Roles
+  - type: dropdown
+    id: scim
+    attributes:
+      label: Does the system support SCIM 2.0?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Licence tier needed for the API, rate limits, a test instance you can offer.
