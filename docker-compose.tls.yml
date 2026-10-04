@@ -31,7 +31,7 @@ services:
     # once it is in front, and it reaches `web` over the compose network --
     # `web` needs no published port at all under this overlay.
     #
-    # THE BASE FILE NOW BINDS 127.0.0.1:8080:80, not 8080:80, which is the fix
+    # THE BASE FILE NOW BINDS 127.0.0.1:8080:8080, not 8080:8080, which is the fix
     # the earlier version of this comment described as the fallback. So the
     # unproxied origin is already off the network whether or not this block
     # takes effect, and this is now defence in depth rather than the only
