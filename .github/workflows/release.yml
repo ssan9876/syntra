@@ -270,6 +270,16 @@ jobs:
             > RELEASE.json
           cat RELEASE.json
 
+      # The images need the same file. Without it the API in the container
+      # finds no RELEASE.json at /app and reports itself as `dev`.
+      - name: Hand RELEASE.json to the image job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-json
+          path: RELEASE.json
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Assemble the runtime tree
         env:
           VERSION: ${{ steps.meta.outputs.version }}
@@ -402,6 +412,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
+
+      # Into the build context root, which the api Dockerfile copies to /app:
+      # the install root the API reads its version from.
+      - name: Fetch RELEASE.json from the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: release-json
+          path: .
 
       - uses: docker/setup-buildx-action@v4
 
