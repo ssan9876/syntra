@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Syntra does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A security vulnerability? Do not file it here. Use the Security tab → Report a vulnerability.
+  - type: input
+    id: version
+    attributes:
+      label: Syntra version
+      description: Administration → Updates shows it. A development checkout reports `dev`; give the commit instead.
+      placeholder: 1.19.1
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Release layout (single process)
+        - Docker Compose
+        - Helm
+        - Development
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the exact message shown, and the target, run or person it named.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Target systems → …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant API log lines. Remove passwords, secrets, tokens, keys and personal data before pasting.
+      render: text

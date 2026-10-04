@@ -120,7 +120,9 @@ Three things follow, and they are the whole design:
    `SYNTRA_RELEASE_TOKEN=… /opt/syntra/bin/syntra-update --adopt <version>`.
    A working tree reports itself as `dev` and the console will not update it.
 
-**Cutting a release.** Nothing is updatable until something has been released:
+**Cutting a release.** Nothing is updatable until something has been released.
+Move the Unreleased section of `CHANGELOG.md` into the new version (see
+[Releases](releases.md)), then tag:
 
 ```bash
 git tag -a v1.5.0 -m "What changed, for the operator deciding whether to take it."
