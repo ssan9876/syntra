@@ -1341,6 +1341,9 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     const fetchMock = mockTarget({ type: 'entraId', config: { tenantId: 'x', clientId: 'y' }, deleteAfterDays: 30 });
     renderExisting();
     const field = await screen.findByLabelText('Delete accounts after N days inactive');
+    // Wait for the saved value first. Cleared before the form is filled, the
+    // box comes back as 30 and the save sends 30.
+    await waitFor(() => expect(field).toHaveValue('30'));
     await userEvent.clear(field);
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
