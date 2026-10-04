@@ -248,8 +248,12 @@ export PUBLIC_URL=https://idm.example.com SMTP_URL=smtp://mail.example.com:25
 docker compose up -d                                           # migrates, then serves on 127.0.0.1:8080
 # docker compose up --build -d                                 # to build the images from source instead of pulling
 
-# Once, to create your tenant and its first administrator. The dev `pnpm seed`
-# is demo data and is not this.
+# Once, to create your tenant and its first administrator: open the one-time
+# link the API prints while no tenant exists (valid for 1 hour, see
+# configure.md#first-run-setup)...
+docker compose logs api | grep "First-run setup"
+# ...or, without a browser, run the bootstrap script. The dev `pnpm seed` is
+# demo data and is not this.
 docker compose exec \
   -e BOOTSTRAP_TENANT_NAME='Example Ltd' -e BOOTSTRAP_TENANT_SLUG=example \
   -e BOOTSTRAP_TENANT_DOMAIN=idm.example.com \
