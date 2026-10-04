@@ -295,6 +295,119 @@ describe('listIncidents', () => {
     expect(found.resolvable).toBe(false);
   });
 
+  describe('a target whose runs keep ending partially applied', () => {
+    /** A finished run, `hoursAgo` back, with one action per given outcome. */
+    async function aRun(targetId: string, status: string, hoursAgo: number, actions: string[] = []) {
+      const at = new Date(NOW.getTime() - hoursAgo * 3_600_000);
+      return withTenant(tenantId, async (tx) => {
+        const run = await tx.provisionRun.create({
+          data: { tenantId, targetSystemId: targetId, status, startedAt: at, finishedAt: at },
+        });
+        for (const [sequence, outcome] of actions.entries()) {
+          await tx.provisionAction.create({
+            data: {
+              tenantId,
+              runId: run.id,
+              actionType: 'update_account',
+              sequence,
+              status: outcome,
+              requiresConfirmation: outcome === 'proposed',
+              message: outcome === 'failed' ? 'PATCH /Users/42 as admin@acme.test: SCIM 400 invalidValue' : null,
+            },
+          });
+        }
+        return run;
+      });
+    }
+
+    it('names the target and how many runs in a row, and links the latest run', async () => {
+      const target = await aTarget({
+        name: 'fmx.ssander.xyz',
+        type: 'scim2',
+        config: { baseUrl: 'https://fmx.ssander.xyz/scim/v2' },
+      });
+      for (const h of [5, 4, 3, 2]) await aRun(target.id, 'partially_applied', h, ['applied', 'failed']);
+      const latestRun = await aRun(target.id, 'partially_applied', 1, ['applied', 'failed', 'failed']);
+
+      const found = (await incidents()).find((i) => i.kind === 'target_runs_partially_applied')!;
+      expect(found).toMatchObject({ severity: 'warning', count: 1, resolvable: false });
+      expect(found.detail).toBe(
+        'Target "fmx.ssander.xyz": last 5 runs partially applied. Open the latest run to see the failed actions.',
+      );
+      expect(found.href).toBe(`/admin/targets/${target.id}/runs`);
+      expect(found.items[0]).toMatchObject({
+        label: 'fmx.ssander.xyz · 5 partially applied',
+        href: `/admin/targets/${target.id}/runs/${latestRun.id}`,
+      });
+      expect(found.items[0]!.detail).toContain('2 actions failed in the latest run');
+      expect(found.items[0]!.detail).toContain('SCIM 400');
+      expect(found.items[0]!.detail).not.toContain('admin@acme.test');
+    });
+
+    it('is not raised by fewer than three', async () => {
+      const target = await aTarget();
+      await aRun(target.id, 'partially_applied', 2, ['failed']);
+      await aRun(target.id, 'partially_applied', 1, ['failed']);
+      expect(await kinds()).not.toContain('target_runs_partially_applied');
+    });
+
+    it('clears when a run fully applies', async () => {
+      const target = await aTarget();
+      for (const h of [6, 5, 4]) await aRun(target.id, 'partially_applied', h, ['failed']);
+      expect(await kinds()).toContain('target_runs_partially_applied');
+
+      await aRun(target.id, 'applied', 3, ['applied']);
+      expect(await kinds()).not.toContain('target_runs_partially_applied');
+
+      // Partial runs before the clean one no longer count towards a new streak.
+      await aRun(target.id, 'partially_applied', 2, ['failed']);
+      await aRun(target.id, 'partially_applied', 1, ['failed']);
+      expect(await kinds()).not.toContain('target_runs_partially_applied');
+    });
+
+    it('does not count runs that are partial only because actions are held for confirmation', async () => {
+      // Held actions are on the attention summary, waiting for an approval.
+      const target = await aTarget();
+      for (const h of [3, 2, 1]) await aRun(target.id, 'partially_applied', h, ['applied', 'proposed']);
+      expect(await kinds()).not.toContain('target_runs_partially_applied');
+    });
+
+    it('does not report a disabled target', async () => {
+      const target = await aTarget({ enabled: false });
+      for (const h of [3, 2, 1]) await aRun(target.id, 'partially_applied', h, ['failed']);
+      expect(await kinds()).not.toContain('target_runs_partially_applied');
+    });
+
+    it('keeps an acknowledgement while the same streak goes on', async () => {
+      const target = await aTarget();
+      for (const h of [10, 9, 8]) await aRun(target.id, 'partially_applied', h, ['failed']);
+      const actor = await withTenant(tenantId, (tx) =>
+        tx.user.create({ data: { tenantId, login: 'ops', email: 'ops@acme.test', displayName: 'Ops' } }),
+      );
+      await withTenant(tenantId, (tx) =>
+        acknowledgeIncident(
+          tx,
+          tenantId,
+          'target_runs_partially_applied',
+          actor.id,
+          'vendor ticket open',
+          new Date(NOW.getTime() - 7 * 3_600_000),
+        ),
+      );
+      // Another hourly run with the same failure is not something new.
+      await aRun(target.id, 'partially_applied', 1, ['failed']);
+      const acked = (await incidents()).find((i) => i.kind === 'target_runs_partially_applied')!;
+      expect(acked.acknowledged).toMatchObject({ note: 'vendor ticket open' });
+
+      // A second target starting a streak is.
+      const other = await aTarget({ name: 'Snipe-IT', secretName: 's/snipe' });
+      for (const h of [3, 2, 1]) await aRun(other.id, 'partially_applied', h, ['failed']);
+      const back = (await incidents()).find((i) => i.kind === 'target_runs_partially_applied')!;
+      expect(back.count).toBe(2);
+      expect(back.acknowledged).toBeNull();
+    });
+  });
+
   it('puts what is worst first', async () => {
     const source = await withTenant(tenantId, (tx) =>
       tx.directorySource.create({

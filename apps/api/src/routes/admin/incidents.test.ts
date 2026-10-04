@@ -157,6 +157,8 @@ describe('acknowledging and resolving', () => {
     const condition = await call(operator, 'POST', '/api/admin/incidents/target_runs_skipped/resolve', {});
     expect(condition.statusCode).toBe(409);
     expect(condition.json().type).toContain('incident-not-resolvable');
+    const partial = await call(operator, 'POST', '/api/admin/incidents/target_runs_partially_applied/resolve', {});
+    expect(partial.statusCode).toBe(409);
 
     const events = await withTenant(ctx.tenantId, (tx) =>
       tx.auditEvent.findMany({ where: { action: { startsWith: 'incident.' } }, orderBy: { sequence: 'asc' } }),

@@ -24,6 +24,7 @@ export type IncidentKind =
   | 'notification_undelivered'
   | 'target_runs_skipped'
   | 'target_never_completed'
+  | 'target_runs_partially_applied'
   | 'provision_run_failed'
   | 'sync_run_failed'
   | 'task_failing'
@@ -95,6 +96,7 @@ export const INCIDENT_KINDS: readonly IncidentKind[] = [
   'notification_undelivered',
   'target_runs_skipped',
   'target_never_completed',
+  'target_runs_partially_applied',
   'provision_run_failed',
   'sync_run_failed',
   'task_failing',
@@ -112,6 +114,10 @@ export const RESOLVABLE_INCIDENTS: readonly IncidentKind[] = [
 const WEBHOOK_GIVEN_UP = 6;
 const OUTBOX_GIVEN_UP = 5;
 const STALE_RUN_MS = 2 * 86_400_000;
+/** Runs in a row with failed actions before a target is listed. */
+const PARTIAL_RUN_STREAK = 3;
+/** Action outcomes that keep a run from ending `applied`, as `apply.ts` counts them. */
+const FAILED_ACTION_STATUSES = ['failed', 'conflict', 'refused'];
 const WEEK_MS = 7 * 86_400_000;
 const ITEM_LIMIT = 10;
 const DETAIL_MAX = 300;
@@ -296,6 +302,94 @@ export async function listIncidents(tx: TenantClient, now: Date): Promise<Incide
       href: '/admin/targets',
       items,
     });
+  }
+
+  // --- Targets whose runs keep ending partially applied --------------------
+  //
+  // A run with failed actions ends `partially_applied`, not `failed`, so
+  // `provision_run_failed` never sees it; a target can end every run that way
+  // for a week and nothing else here says so. Counted since the target's last
+  // run that ended `applied`, so the first clean run clears it. A run that is
+  // partial only because actions are held for confirmation is not counted:
+  // that is on the attention summary, waiting for somebody's approval.
+  {
+    const partial: { target: { id: string; name: string }; count: number; since: Date; item: IncidentItem }[] = [];
+    for (const t of targets.filter((t) => t.enabled)) {
+      const clean = await tx.provisionRun.findFirst({
+        where: { targetSystemId: t.id, status: 'applied' },
+        orderBy: { startedAt: 'desc' },
+        select: { startedAt: true },
+      });
+      const where = {
+        targetSystemId: t.id,
+        status: 'partially_applied',
+        actions: { some: { status: { in: FAILED_ACTION_STATUSES } } },
+        ...(clean ? { startedAt: { gt: clean.startedAt } } : {}),
+      };
+      const n = await tx.provisionRun.count({ where });
+      if (n < PARTIAL_RUN_STREAK) continue;
+      const [run, onset] = await Promise.all([
+        tx.provisionRun.findFirst({
+          where,
+          orderBy: { startedAt: 'desc' },
+          select: {
+            id: true,
+            startedAt: true,
+            finishedAt: true,
+            actions: {
+              where: { status: { in: FAILED_ACTION_STATUSES } },
+              orderBy: { sequence: 'asc' },
+              take: 1,
+              select: { message: true },
+            },
+            _count: { select: { actions: { where: { status: { in: FAILED_ACTION_STATUSES } } } } },
+          },
+        }),
+        // The run that made it a streak. The acknowledgement is measured
+        // against this, not the newest run: an hourly target would otherwise
+        // undo it every hour while nothing new had gone wrong.
+        tx.provisionRun.findFirst({
+          where,
+          orderBy: { startedAt: 'asc' },
+          skip: PARTIAL_RUN_STREAK - 1,
+          select: { finishedAt: true, startedAt: true },
+        }),
+      ]);
+      if (!run || !onset) continue;
+      const failedActions = run._count.actions;
+      partial.push({
+        target: t,
+        count: n,
+        since: onset.finishedAt ?? onset.startedAt,
+        item: {
+          label: `${t.name} · ${n} partially applied`,
+          detail: [
+            `${failedActions} ${plural(failedActions, 'action', 'actions')} failed in the latest run`,
+            scrub(run.actions[0]?.message),
+          ]
+            .filter(Boolean)
+            .join(' — '),
+          at: run.finishedAt ?? run.startedAt,
+          href: `/admin/targets/${t.id}/runs/${run.id}`,
+        },
+      });
+    }
+    if (partial.length > 0) {
+      partial.sort((a, b) => b.item.at!.getTime() - a.item.at!.getTime());
+      const first = partial[0]!;
+      const n = partial.length;
+      drafts.push({
+        kind: 'target_runs_partially_applied',
+        // Something applied, as with a failed run, which is also a warning.
+        severity: 'warning',
+        title: `${n} ${plural(n, 'target', 'targets')} with partially applied runs`,
+        detail: `Target "${first.target.name}": last ${first.count} runs partially applied. Open the latest run to see the failed actions.`,
+        count: n,
+        lastAt: latest(partial.map((p) => p.since)),
+        href: n === 1 ? `/admin/targets/${first.target.id}/runs` : '/admin/targets',
+        items: partial.slice(0, ITEM_LIMIT).map((p) => p.item),
+      });
+    }
   }
 
   // --- Runs that failed outright -----------------------------------------
