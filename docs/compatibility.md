@@ -21,9 +21,9 @@ are adapter release 1.0.0 on the stable channel.
 
 | Target | Status | Tested against | Known limits |
 |---|---|---|---|
-| Active Directory | Supported | Samba AD domain controller (`nowsci/samba-domain`, pinned) in the integration suite; a Windows domain behind HTTPS, written up in [Active Directory in practice](operate.md#active-directory-in-practice). Windows Server versions are not recorded. | LDAPS or StartTLS only. The only target that places accounts in OUs and mirrors org units. |
-| Microsoft Entra ID (native) | Preview | A fake Microsoft Graph in the test suite. Certification is `partial`: evidence against a real tenant with direct groups is still required. `pnpm entra:validate` checks a real tenant. | Direct group memberships only; nested and dynamic groups are not managed. No containers. Account delete is verified against the fake Graph only. |
-| SCIM 2.0 | Supported | A disposable SCIM service in the test suite. | No containers. Entitlements are group memberships only. |
+| Active Directory | Supported | Samba AD domain controller (`nowsci/samba-domain`, pinned) in the integration suite; a Windows domain behind HTTPS, written up in [Active Directory in practice](operate.md#active-directory-in-practice). Windows Server versions are not recorded. Runs every 15 minutes against a Windows domain controller over LDAPS in the maintainer's lab. | LDAPS or StartTLS only. The only target that places accounts in OUs and mirrors org units. |
+| Microsoft Entra ID (native) | Preview | A fake Microsoft Graph in the test suite. Certification is `partial`: evidence against a real tenant with direct groups is still required. `pnpm entra:validate` checks a real tenant. Runs every 15 minutes against a real tenant in the maintainer's lab (user accounts; group membership not exercised there). | Direct group memberships only; nested and dynamic groups are not managed. No containers. Account delete is verified against the fake Graph only. |
+| SCIM 2.0 | Supported | A disposable SCIM service in the test suite, and a self-hosted SCIM 2.0 application in the maintainer's lab. | No containers. Entitlements are group memberships only. |
 | REST API (connector document) | Preview | The shared certification suite. | Only what the document declares. No document can delete an account. Containers only if the document describes them. |
 
 ### Shipped connector documents
@@ -33,8 +33,8 @@ be edited there.
 
 | System | Status | Tested against | Known limits |
 |---|---|---|---|
-| Snipe-IT (REST API v1) | Preview | An in-memory Snipe-IT that follows the API reference. | Users only: no groups, permissions, departments, locations or companies. No delete or archive; leavers are deactivated. |
-| Mattermost (REST API v4) | Preview | An in-memory Mattermost that follows the API v4 reference. Not yet verified against a real server. | Users and team membership. No channels, archive or delete. SAML sign-in switch needs Mattermost Enterprise. |
+| Snipe-IT (REST API v1) | Preview | An in-memory Snipe-IT that follows the API reference, and Snipe-IT 8.7.2 in the maintainer's lab: create, update (including job title) and SAML sign-in of the provisioned users. | Users only: no groups, permissions, departments, locations or companies. No delete or archive; leavers are deactivated. |
+| Mattermost (REST API v4) | Preview | An in-memory Mattermost that follows the API v4 reference, and Mattermost 11.11.1 in the maintainer's lab: create, update, adopting existing users, and switching existing users to SAML sign-in, followed by a SAML sign-in. | Users and team membership. No channels, archive or delete. SAML sign-in switch needs Mattermost Enterprise. |
 | Google Workspace (Admin SDK Directory API) | Untested | Not yet verified against a real tenant. | The `oauth2` type cannot do service-account JWT with domain-wide delegation; use a bearer token refreshed outside Syntra. No archive: suspension only. |
 | Microsoft Entra ID (document) | Preview | As REST API. | Superseded by the native connector; a document target converts in place. |
 
