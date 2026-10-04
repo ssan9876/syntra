@@ -11,6 +11,11 @@ type: application
 # that carries migration 20261027173100_replica_safe_state (shared OIDC
 # provider generation and rate-limit counters); pin api.replicas=1 when
 # deploying an older image with this chart.
+#
+# The chart published to oci://ghcr.io/ssan9876/charts is packaged by
+# .github/workflows/release.yml with version and appVersion both set to the
+# release (tag v1.20.0 publishes chart 1.20.0 with appVersion 1.20.0). The two
+# values below apply only to installs from this directory.
 version: 0.3.0
 appVersion: "latest"
 kubeVersion: ">=1.27.0-0"
@@ -22,3 +27,19 @@ keywords:
   - identity
   - sso
   - scim
+maintainers:
+  - name: ssan9876
+    url: https://github.com/ssan9876
+# Read by Artifact Hub. Helm does not use annotations when it renders.
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: security
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/ssan9876/syntra
+    - name: Documentation
+      url: https://github.com/ssan9876/syntra/tree/main/docs
+    - name: Chart README
+      url: https://github.com/ssan9876/syntra/blob/main/deploy/helm/syntra/README.md
+    - name: support
+      url: https://github.com/ssan9876/syntra/issues

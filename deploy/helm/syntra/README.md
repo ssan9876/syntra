@@ -32,6 +32,13 @@ would collide.
 
 ## Install
 
+Each release publishes this chart to `oci://ghcr.io/ssan9876/charts/syntra`,
+with chart version and appVersion both set to the release. Empty image tags
+mean appVersion, so chart `1.20.0` installs images `1.20.0`. Check the chart
+first with `gh attestation verify oci://ghcr.io/ssan9876/charts/syntra:1.20.0
+--repo ssan9876/syntra` (see
+[Verifying a release](../../../docs/operate.md#verifying-a-release)).
+
 ```bash
 kubectl create namespace syntra
 kubectl -n syntra create secret generic syntra-runtime \
@@ -41,15 +48,33 @@ kubectl -n syntra create secret generic syntra-runtime \
   --from-literal=SMTP_URL='smtp://mail.example.com:587' \
   --from-literal=METRICS_TOKEN="$(openssl rand -hex 24)"
 
-helm upgrade --install syntra ./deploy/helm/syntra -n syntra \
-  --set existingSecret=syntra-runtime \
-  --set publicUrl=https://idm.example.com \
-  --set api.image.tag=1.4.0 --set web.image.tag=1.4.0 \
-  --set api.trustProxy=10.244.0.0/16 \
-  --set ingress.enabled=true --set ingress.className=nginx \
-  --set 'ingress.hosts[0].host=idm.example.com' \
-  --set 'ingress.hosts[0].paths[0].path=/'
+cat > values.yaml <<'EOF'
+existingSecret: syntra-runtime
+publicUrl: https://idm.example.com
+api:
+  trustProxy: 10.244.0.0/16
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: idm.example.com
+      paths:
+        - path: /
+EOF
+
+helm install syntra oci://ghcr.io/ssan9876/charts/syntra --version 1.20.0 \
+  -n syntra -f values.yaml
 ```
+
+To upgrade: `helm upgrade syntra oci://ghcr.io/ssan9876/charts/syntra
+--version <new> -n syntra -f values.yaml`. Always pass `--version`. `helm show
+values oci://ghcr.io/ssan9876/charts/syntra --version 1.20.0` prints every
+value with its default.
+
+**From this directory** the chart is version `0.3.0` with appVersion
+`latest`. Use it only to test an unreleased change, and pin the images:
+`helm upgrade --install syntra ./deploy/helm/syntra -n syntra -f values.yaml
+--set api.image.tag=1.20.0 --set web.image.tag=1.20.0`.
 
 **Back up `MASTER_KEY` outside the cluster.** It encrypts every stored
 credential and signs SAML, and a database restore does not bring it back. A

@@ -55,7 +55,9 @@ Three deployment shapes exist, and each upgrades differently:
 For the container path, an upgrade is pulling a newer image: set
 `SYNTRA_VERSION` to the release you want and re-run `docker compose up -d`
 (see [Install](install.md#running-it-for-real-the-container-path)). For Helm,
-set the new image tags and `helm upgrade`. Both are walked through, with their
+`helm upgrade` to the new release's chart version (see
+[Installing the Helm chart from the OCI registry](#installing-the-helm-chart-from-the-oci-registry)),
+or set the new image tags. Both are walked through, with their
 rollbacks, in the [database migration runbook](#runbook-database-migration).
 The rest of this section is the release layout.
 
@@ -135,6 +137,75 @@ commit that is on `main`:** the release workflow refuses any other. It reuses
 the whole suite when there is not (see
 [Continuous integration](#continuous-integration)) — either way, a tag whose
 tests fail produces no release.
+
+A green release run publishes, in this order:
+
+1. **The GitHub release** `vX.Y.Z`, with `syntra-X.Y.Z.tar.gz`, its `.sha256`
+   and `syntra-X.Y.Z.spdx.json`. The tarball's provenance and SBOM are
+   attested before the release is created.
+2. **The images** `ghcr.io/ssan9876/syntra-api:X.Y.Z` and `syntra-web:X.Y.Z`
+   (and `:latest`, for a tag of numbers and dots only), each with a
+   provenance and an SBOM attestation. `syntra-api-X.Y.Z.spdx.json` and
+   `syntra-web-X.Y.Z.spdx.json` are then added to the release.
+3. **The Helm chart** `oci://ghcr.io/ssan9876/charts/syntra`, version
+   `X.Y.Z`, appVersion `X.Y.Z`, with a provenance attestation, and
+   `deploy/helm/artifacthub-repo.yml` under the `artifacthub.io` tag.
+
+A release without the two image SBOMs means the `image` job failed; a chart
+version missing means the `chart` job failed. Re-run the failed job from the
+run's page.
+
+The first release with the chart job creates the `charts/syntra` package on
+GHCR. If `helm show chart oci://ghcr.io/ssan9876/charts/syntra --version X.Y.Z`
+fails with `denied` when signed out, the package is private: open it under
+the account's **Packages**, then **Package settings**, and set it to public.
+Artifact Hub cannot read a private package either.
+
+### Verifying a release
+
+Every release asset, image and chart is signed by the release workflow with
+[Sigstore](https://www.sigstore.dev/) through GitHub artifact attestations.
+The attestations are listed at
+<https://github.com/ssan9876/syntra/attestations>. Checking them needs the
+[GitHub CLI](https://cli.github.com/), signed in with any GitHub account
+(`gh auth login`).
+
+```bash
+VERSION=1.20.0
+gh release download "v$VERSION" --repo ssan9876/syntra \
+  --pattern "syntra-$VERSION.tar.gz*" --pattern '*.spdx.json'
+
+# The download is intact.
+sha256sum -c "syntra-$VERSION.tar.gz.sha256"
+
+# It was built from ssan9876/syntra by GitHub Actions.
+gh attestation verify "syntra-$VERSION.tar.gz" --repo ssan9876/syntra
+
+# The images and the chart, by the digest the tag resolves to now.
+gh attestation verify "oci://ghcr.io/ssan9876/syntra-api:$VERSION" --repo ssan9876/syntra
+gh attestation verify "oci://ghcr.io/ssan9876/syntra-web:$VERSION" --repo ssan9876/syntra
+gh attestation verify "oci://ghcr.io/ssan9876/charts/syntra:$VERSION" --repo ssan9876/syntra
+```
+
+Each `verify` prints `✓ Verification succeeded!` and the workflow that signed
+it. To require the release workflow and the tag as well, add
+`--signer-workflow ssan9876/syntra/.github/workflows/release.yml --source-ref
+refs/tags/v$VERSION`.
+
+**SBOMs.** The release carries three SPDX 2.3 JSON files:
+
+| File | Describes |
+|---|---|
+| `syntra-X.Y.Z.spdx.json` | The tarball: the npm packages in `pnpm-lock.yaml` that `pnpm install --frozen-lockfile` installs on the target |
+| `syntra-api-X.Y.Z.spdx.json` | `ghcr.io/ssan9876/syntra-api:X.Y.Z`: OS packages and the npm packages in the image |
+| `syntra-web-X.Y.Z.spdx.json` | `ghcr.io/ssan9876/syntra-web:X.Y.Z`: the nginx image's OS packages. The console's npm dependencies are bundled into its static files and are listed in the tarball's SBOM. |
+
+The tarball and both images also carry the same SBOM as a signed
+attestation. To check that the SBOM was signed for that exact artefact, add
+`--predicate-type https://spdx.dev/Document/v2.3` to the `verify` command.
+BuildKit's own unsigned SBOM and provenance are also inside each image
+index (`docker buildx imagetools inspect ghcr.io/ssan9876/syntra-api:X.Y.Z
+--format '{{json .SBOM}}'`).
 
 ### Updating
 
@@ -535,6 +606,34 @@ has the details. In short:
 Syntra has no state of its own outside Postgres, `MASTER_KEY` and
 `SESSION_SECRET`. Availability therefore depends almost entirely on the
 database.
+
+### Installing the Helm chart from the OCI registry
+
+Each release publishes the chart to `oci://ghcr.io/ssan9876/charts/syntra`
+with the release's version as both its chart version and its appVersion.
+Empty `api.image.tag` and `web.image.tag` mean appVersion, so chart `X.Y.Z`
+installs images `X.Y.Z`. Helm 3.8 or later reads OCI charts.
+
+```bash
+helm show values oci://ghcr.io/ssan9876/charts/syntra --version 1.20.0 > values.yaml
+# edit values.yaml: existingSecret, publicUrl, api.trustProxy, ingress
+helm install syntra oci://ghcr.io/ssan9876/charts/syntra --version 1.20.0 \
+  -n syntra -f values.yaml
+```
+
+To upgrade, run `helm upgrade syntra oci://ghcr.io/ssan9876/charts/syntra
+--version <new> -n syntra -f values.yaml`. If `values.yaml` pins
+`api.image.tag` or `web.image.tag`, change those too, or clear them.
+
+Always pass `--version`. Helm never picks a pre-release chart (`2.0.0-rc1`)
+unless `--version` names it or `--devel` is given. Check the chart before
+installing it:
+`gh attestation verify oci://ghcr.io/ssan9876/charts/syntra:1.20.0 --repo
+ssan9876/syntra` (see [Verifying a release](#verifying-a-release)).
+
+`deploy/helm/syntra` in the repository is the same chart at version `0.3.0`
+with appVersion `latest`. Install from that directory only to test an
+unreleased change, and pin the image tags when you do.
 
 ### Postgres for production
 
@@ -3099,11 +3198,13 @@ a day so its log can be read; `migration.enabled: false` turns it off). Under
 PgBouncer it needs a direct connection (`secretKeys.migrationDatabaseUrl`).
 
 1. Back up the database with the provider's tooling.
-2. Set the new immutable image tags in the values file.
-3. `helm upgrade --install syntra ./deploy/helm/syntra --namespace syntra -f
-   values-<env>.yaml`. Helm aborts the upgrade if the Job fails, so the old
-   Deployment keeps running on a schema that may be **partly ahead** of it;
-   check the state before retrying.
+2. Set the new immutable image tags in the values file, or leave them empty
+   and use the new release's chart version.
+3. `helm upgrade --install syntra oci://ghcr.io/ssan9876/charts/syntra
+   --version <new> --namespace syntra -f values-<env>.yaml` (or
+   `./deploy/helm/syntra` from a checkout). Helm aborts the upgrade if the
+   Job fails, so the old Deployment keeps running on a schema that may be
+   **partly ahead** of it; check the state before retrying.
 4. A failed Job: `kubectl -n syntra get jobs`, `kubectl -n syntra logs
    job/syntra-migrate`.
 5. Verify. `helm rollback` restores the images but **not** the database: the
