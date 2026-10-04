@@ -46,7 +46,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "ldapts": "^9.2.0",
     "otpauth": "9.5.2",
-    "pg": "^8.23.0",
+    "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.70.1",
