@@ -1,0 +1,17 @@
+# Artifact Hub repository metadata for oci://ghcr.io/ssan9876/charts/syntra.
+#
+# .github/workflows/release.yml pushes this file with every release to
+# ghcr.io/ssan9876/charts/syntra:artifacthub.io, the tag Artifact Hub reads
+# for OCI-hosted charts. It lives outside deploy/helm/syntra so it is not
+# packaged into the chart.
+#
+# MAINTAINER: add oci://ghcr.io/ssan9876/charts/syntra as a Helm repository
+# on artifacthub.io, copy the repository ID it shows into repositoryID below,
+# and cut a release. Artifact Hub grants Verified Publisher once it reads the
+# matching ID.
+repositoryID:
+# To claim ownership of the repository on Artifact Hub, list the Artifact Hub
+# account's name and email here:
+# owners:
+#   - name: ssan9876
+#     email: <the email on the Artifact Hub account>

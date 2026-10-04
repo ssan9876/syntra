@@ -24,12 +24,15 @@ on:
   # construction rather than by agreement.
   workflow_dispatch:
 
+# Read-only by default. Each job that writes names what it writes:
+#   build -- contents (the release), id-token + attestations (provenance)
+#   image -- packages (GHCR), contents (SBOM assets), id-token + attestations
+#   chart -- packages (GHCR), id-token + attestations
+# Every registry login uses GITHUB_TOKEN rather than a separate secret -- a
+# token scoped to this run, this repository, and nothing else. `verify` gets
+# only this default, and ci.yml needs no more.
 permissions:
-  contents: write
-  # For the image job below, which logs in to GHCR with GITHUB_TOKEN rather
-  # than a separate secret -- a token scoped to this run, this repository,
-  # and nothing else.
-  packages: write
+  contents: read
 
 jobs:
   # A dispatch from a branch would build something that is not a release.
@@ -180,6 +183,10 @@ jobs:
           || (needs.verify.result == 'skipped' && needs.prior-ci.outputs.passed == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write      # gh release create
+      id-token: write      # Sigstore signing certificate for the attestations
+      attestations: write  # store the attestations against this repository
     steps:
       - uses: actions/checkout@v7
         with:
@@ -309,6 +316,42 @@ jobs:
           tar -tzf "$NAME.tar.gz" | grep -c "^$NAME/pnpm-lock.yaml$" >/dev/null
           ls -lh "$NAME.tar.gz"
 
+      # SBOM and attestations come BEFORE Publish, and Publish stays last: a
+      # failure anywhere above it leaves no release behind, so the job can be
+      # re-run as it is. A release created first and attested after could not
+      # be -- `gh release create` refuses a tag that already has a release.
+      #
+      # Syft unpacks the tarball and catalogues what it holds -- pnpm-lock.yaml
+      # above all, since node_modules is not shipped -- so this lists the
+      # packages the updater's `pnpm install --frozen-lockfile` installs.
+      #
+      # Third-party actions are pinned by commit, as trivy-action is in
+      # security.yml: this job holds a token that can write releases.
+      - name: SBOM for the tarball
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          file: syntra-${{ steps.meta.outputs.version }}.tar.gz
+          format: spdx-json
+          output-file: syntra-${{ steps.meta.outputs.version }}.spdx.json
+          # Published below with the release, by this workflow.
+          upload-artifact: false
+          upload-release-assets: false
+
+      # Verified with `gh attestation verify syntra-X.Y.Z.tar.gz --repo
+      # ssan9876/syntra`; see docs/operate.md, "Verifying a release".
+      - name: Attest the tarball's provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: syntra-${{ steps.meta.outputs.version }}.tar.gz
+
+      # actions/attest rather than actions/attest-sbom, which is deprecated in
+      # its favour and is now a wrapper around it.
+      - name: Attest the tarball's SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: syntra-${{ steps.meta.outputs.version }}.tar.gz
+          sbom-path: syntra-${{ steps.meta.outputs.version }}.spdx.json
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -320,10 +363,12 @@ jobs:
           # The tag's annotation is the notes. An empty one is allowed but
           # unhelpful, and shows as such in the console.
           git tag -l --format='%(contents)' "$TAG" > /tmp/notes.md
+          # The updater looks assets up by exact name, so the SBOM beside the
+          # tarball changes nothing it downloads.
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file /tmp/notes.md \
-            "$NAME.tar.gz" "$NAME.tar.gz.sha256"
+            "$NAME.tar.gz" "$NAME.tar.gz.sha256" "$NAME.spdx.json"
 
   # ---------------------------------------------------------------------------
   # Container images, for `docker compose up` adopters -- see docker-compose.yml.
@@ -349,9 +394,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: read
-      packages: write
-      id-token: write
+      contents: write      # attach the image SBOMs to the release `build` created
+      packages: write      # push to GHCR, and push attestations beside the images
+      id-token: write      # Sigstore signing certificate for the attestations
+      attestations: write  # store the attestations against this repository
     steps:
       - uses: actions/checkout@v7
         with:
@@ -404,7 +450,12 @@ jobs:
             echo "::notice::$REF_NAME is a pre-release tag; not moving :latest"
           fi
 
+      # `id` on both builds: their `digest` output is what the SBOMs and the
+      # attestations below name. A tag can be moved; a digest cannot, and
+      # `gh attestation verify oci://…:X.Y.Z` resolves the tag to this same
+      # digest before it looks anything up.
       - name: Build and push api
+        id: api
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -421,6 +472,7 @@ jobs:
           sbom: true
 
       - name: Build and push web
+        id: web
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -434,3 +486,194 @@ jobs:
           cache-to: type=gha,mode=max,scope=syntra-web
           provenance: mode=max
           sbom: true
+
+      # The `provenance`/`sbom` above are BuildKit's own, stored inside each
+      # image index and unsigned. What follows is signed with Sigstore and
+      # checkable with `gh attestation verify`, and the SBOMs are also
+      # attached to the release as files. Scanned by digest from the
+      # registry, so the SBOM describes what was pushed.
+      - name: SBOM for the api image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ghcr.io/ssan9876/syntra-api@${{ steps.api.outputs.digest }}
+          format: spdx-json
+          output-file: syntra-api-${{ steps.meta.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: SBOM for the web image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ghcr.io/ssan9876/syntra-web@${{ steps.web.outputs.digest }}
+          format: spdx-json
+          output-file: syntra-web-${{ steps.meta.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # push-to-registry stores each attestation in GHCR as well, beside the
+      # image it describes, so it travels with the image when it is mirrored.
+      - name: Attest the api image's provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/ssan9876/syntra-api
+          subject-digest: ${{ steps.api.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the web image's provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/ssan9876/syntra-web
+          subject-digest: ${{ steps.web.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the api image's SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/ssan9876/syntra-api
+          subject-digest: ${{ steps.api.outputs.digest }}
+          sbom-path: syntra-api-${{ steps.meta.outputs.version }}.spdx.json
+          push-to-registry: true
+
+      - name: Attest the web image's SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/ssan9876/syntra-web
+          subject-digest: ${{ steps.web.outputs.digest }}
+          sbom-path: syntra-web-${{ steps.meta.outputs.version }}.spdx.json
+          push-to-registry: true
+
+      # `--clobber` so a re-run of this job replaces the files rather than
+      # failing on them.
+      - name: Attach the image SBOMs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            "syntra-api-$VERSION.spdx.json" "syntra-web-$VERSION.spdx.json"
+
+  # ---------------------------------------------------------------------------
+  # The Helm chart, to oci://ghcr.io/ssan9876/charts/syntra, with version AND
+  # appVersion set to the release. An empty `api.image.tag` / `web.image.tag`
+  # falls back to appVersion, so chart X.Y.Z installs images X.Y.Z -- which
+  # is why this waits for `image`: a chart pushed first would point at
+  # images that do not exist yet.
+  #
+  # Pre-release tags publish a pre-release chart version (2.0.0-rc1), which
+  # `helm install` without `--version` skips unless given `--devel` -- the
+  # same rule as `:latest` above, applied by Helm.
+  # ---------------------------------------------------------------------------
+  chart:
+    needs: [guard, prior-ci, verify, build, image]
+    if: >-
+      always()
+      && needs.guard.result == 'success'
+      && needs.prior-ci.result == 'success'
+      && (needs.verify.result == 'success'
+          || (needs.verify.result == 'skipped' && needs.prior-ci.outputs.passed == 'true'))
+      && needs.build.result == 'success'
+      && needs.image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write      # helm push, oras push
+      id-token: write      # Sigstore signing certificate for the attestation
+      attestations: write  # store the attestation against this repository
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+
+      # The same Helm ci.yml lints and renders the chart with.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.2
+
+      - uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+        with:
+          version: 1.3.1
+
+      # For oras, which reads Docker's credential store. Helm keeps its own,
+      # so it logs in separately below.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Work out the chart version
+        # Through env, as everywhere else in this file.
+        id: meta
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # OCI tags cannot hold `+`; `helm push` writes it as `_`.
+          echo "oci_tag=${VERSION//+/_}" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/chart"
+          # `helm package` refuses a version that is not semver ("Invalid
+          # Semantic Version"), so a tag like `vnext` stops here, before
+          # anything is pushed. `v2026.8` is accepted.
+          helm package deploy/helm/syntra \
+            --version "$VERSION" --app-version "$VERSION" \
+            --destination "$RUNNER_TEMP/chart"
+          # The packaged chart, not the directory: what is pushed is what
+          # was linted.
+          helm lint --strict "$RUNNER_TEMP/chart/syntra-$VERSION.tgz" \
+            -f deploy/helm/syntra/ci/minimal-values.yaml
+
+      - name: Push
+        id: push
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          OCI_TAG: ${{ steps.meta.outputs.oci_tag }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push "$RUNNER_TEMP/chart/syntra-$VERSION.tgz" oci://ghcr.io/ssan9876/charts
+          # The digest from the registry itself, not parsed out of helm's
+          # human-readable output.
+          DIGEST=$(oras manifest fetch --descriptor \
+            "ghcr.io/ssan9876/charts/syntra:$OCI_TAG" | jq -r .digest)
+          case "$DIGEST" in
+            sha256:*) : ;;
+            *) echo "No digest for ghcr.io/ssan9876/charts/syntra:$OCI_TAG: '$DIGEST'" >&2; exit 1 ;;
+          esac
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Pushed ghcr.io/ssan9876/charts/syntra:$OCI_TAG@$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+
+      # Checked with `gh attestation verify oci://ghcr.io/ssan9876/charts/
+      # syntra:X.Y.Z --repo ssan9876/syntra`. Stored with GitHub only, not
+      # pushed beside the chart: Helm does not read OCI referrers, and the
+      # registry copy is for images that get mirrored.
+      - name: Attest the chart's provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/ssan9876/charts/syntra
+          subject-digest: ${{ steps.push.outputs.digest }}
+
+      # Artifact Hub reads repository metadata from the `artifacthub.io` tag
+      # of the chart's own OCI repository. Pushed with every release, so an
+      # edit to the file reaches Artifact Hub with the next tag.
+      - name: Push Artifact Hub metadata
+        working-directory: deploy/helm
+        run: |
+          set -euo pipefail
+          oras push ghcr.io/ssan9876/charts/syntra:artifacthub.io \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
