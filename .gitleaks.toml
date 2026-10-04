@@ -1,0 +1,20 @@
+# Secret scan configuration, read by the gitleaks CLI in .github/workflows/security.yml.
+
+[extend]
+useDefault = true
+
+# These files hold fake credentials as test fixtures: unsigned JWTs, a truncated
+# SSH key header, placeholder passwords and tokens, and correlation keys that the
+# generic rule mistakes for API keys. Listed by exact path, not by pattern, so a
+# real secret added to any other test file is still reported.
+[allowlist]
+description = "Test fixtures with fake credentials"
+paths = [
+  '''^apps/web/src/pages/Setup\.test\.tsx$''',
+  '''^docs/superpowers/plans/2026-08-16-syntra-provision\.md$''',
+  '''^ops/syntra-backup\.test\.sh$''',
+  '''^packages/connectors/src/observability/redact\.test\.ts$''',
+  '''^packages/connectors/src/person/sftp/connector\.test\.ts$''',
+  '''^packages/core/src/exports/support-bundle\.test\.ts$''',
+  '''^packages/core/src/provision/names\.test\.ts$''',
+]
