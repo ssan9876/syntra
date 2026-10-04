@@ -234,6 +234,21 @@ describe('createFromCatalog', () => {
     expect(config.sloBinding).toBe('HTTP-Redirect');
   });
 
+  it("sends Snipe-IT's username as the business email, the name its connector gives accounts", async () => {
+    // Snipe-IT matches on the `username` attribute when its SAML username
+    // setting names it. The connector's account name is the business email,
+    // so a login here finds no account.
+    const created = await withTenant(tenantId, (tx) =>
+      createFromCatalog(tx, { key: 'snipe-it', variables: { host: 'assets.acme.test' } }),
+    );
+    const username = await withTenant(tenantId, (tx) =>
+      tx.claimMapping.findFirstOrThrow({
+        where: { applicationId: created.applicationId, claimName: 'username' },
+      }),
+    );
+    expect(username).toMatchObject({ sourceKind: 'person', sourceField: 'businessEmail' });
+  });
+
   it('gives a second instance of one application its own slug', async () => {
     await withTenant(tenantId, (tx) =>
       createFromCatalog(tx, { key: 'snipe-it', variables: { host: 'assets.acme.test' } }),

@@ -1283,6 +1283,14 @@ assertion's NameID, which is the person's email address, against `username`,
 and any other template gives accounts nobody can sign in to by SSO. Without
 SSO, `%person.givenName.initial%%person.familyName%` works too.
 
+When Snipe-IT's **SAML username attribute** setting names an attribute (the
+catalog entry's is `username`), Snipe-IT matches that attribute instead of the
+NameID. The catalog entry sends `username` as the person's business email, the
+same value as the account name. An application created from the catalog before
+this sent the Syntra login there, and every provisioned user was returned to
+Snipe-IT's login form: change the application's `username` claim to
+**Person → Business email**.
+
 The document's `naming` block (`"allow": "email"`, `"maxLength": 191`) is what
 permits that: the key is lowercased, accents folded, and letters, digits,
 `.`, `-`, `_`, `+` and one `@` kept; a collision is suffixed before the `@`

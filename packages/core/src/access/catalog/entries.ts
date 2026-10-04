@@ -388,8 +388,19 @@ export const CATALOG_ENTRIES: CatalogEntry[] = [
       sloUrl: 'https://{{host}}/saml/sls',
       // Snipe-IT's metadata publishes /saml/sls as HTTP-Redirect only.
       sloBinding: 'HTTP-Redirect',
+      // `username` is the business email, the same value the shipped Snipe-IT
+      // connector names accounts by. Snipe-IT matches a sign-in on this
+      // attribute instead of the NameID whenever its "SAML username
+      // attribute" setting names it, so the Syntra login here meant `jdoe`
+      // looking for an account called `jdoe@acme.test`: every provisioned
+      // user was sent back to Snipe-IT's login form.
       claims: [
-        { claimName: 'username', nameFormat: BASIC, sourceKind: 'user', sourceField: 'login' },
+        {
+          claimName: 'username',
+          nameFormat: BASIC,
+          sourceKind: 'person',
+          sourceField: 'businessEmail',
+        },
         { claimName: 'email', nameFormat: BASIC, sourceKind: 'user', sourceField: 'email' },
         {
           claimName: 'firstname',
