@@ -160,6 +160,7 @@ export const KNOWN_MIGRATIONS: readonly string[] = [
   '20261116000000_target_sync_password',
   '20261117000000_catalog_templates',
   '20261118000000_target_person_exclusions',
+  '20261119000000_restore_hold',
 ];
 
 /**

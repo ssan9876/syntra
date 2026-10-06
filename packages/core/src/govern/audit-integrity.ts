@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { withTenant, type TenantClient } from '@syntra/db';
 import { GENESIS_HASH, auditEventHash, recordEvent } from '../audit/audit-service.js';
@@ -496,8 +496,26 @@ export function fileAnchorSink(directory: string): AnchorSink {
         null,
         2,
       );
-      writeFileSync(join(directory, name), body, { flag: 'wx' });
-      return name;
+      try {
+        writeFileSync(join(directory, name), body, { flag: 'wx' });
+        return name;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      // An anchor for this sequence already exists. The same checkpoint
+      // delivered twice is done. A different hash at the same sequence is a
+      // chain that was rewound by a restore: the old file is evidence of the
+      // history before it and is never overwritten, so the new one is written
+      // beside it, named by its hash.
+      if (readFileSync(join(directory, name), 'utf8') === body) return name;
+      const rewound = `anchor-${payload.tenantId}-${payload.sequence}-${payload.hash.slice(0, 16)}.json`;
+      try {
+        writeFileSync(join(directory, rewound), body, { flag: 'wx' });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        if (readFileSync(join(directory, rewound), 'utf8') !== body) throw err;
+      }
+      return rewound;
     },
   };
 }

@@ -42,6 +42,11 @@ SERVICE="${SYNTRA_SERVICE:-syntra}"
 PG_CONTAINER="${SYNTRA_PG_CONTAINER:-}"
 PG_ROLE="${SYNTRA_PG_ROLE:-}"
 PG_DB="${SYNTRA_PG_DB:-}"
+# The role the API connects as. It owns the schema after a restore, exactly as
+# infra/initdb/01-app-role.sh sets it up; from DATABASE_URL.
+APP_ROLE="${SYNTRA_PG_APP_ROLE:-}"
+DB_URL=""
+SHADOW_URL=""
 MASTER_KEY="${SYNTRA_MASTER_KEY:-}"
 # MASTER_KEY_PROVIDER, and the reference to the external key when it is not
 # local. See external_key_reference.
@@ -193,6 +198,47 @@ empty_restore_reason() {
   return 0
 }
 
+# Is $1 strictly newer than $2? `sort -V`, so 1.10.0 beats 1.9.0. Copied from
+# syntra-update for the same reason env_value is.
+version_newer() {
+  [ "$1" != "$2" ] && [ "$(printf '%s
+%s
+' "$1" "$2" | sort -V | tail -1)" = "$1" ]
+}
+
+# Whether a backup taken on version $1 can be restored under version $2:
+# `ok`, `unknown`, or `newer`.
+#
+# NEWER IS REFUSED. Its schema has migrations this release has never heard of,
+# and the code would run against tables it does not understand. Older is fine:
+# the migrations run after the restore bring it up to date.
+#
+# UNKNOWN IS ALLOWED, with a warning. Manifests written before RELEASE.json was
+# read carry "unknown", and refusing every one of those would refuse most
+# existing backups.
+restore_version_verdict() {
+  local backup="$1" running="$2"
+  case "$backup" in ''|unknown|null) printf unknown; return ;; esac
+  case "$running" in ''|unknown) printf unknown; return ;; esac
+  if version_newer "$backup" "$running"; then printf newer; else printf ok; fi
+}
+
+# A SQL string literal for $1, or NULL when it is empty, `unknown` or `null`.
+sql_literal_or_null() {
+  case "$1" in
+    ''|unknown|null) printf 'NULL' ;;
+    *) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")" ;;
+  esac
+}
+
+# The statement that puts a restore on hold: backup name $1, taken at $2, by
+# version $3. The API starts no background work and refuses writes to target
+# systems until an administrator resumes it from the console.
+restore_hold_sql() {
+  printf 'INSERT INTO "RestoreHold" ("id", "backupName", "backupTakenAt", "backupVersion") VALUES (gen_random_uuid(), %s, %s, %s);
+'     "$(sql_literal_or_null "$1")"     "$(sql_literal_or_null "$2")"     "$(sql_literal_or_null "$3")"
+}
+
 # ---------------------------------------------------------------------------
 # Everything below this line talks to Docker, PostgreSQL or systemd, and is
 # exercised by ops/syntra-backup.test.sh only through the functions above.
@@ -201,6 +247,10 @@ empty_restore_reason() {
 resolve_environment() {
   local url
   url="${SYNTRA_DATABASE_URL:-$(env_value DATABASE_URL "$SHARED/.env")}"
+  DB_URL="$url"
+  # Optional; see the same line in syntra-update for why there is no fallback.
+  SHADOW_URL="${SYNTRA_SHADOW_DATABASE_URL:-$(env_value SHADOW_DATABASE_URL "$SHARED/.env")}"
+  [ -n "$APP_ROLE" ] || { [ -n "$url" ] && APP_ROLE=$(pg_url_field user "$url"); } || APP_ROLE=""
 
   [ -n "$PG_DB" ] || {
     [ -n "$url" ] || die "no DATABASE_URL in $SHARED/.env, so there is nothing to back up"
@@ -607,6 +657,19 @@ cmd_restore() {
     log "WARNING: restoring under a different MASTER_KEY; stored secrets will be unreadable"
   fi
 
+  local backup_version running taken
+  backup_version=$(manifest_field version "$dir/manifest.json")
+  running=$(running_version)
+  taken=$(manifest_field createdAt "$dir/manifest.json")
+  case "$(restore_version_verdict "$backup_version" "$running")" in
+    newer)
+      die "$name was taken on $backup_version and this install runs $running. Update to $backup_version or later, then restore." ;;
+    unknown)
+      log "WARNING: the version of $name or of this install is unknown; migrations run after the restore" ;;
+  esac
+
+  [ -n "$APP_ROLE" ] || die "DATABASE_URL names no role, so the restored schema would have no owner"
+
   # No prompt. A confirmation prompt inside a script is a prompt answered by a
   # stray newline, and this is not recoverable.
   [ "$yes" = yes ] || die "refusing to restore $name without --yes; this replaces the live database"
@@ -622,9 +685,26 @@ cmd_restore() {
   log "restoring $name into $PG_DB"
   # `|| die`, not left to `set -e`: a failure here used to end the script
   # with the service stopped and no line saying why.
-  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<'SQL' || die "the schema could not be dropped before restoring; nothing was restored and $SERVICE is still stopped"
-DROP SCHEMA IF EXISTS public CASCADE;
+  #
+  # Every non-system schema, not just `public`: pg-boss keeps its queue in a
+  # schema of its own. And the application role owns the new `public`, as
+  # infra/initdb/01-app-role.sh sets it up -- a schema owned by the restoring
+  # superuser leaves FORCE ROW LEVEL SECURITY binding a different owner from
+  # the one that was tested.
+  docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1 <<SQL || die "the schema could not be dropped before restoring; nothing was restored and $SERVICE is still stopped"
+DO \$\$
+DECLARE s text;
+BEGIN
+  FOR s IN
+    SELECT nspname FROM pg_namespace
+     WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', s);
+  END LOOP;
+END \$\$;
 CREATE SCHEMA public;
+ALTER SCHEMA public OWNER TO "$APP_ROLE";
+GRANT ALL ON SCHEMA public TO "$APP_ROLE";
 SQL
 
   # pg_restore's status is not the test -- see cmd_verify. What arrived is,
@@ -645,9 +725,21 @@ SQL
   reason=$(empty_restore_reason "${counts%% *}" "${counts##* }") \
     || die "$name restored $reason into $PG_DB -- the database is EMPTY and $SERVICE is still stopped; restore $dir/database.dump by hand"
 
+  # MIGRATIONS, in the running release. An older backup's schema is behind
+  # this code, and the hold below needs a table the backup may predate.
+  log "applying migrations"
+  [ -d "$ROOT/current" ]     || die "restored $name, but $ROOT/current does not exist to migrate from; $SERVICE is still stopped"
+  ( cd "$ROOT/current" && env DATABASE_URL="$DB_URL" ${SHADOW_URL:+"SHADOW_DATABASE_URL=$SHADOW_URL"}       pnpm --filter @syntra/db exec prisma migrate deploy ) >/dev/null     || die "restored $name, but migrations failed; $SERVICE is still stopped. Run: cd $ROOT/current && pnpm --filter @syntra/db exec prisma migrate deploy"
+
+  # THE HOLD, before the service starts. Without it the scheduler would pick up
+  # the backup's approved runs and queued jobs on the first tick, before
+  # anybody had looked at what came back. Started unheld is worse than not
+  # started, so a failure here leaves the service stopped.
+  restore_hold_sql "$name" "$taken" "$backup_version"     | docker exec -i "$PG_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$PG_ROLE" -d "$PG_DB" >/dev/null 2>&1     || die "restored $name, but the restore hold could not be written; $SERVICE is still stopped"
+
   log "starting $SERVICE"
   systemctl start "$SERVICE" || die "restored, but $SERVICE did not start"
-  log "restored $name"
+  log "restored $name. Background work and writes to target systems are paused; resume them in the console."
 }
 
 usage() {

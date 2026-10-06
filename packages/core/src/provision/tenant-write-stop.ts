@@ -1,6 +1,7 @@
 import { withTenant, type TenantClient } from '@syntra/db';
 import { recordEvent } from '../audit/audit-service.js';
 import { ExternalWritesPausedError, externalWriteStopActive } from './target-write-stop.js';
+import { activeRestoreHold, restoreHoldReason } from '../deployment/restore-hold.js';
 
 /**
  * The tenant-wide external-write circuit breaker.
@@ -66,6 +67,12 @@ export async function assertExternalWritesAllowed(
   },
   now: Date = new Date(),
 ): Promise<void> {
+  // A restore not yet resumed holds every target in every tenant. Checked
+  // first: it is the widest stop, and the one an operator is least expecting.
+  const hold = await activeRestoreHold(tx);
+  if (hold) {
+    throw new ExternalWritesPausedError(target.id, restoreHoldReason(hold), null, 'installation');
+  }
   const tenantStop = await tx.tenantExternalWriteStop.findFirst();
   if (tenantStop && tenantWriteStopActive(tenantStop, now)) {
     throw new ExternalWritesPausedError(

@@ -8,8 +8,18 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+### Added
+- After `syntra-backup restore`, the installation starts on hold: sign-in and the console work, but scheduled runs, queued jobs and writes to target systems wait until somebody with `deployment.manage` selects **Resume** on the console banner. Recorded as `deployment.restore_resumed`. `ops/restore-hold.sql` does the same for Compose and Helm restores.
+- `syntra-backup restore` refuses a backup taken on a newer release, and migrates an older one before the service starts.
+
 ### Changed
 - Console on phones: fields are 16px so iOS no longer zooms on tap, count cards sit two per row, menu links are 44px tall, and side margins are 16px. Desktop layout is unchanged.
+
+### Fixed
+- `syntra-update` and `syntra-backup restore` failed at the migration step on installs without `SHADOW_DATABASE_URL`: "The shadow database you configured appears to be the same as the main database".
+- `syntra-backup restore` left the pg-boss schema from before the restore in place and created `public` owned by the superuser instead of the application role.
+- After a restore rewound the audit chain, writing a governance anchor for an already-anchored sequence failed every time. The new anchor is written beside the old one, named by its hash.
+- The Helm backup CronJob recorded a `null` key fingerprint on Vault Transit and AWS KMS deployments.
 
 ## [1.20.0] - 2026-10-04
 

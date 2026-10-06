@@ -412,16 +412,28 @@ which also deletes its data.
 
 ## Backups
 
-Two things to keep, and either one alone is not enough:
+What to keep. The first two are essential, and either one alone is not enough:
 
 - **The database.** It is the whole state of the deployment — tenants,
   persons, contracts, policy, the audit log, every application's
   configuration.
-- **`MASTER_KEY`.** It encrypts every stored credential and signs SAML. A
-  restored database with a lost `MASTER_KEY` means every stored secret is
-  unreadable and every SAML integration has to be reconfigured. It is not
-  stored in the database, so it does not come back with a database restore —
-  back it up separately, and never rotate it by hand.
+- **`MASTER_KEY`**, or access to the Vault Transit or AWS KMS key when
+  `MASTER_KEY_PROVIDER` names one. It encrypts every stored credential and
+  signs SAML. A restored database with a lost `MASTER_KEY` means every stored
+  secret is unreadable and every SAML integration has to be reconfigured. It
+  is not stored in the database, so it does not come back with a database
+  restore — back it up separately, and never rotate it by hand.
+
+Keep these as well. None is in the database:
+
+| Setting | If it is lost |
+|---|---|
+| `SESSION_SECRET` | Every session ends and everybody signs in again. |
+| `GOVERN_CHECKPOINT_KEY` (and `GOVERN_CHECKPOINT_KEY_ID`) | Existing audit checkpoints cannot be verified against their signatures. |
+| The files in `GOVERN_ANCHOR_DIR` | The copy of each checkpoint kept outside the database is gone. Back them up apart from the database: they exist to disagree with it. |
+
+Keep secrets apart from the backups: a password manager or a secrets vault,
+not the same bucket or share as the dumps.
 
 `syntra-backup` takes care of the first and **detects** a mismatch in the
 second. It does not fix one: keeping the key is still yours.
@@ -501,6 +513,33 @@ That is the line to put in whatever already watches this host's journal for
 errors. It is journal-only on purpose: mail would need an MTA this host may not
 have and an address the unit cannot know, and a notification that silently
 fails to send is worse than one that was never promised.
+
+### After a restore: background work is paused
+
+A restore brings back the backup's approved runs, queued jobs and schedules.
+They must not write to Active Directory, Entra or anything else before
+somebody has checked what came back, so `syntra-backup restore` leaves the
+installation **on hold**:
+
+- Sign-in, SSO and the console work.
+- Scheduled runs, queued jobs, webhooks and other background work do not
+  start. The API logs `background work held: restored from <name>, not resumed`.
+- Every write to a target system is refused with
+  `external writes are paused for every target: restored from <name> and not resumed yet`.
+- Every console page shows **Background work paused after restore**.
+
+Reconcile (see the [runbook](#restoring-the-live-database)), then select
+**Resume** on that banner. It needs `deployment.manage`, is recorded as
+`deployment.restore_resumed` in your tenant's audit log, and applies to every
+tenant and every API replica within 15 seconds.
+
+`restore` also checks the version in the manifest:
+
+- **Older than the running release:** restored, then migrated forward before
+  the service starts.
+- **Newer:** refused. `syntra-20261005T020000Z was taken on 1.21.0 and this install runs 1.20.0. Update to 1.21.0 or later, then restore.`
+- **`unknown`** (manifests from before versions were recorded): restored with
+  a warning, and migrated.
 
 ### When a restore refuses
 
@@ -761,8 +800,15 @@ To restore from a CronJob backup:
 5. Run `pg_restore --no-owner -d "$BACKUP_DATABASE_URL" database.dump`.
 6. Check that rows arrived (`SELECT sum(n_live_tup) FROM pg_stat_user_tables`
    after `ANALYZE`).
-7. Run `helm upgrade` so the migration hook brings the schema forward, then
-   scale the API back up.
+7. Put the installation
+   [on hold](#after-a-restore-background-work-is-paused) from the same pod,
+   with the SQL in
+   [`ops/restore-hold.sql`](../ops/restore-hold.sql):
+   `psql -v ON_ERROR_STOP=1 -v backup_name=<name> -v app_role=syntra_app -d "$BACKUP_DATABASE_URL" -f restore-hold.sql`.
+8. Run `helm upgrade` so the migration hook brings the schema forward, then
+   scale the API back up. Do not restore a backup whose manifest `version` is
+   newer than the chart's image.
+9. Reconcile, then select **Resume** in the console.
 
 Rehearse this before you need it. `syntra-backup verify` shows the shape of
 a restore into a scratch database.
@@ -2835,24 +2881,20 @@ This replaces the live database and stops the service while it does.
    reach for `--accept-secret-loss` as a first response.
 4. **Tell people.** Sign-in and every SSO flow stop for the duration.
 5. **Restore:** `/opt/syntra/bin/syntra-backup restore <name> --yes`. It
-   re-checks the archive, compares fingerprints, stops `syntra`, drops and
-   recreates `public`, runs `pg_restore --clean --if-exists`, counts tables
-   and rows, and only then starts `syntra`. If nothing arrived it says so and
-   **leaves the service stopped**, with the dump untouched at
+   re-checks the archive, compares fingerprints, refuses a backup from a newer
+   release, stops `syntra`, drops every schema and recreates `public` owned by
+   the application role, runs `pg_restore --clean --if-exists`, counts tables
+   and rows, applies migrations, puts the installation
+   [on hold](#after-a-restore-background-work-is-paused), and only then starts
+   `syntra`. If any step fails it says which and **leaves the service
+   stopped**, with the dump untouched at
    `/opt/syntra/backups/<name>/database.dump`.
 6. **Wait for readiness:** every probe in `curl -s
    http://127.0.0.1:3000/health/ready` is `pass` or `skip`. `vault` failing
    means this host's key is not the one the backup was sealed under.
 7. **Reconcile** — the after-state queries and the product checks below.
-
-**A backup older than the running release** leaves the `migrations` probe
-reporting pending migrations; the service starts, and the first request that
-touches a missing column fails. Apply migrations
-([database migration](#runbook-database-migration)) or roll the code back to
-the version in `manifest.json`. Do not serve traffic on a half-matched schema.
-`syntra-backup restore` drops only `public`; if the pg-boss schema changed
-between the two releases, `DROP SCHEMA pgboss CASCADE` by hand before starting
-the service.
+   Nothing runs against a target system while you do.
+8. **Resume** from the banner in the console.
 
 **If `restore` left the service stopped** because nothing arrived, the live
 database is empty and the dump intact: restore it by hand with the
@@ -2886,9 +2928,14 @@ To run an API against it: a copy of `shared/.env` with `DATABASE_URL` naming
 `syntra_rehearsal`, `PORT=3999`, the **same** `MASTER_KEY`, a `PUBLIC_URL`
 nothing real resolves to, and `SMTP_URL` pointed at a sink so it cannot mail
 anybody (the rehearsal then shows the `mail_to_test_server` incident, which is
-the point). **Clear every target's schedule first** or the rehearsal runs real
-provisioning against real directories. The safest rehearsal starts the API
-and reads. Check readiness on 3999, reconcile, then stop the unit, `dropdb
+the point). **Put the rehearsal database on hold first**, or it runs real
+provisioning against real directories:
+
+```bash
+docker exec -i <PG_CONTAINER> psql -v ON_ERROR_STOP=1 -v backup_name=<name> -v app_role=syntra_app   -U <PG_ROLE> -d syntra_rehearsal < /opt/syntra/current/ops/restore-hold.sql
+```
+
+Never resume it. The safest rehearsal starts the API and reads. Check readiness on 3999, reconcile, then stop the unit, `dropdb
 syntra_rehearsal` and remove the copy. Write down the date, the backup, the
 `tables/rows` figure and any discrepancy: a rehearsal that was not written
 down did not happen.
@@ -2953,10 +3000,27 @@ head -c 5 syntra-<stamp>.dump | grep -q PGDMP && echo archive-ok
 docker compose exec -T postgres pg_restore -l < syntra-<stamp>.dump | grep -c 'TABLE DATA'
 ```
 
-Restore: `docker compose stop api web`, drop and recreate `public`,
-`pg_restore --clean --if-exists` through `docker compose exec -T postgres`,
-reconcile, `docker compose up -d`. The `api` container migrates on start, so a
-dump older than the image is brought forward on the way up.
+Restore, from the directory holding `docker-compose.yml`:
+
+```bash
+docker compose stop api web
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U syntra -d syntra <<'SQL'
+DROP SCHEMA IF EXISTS public CASCADE;
+DROP SCHEMA IF EXISTS pgboss CASCADE;
+CREATE SCHEMA public;
+ALTER SCHEMA public OWNER TO syntra_app;
+GRANT ALL ON SCHEMA public TO syntra_app;
+SQL
+docker compose exec -T postgres pg_restore -U syntra -d syntra --clean --if-exists < syntra-<stamp>.dump
+docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -v backup_name=syntra-<stamp> -v app_role=syntra_app   -U syntra -d syntra < ops/restore-hold.sql
+docker compose up -d
+```
+
+The last `psql` puts the installation
+[on hold](#after-a-restore-background-work-is-paused). The `api` container
+migrates on start, so a dump older than the image is brought forward on the
+way up; a dump from a newer image must not be restored into an older one.
+Reconcile, then select **Resume** in the console.
 
 **Helm.** Managed-Postgres point-in-time recovery, or the chart's backup
 CronJob, restored as described under

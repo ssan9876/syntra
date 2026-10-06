@@ -324,9 +324,11 @@ export PUBLIC_URL=https://$SYNTRA_DOMAIN
 docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
-Either way, keep `MASTER_KEY` and the `syntra-data` volume in your backups:
-the first encrypts every stored credential, the second is the database. See
-[Operating Syntra](operate.md#backups) for what that means in practice.
+Either way, back up `MASTER_KEY` and the database. `MASTER_KEY` encrypts
+every stored credential; keep it in a password manager, apart from the
+backups. Back up the database as a `pg_dump`, not as a copy of the
+`syntra-data` volume: a copy taken while Postgres is running can be
+inconsistent. See [Operating Syntra](operate.md#backups) for the commands.
 
 ## Kubernetes
 

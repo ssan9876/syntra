@@ -69,8 +69,17 @@ data:
       || die "the dump contains no table data -- was it taken as a role that bypasses row-level security?"
     bytes=$(wc -c < "$PARTIAL/database.dump" | tr -d ' ')
 
-    if [ -n "${MASTER_KEY:-}" ]; then
-      fp="\"$(printf '%s%s' "$SALT" "$MASTER_KEY" | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')\""
+    # What decides whether this dump's secrets can be unsealed: the external
+    # key when MASTER_KEY_PROVIDER names one, MASTER_KEY otherwise. The same
+    # reference strings as `external_key_reference` in ops/syntra-backup, so
+    # a fingerprint taken here matches one taken on a host.
+    case "${MASTER_KEY_PROVIDER:-local}" in
+      vault-transit) keyref="vault-transit:${VAULT_ADDR:-}:${VAULT_TRANSIT_MOUNT:-transit}:${VAULT_TRANSIT_KEY:-}" ;;
+      aws-kms) keyref="aws-kms:${AWS_KMS_KEY_ID:-}" ;;
+      *) keyref="${MASTER_KEY:-}" ;;
+    esac
+    if [ -n "$keyref" ]; then
+      fp="\"$(printf '%s%s' "$SALT" "$keyref" | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')\""
     else
       fp=null
     fi
@@ -147,6 +156,16 @@ spec:
                 {{- include "syntra.secretEnv" (dict "name" "SYNTRA_BACKUP_DATABASE_URL" "secret" $secret "key" .Values.backup.databaseUrlKey) | nindent 16 }}
                 # Only fingerprinted (salted SHA-256), never written out.
                 {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey "optional" true) | nindent 16 }}
+                {{- with .Values.api.env }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              # The API's own extra sources, where MASTER_KEY_PROVIDER and the
+              # Vault or KMS key reference live on a deployment that keeps the
+              # master key out of the cluster.
+              {{- with .Values.api.envFrom }}
+              envFrom:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
               resources:
                 {{- toYaml .Values.backup.resources | nindent 16 }}
               volumeMounts:

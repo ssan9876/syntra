@@ -17,12 +17,14 @@ export class ExternalWritesPausedError extends Error {
     readonly targetSystemId: string,
     readonly reason: string,
     readonly expiresAt: Date | null,
-    readonly scope: 'target' | 'tenant' = 'target',
+    readonly scope: 'target' | 'tenant' | 'installation' = 'target',
   ) {
     super(
-      scope === 'tenant'
-        ? `external writes are paused for every target in this tenant: ${reason}`
-        : `external writes are paused for target ${targetSystemId}: ${reason}`,
+      scope === 'installation'
+        ? `external writes are paused for every target: ${reason}`
+        : scope === 'tenant'
+          ? `external writes are paused for every target in this tenant: ${reason}`
+          : `external writes are paused for target ${targetSystemId}: ${reason}`,
     );
     this.name = 'ExternalWritesPausedError';
   }

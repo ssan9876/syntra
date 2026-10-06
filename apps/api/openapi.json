@@ -23333,6 +23333,98 @@
         }
       }
     },
+    "/api/admin/restore-hold": {
+      "get": {
+        "operationId": "getRestoreHold",
+        "tags": [
+          "Deployment updates"
+        ],
+        "summary": "Read whether a restore is waiting to be resumed",
+        "description": "`hold` is null when nothing is held. `mayResume` says whether the caller holds `deployment.manage`.\n\nRequires an administrative session; no further permission.",
+        "x-syntra-permission": [],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/restore-hold/resume": {
+      "post": {
+        "operationId": "postRestoreHoldResume",
+        "tags": [
+          "Deployment updates"
+        ],
+        "summary": "Resume background work and writes to target systems after a restore",
+        "description": "Releases every unreleased hold. Background work starts on each API process within 15 seconds. Refused with `409 not-held` when nothing is held.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/roles": {
       "get": {
         "operationId": "getRoles",

@@ -5534,3 +5534,28 @@ model EmailDomain {
 
   @@unique([tenantId, domain])
 }
+
+/// A restore that has not been released yet. Installation-wide.
+///
+/// Written by the restore tool after a backup is put back. While a row has no
+/// `releasedAt`, the API starts no background work and refuses writes to
+/// target systems, so the restored data can be checked before anything acts
+/// on it. Released from the console by a `deployment.manage` holder; who
+/// released it is in that tenant's audit log, not here.
+///
+/// Not tenant-scoped and without row-level security, like RateLimitBucket: a
+/// restore replaces every tenant at once, and the API reads this before it
+/// knows of any tenant.
+model RestoreHold {
+  id            String    @id @default(uuid()) @db.Uuid
+  /// The backup's name, e.g. `syntra-20261005T020000Z`.
+  backupName    String
+  /// When the backup was taken, from its manifest. Null when unknown.
+  backupTakenAt DateTime?
+  /// The Syntra version that took it, from its manifest.
+  backupVersion String?
+  restoredAt    DateTime  @default(now())
+  releasedAt    DateTime?
+
+  @@index([releasedAt])
+}

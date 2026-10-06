@@ -85,8 +85,8 @@ Or keep the master key out of the cluster altogether: with
 AWS credentials), put the provider variables in a Secret or ConfigMap named
 in `api.envFrom`, and `MASTER_KEY` in `existingSecret` may be empty. See
 [Key management](../../../docs/configure.md#key-management). The backup
-CronJob still fingerprints `MASTER_KEY` only (`null` once it is empty),
-unlike `syntra-backup`, which fingerprints the external key reference.
+CronJob reads the same `api.env` and `api.envFrom`, and fingerprints the
+Vault or KMS key reference the way `syntra-backup` does.
 
 `ci/full-values.yaml` is a worked production example with every option
 turned on. `ci/minimal-values.yaml` shows the least an install needs.
