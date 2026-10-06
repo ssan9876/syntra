@@ -24,163 +24,112 @@ spec:
       storage: {{ .Values.backup.persistence.size }}
 ---
 {{- end }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ $fullname }}-backup
-  labels:
-    {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
-data:
-  # The Kubernetes counterpart of `ops/syntra-backup create`: same directory
-  # layout (syntra-<UTC stamp>/{database.dump,manifest.json}), same checks,
-  # same fingerprint salt -- so a backup taken here reads the same way to a
-  # person comparing it with one taken on a host.
-  backup.sh: |
-    #!/bin/sh
-    set -eu
-    umask 077
-    BACKUPS=/backups
-    KEEP="${SYNTRA_BACKUP_KEEP:-7}"
-    SALT='syntra-backup-fingerprint-v1'
-    log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-    die() { printf 'syntra-backup: %s\n' "$*" >&2; exit 1; }
-
-    name="syntra-$(date -u +%Y%m%dT%H%M%SZ)"
-    PARTIAL="$BACKUPS/$name.partial"
-    [ -e "$PARTIAL" ] && die "$PARTIAL already exists; is another backup running?"
-    mkdir -p "$PARTIAL"
-    # A diagnosed failure leaves a message, not litter. A killed pod leaves the
-    # .partial directory, which is never mistaken for a backup.
-    trap 'if [ -n "$PARTIAL" ]; then rm -rf "$PARTIAL"; fi' EXIT
-
-    db=$(psql -d "$SYNTRA_BACKUP_DATABASE_URL" -tAc 'SELECT current_database()') \
-      || die "cannot connect with the backup database URL"
-    log "dumping $db"
-    pg_dump -d "$SYNTRA_BACKUP_DATABASE_URL" -Fc -f "$PARTIAL/database.dump" \
-      || die "pg_dump failed -- can this role read every table?"
-
-    # Exists, is a custom-format archive, and CONTAINS ROWS. The last is the
-    # one that matters: every tenant table is FORCE ROW LEVEL SECURITY, so a
-    # dump taken as the application role is a perfect archive of nothing.
-    [ -s "$PARTIAL/database.dump" ] || die "the dump is empty"
-    head -c 5 "$PARTIAL/database.dump" | grep -q PGDMP || die "the dump is not a PostgreSQL archive"
-    sections=$(pg_restore -l "$PARTIAL/database.dump" | grep -c 'TABLE DATA' || true)
-    [ "${sections:-0}" -gt 0 ] \
-      || die "the dump contains no table data -- was it taken as a role that bypasses row-level security?"
-    bytes=$(wc -c < "$PARTIAL/database.dump" | tr -d ' ')
-
-    # What decides whether this dump's secrets can be unsealed: the external
-    # key when MASTER_KEY_PROVIDER names one, MASTER_KEY otherwise. The same
-    # reference strings as `external_key_reference` in ops/syntra-backup, so
-    # a fingerprint taken here matches one taken on a host.
-    case "${MASTER_KEY_PROVIDER:-local}" in
-      vault-transit) keyref="vault-transit:${VAULT_ADDR:-}:${VAULT_TRANSIT_MOUNT:-transit}:${VAULT_TRANSIT_KEY:-}" ;;
-      aws-kms) keyref="aws-kms:${AWS_KMS_KEY_ID:-}" ;;
-      *) keyref="${MASTER_KEY:-}" ;;
-    esac
-    if [ -n "$keyref" ]; then
-      fp="\"$(printf '%s%s' "$SALT" "$keyref" | sha256sum | cut -d' ' -f1 | sed 's/^/sha256:/')\""
-    else
-      fp=null
-    fi
-    cat > "$PARTIAL/manifest.json" <<JSON
-    {
-      "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "version": "${SYNTRA_VERSION:-unknown}",
-      "database": "$db",
-      "tableDataSections": $sections,
-      "bytes": $bytes,
-      "masterKeyFingerprint": $fp
-    }
-    JSON
-
-    # Nothing is a backup until this rename.
-    mv "$PARTIAL" "$BACKUPS/$name"
-    PARTIAL=''
-    log "wrote $name -- $bytes bytes, $sections table(s) of data"
-
-    ls -1 "$BACKUPS" | grep '^syntra-' | grep -v '\.partial$' | sort -r \
-      | tail -n +$((KEEP + 1)) | while read -r old; do
-        [ -n "$old" ] || continue
-        rm -rf "${BACKUPS:?}/$old"
-        log "pruned $old"
-      done
----
-apiVersion: batch/v1
-kind: CronJob
+# The backup agent (apps/api/src/backup-agent): restore points on a schedule,
+# and Back up now, download, upload and restore from Administration ->
+# Backups. It holds the role that bypasses row-level security and the backup
+# volume; the API reaches it through the Service below with a token derived
+# from SESSION_SECRET. One replica, replaced rather than rolled: two agents on
+# one volume would prune each other's backups.
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: {{ $fullname }}-backup
   labels:
     {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
-  timeZone: Etc/UTC
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
-  jobTemplate:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "backup") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 8 }}
     spec:
-      backoffLimit: 1
-      ttlSecondsAfterFinished: 604800
-      template:
-        metadata:
-          labels:
-            {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 12 }}
-        spec:
-          restartPolicy: Never
-          serviceAccountName: {{ include "syntra.serviceAccountName" . }}
-          automountServiceAccountToken: false
-          enableServiceLinks: false
+      serviceAccountName: {{ include "syntra.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # A restore in progress is not something to cut short.
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        {{- toYaml .Values.podSecurityContext.api | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: backup
+          image: {{ include "syntra.image" (dict "image" .Values.api.image "ctx" $) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          workingDir: /app/apps/api
+          command: ["node", "--import", "tsx", "src/backup-agent/main.ts"]
           securityContext:
-            # `postgres` in the alpine image; fsGroup makes the volume writable.
-            runAsNonRoot: true
-            runAsUser: 70
-            runAsGroup: 70
-            fsGroup: 70
-            seccompProfile: { type: RuntimeDefault }
-          {{- with .Values.imagePullSecrets }}
-          imagePullSecrets:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: agent
+              containerPort: 3100
+              protocol: TCP
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: HOME, value: /tmp }
+            - { name: BACKUP_DIR, value: /backups }
+            - { name: BACKUP_INTERVAL_HOURS, value: {{ .Values.backup.intervalHours | quote }} }
+            - { name: BACKUP_KEEP_HOURLY, value: {{ .Values.backup.retention.hourly | quote }} }
+            - { name: BACKUP_KEEP_DAILY, value: {{ .Values.backup.retention.daily | quote }} }
+            - { name: BACKUP_KEEP_WEEKLY, value: {{ .Values.backup.retention.weekly | quote }} }
+            - { name: BACKUP_KEEP_MANUAL, value: {{ .Values.backup.retention.manual | quote }} }
+            {{- with .Values.backup.copyCommand }}
+            - { name: BACKUP_COPY_COMMAND, value: {{ . | quote }} }
+            {{- end }}
+            {{- include "syntra.secretEnv" (dict "name" "SUPERUSER_DATABASE_URL" "secret" $secret "key" .Values.backup.databaseUrlKey) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}
+            # Only fingerprinted (salted SHA-256) into each manifest, never
+            # written out.
+            {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey "optional" true) | nindent 12 }}
+            {{- with .Values.api.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # The API's own extra sources, where MASTER_KEY_PROVIDER and the
+          # Vault or KMS key reference live on a deployment that keeps the
+          # master key out of the cluster.
+          {{- with .Values.api.envFrom }}
+          envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          containers:
-            - name: backup
-              image: "{{ .Values.backup.image.repository }}:{{ .Values.backup.image.tag }}"
-              imagePullPolicy: {{ .Values.backup.image.pullPolicy }}
-              command: ["/bin/sh", "/scripts/backup.sh"]
-              securityContext:
-                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
-              env:
-                - { name: HOME, value: /tmp }
-                - { name: SYNTRA_BACKUP_KEEP, value: {{ .Values.backup.keep | quote }} }
-                - { name: SYNTRA_VERSION, value: {{ default .Chart.AppVersion .Values.api.image.tag | quote }} }
-                {{- include "syntra.secretEnv" (dict "name" "SYNTRA_BACKUP_DATABASE_URL" "secret" $secret "key" .Values.backup.databaseUrlKey) | nindent 16 }}
-                # Only fingerprinted (salted SHA-256), never written out.
-                {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey "optional" true) | nindent 16 }}
-                {{- with .Values.api.env }}
-                {{- toYaml . | nindent 16 }}
-                {{- end }}
-              # The API's own extra sources, where MASTER_KEY_PROVIDER and the
-              # Vault or KMS key reference live on a deployment that keeps the
-              # master key out of the cluster.
-              {{- with .Values.api.envFrom }}
-              envFrom:
-                {{- toYaml . | nindent 16 }}
-              {{- end }}
-              resources:
-                {{- toYaml .Values.backup.resources | nindent 16 }}
-              volumeMounts:
-                - { name: backups, mountPath: /backups }
-                - { name: scripts, mountPath: /scripts, readOnly: true }
-                - { name: tmp, mountPath: /tmp }
-          volumes:
-            - name: backups
-              persistentVolumeClaim:
-                claimName: {{ $claim }}
-            - name: scripts
-              configMap:
-                name: {{ $fullname }}-backup
-                defaultMode: 0555
-            - name: tmp
-              emptyDir:
-                sizeLimit: 64Mi
+          readinessProbe:
+            tcpSocket: { port: agent }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: agent }
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.backup.resources | nindent 12 }}
+          volumeMounts:
+            - { name: backups, mountPath: /backups }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ $claim }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-backup
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "backup") | nindent 4 }}
+  ports:
+    - { name: agent, port: 3100, targetPort: agent, protocol: TCP }
 {{- end }}

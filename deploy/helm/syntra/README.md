@@ -246,34 +246,40 @@ destinations. To tighten it:
 
 ## Backups
 
-The container path has no backup mechanism of its own. `ops/syntra-backup`
-works through `docker exec` on a host. With `backup.enabled=true`, the chart
-adds a CronJob that uses the stock `postgres` image and **applies the same
-checks as `syntra-backup create`**, writing the same layout
-(`syntra-<UTC>/{database.dump,manifest.json}`) to a PersistentVolume:
+With `backup.enabled=true` the chart runs the backup agent: a one-replica
+Deployment from the api image, a ClusterIP Service on 3100 that only the API
+pods may reach (with `networkPolicy.enabled`), and a PersistentVolumeClaim.
+It provides **Administration → Backups**: restore points every
+`backup.intervalHours` (default 1), kept 48 hourly, 14 daily and 8 weekly
+(`backup.retention`), Back up now, download and upload as a
+passphrase-encrypted file, and restore. See
+[Backups from the console](../../../docs/operate.md#backups-from-the-console).
 
-- The dump is written to a `.partial` directory and only renamed into place
-  once every check passes. A killed pod never leaves something that looks
-  like a backup.
-- Files are created `0600` under `umask 077`.
-- The archive must start with `PGDMP` **and contain TABLE DATA**. Every tenant
-  table is `FORCE ROW LEVEL SECURITY`, so a dump taken as `syntra_app` would
-  be an empty archive. This was verified: `pg_dump` as `syntra_app` fails
-  with *"query would be affected by row-level security policy"*, and the job
-  exits non-zero.
-- The manifest records the salted SHA-256 fingerprint of `MASTER_KEY`, using
-  the same salt as `syntra-backup`, so a restore can tell whether the key
-  still matches.
-- The newest `backup.keep` backups are kept (default 7).
+It writes the layout `ops/syntra-backup` writes
+(`syntra-<UTC>/{database.dump,manifest.json}`), with the same checks: a
+`.partial` directory renamed into place only once the archive starts with
+`PGDMP` and contains TABLE DATA, `0600` files, and the salted fingerprint of
+`MASTER_KEY` or of the Vault/KMS key reference in the manifest.
 
 Put a role that bypasses RLS (a superuser, or a role with `BYPASSRLS`) in the
 Secret under `BACKUP_DATABASE_URL`. Use a **direct** connection, not a
-transaction pooler. The PVC is annotated `helm.sh/resource-policy: keep`.
-Use an encrypted StorageClass: every file is a full copy of every tenant's
-data. A PVC is **not off-site**. Copy it out with your own tooling (Velero,
-a snapshot schedule, or object-storage sync), or skip this CronJob and use
-your managed Postgres's PITR. docs/operate.md has the restore procedure and
-the HA Postgres guidance.
+transaction pooler: a restore locks the application role out and ends its
+connections. The PVC is annotated `helm.sh/resource-policy: keep`. Use an
+encrypted StorageClass: every file is a full copy of every tenant's data. A
+PVC is **not off-site**: set `backup.copyCommand` (with
+`networkPolicy.extraBackupEgress` for its destination), or copy it out with
+your own tooling.
+
+A restore keeps the API running. Every API pod restarts twice and comes back
+held until somebody selects **Resume**.
+
+## Upgrading from 1.20 or earlier
+
+- `backup.enabled` now runs the backup agent (a Deployment and a Service)
+  instead of a CronJob. The PVC and its backups are kept and read as they are.
+- Removed: `backup.schedule`, `backup.keep` and `backup.image`. Use
+  `backup.intervalHours` and `backup.retention`; the agent runs from
+  `api.image`.
 
 ## Upgrading from 0.2
 

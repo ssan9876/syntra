@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactValue } from '@syntra/connectors';
 import { buildInfo } from '@syntra/core';
@@ -32,12 +33,18 @@ const pg = pgTools(superTarget, { container: config.pgContainer });
 const store = backupStore(config.dir, pg);
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
-/** `prisma migrate deploy` as the application role, from this release. */
+/**
+ * `prisma migrate deploy` as the application role, from this release. The
+ * binary itself, as the Helm migration Job runs it: `pnpm` wants a writable
+ * home and store, and the chart's root filesystem is read-only.
+ */
 function migrate(): Promise<void> {
   const shadow = process.env['SHADOW_DATABASE_URL']?.trim();
+  const dbPackage = join(repoRoot, 'packages', 'db');
+  const prisma = join(dbPackage, 'node_modules', '.bin', process.platform === 'win32' ? 'prisma.cmd' : 'prisma');
   return new Promise((resolve, reject) => {
-    const child = spawn('pnpm', ['--filter', '@syntra/db', 'exec', 'prisma', 'migrate', 'deploy'], {
-      cwd: repoRoot,
+    const child = spawn(prisma, ['migrate', 'deploy'], {
+      cwd: dbPackage,
       env: { ...process.env, DATABASE_URL: config.databaseUrl, ...(shadow ? { SHADOW_DATABASE_URL: shadow } : {}) },
       stdio: ['ignore', 'ignore', 'pipe'],
       shell: process.platform === 'win32',

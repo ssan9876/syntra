@@ -383,6 +383,9 @@ networkPolicy:
 
   # Raw NetworkPolicyEgressRule objects appended to the API policy.
   extraApiEgress: []
+  # Egress for the backup agent beyond Postgres, e.g. the object store
+  # backup.copyCommand writes to.
+  extraBackupEgress: []
 
 # -----------------------------------------------------------------------------
 # Monitoring (Prometheus Operator CRDs). The scrape presents METRICS_TOKEN from
@@ -413,15 +416,21 @@ metrics:
 # -----------------------------------------------------------------------------
 backup:
   enabled: false
-  schedule: "15 2 * * *"
-  keep: 7
-  # Secret key holding the dump role's connection URL (direct, not pooled).
+  # Hours between restore points; 0 turns the schedule off (Back up now still
+  # works).
+  intervalHours: 1
+  retention:
+    hourly: 48
+    daily: 14
+    weekly: 8
+    # Back up now, uploads and the copy taken before each restore.
+    manual: 10
+  # Shell command run in the backup pod after each backup, its directory as $1.
+  copyCommand: ""
+  # Secret key holding the connection URL of a role that bypasses row-level
+  # security (direct, not pooled). The agent runs from the api image, which
+  # carries the PostgreSQL 16 client.
   databaseUrlKey: BACKUP_DATABASE_URL
-  image:
-    # Must match or exceed the server's major version.
-    repository: postgres
-    tag: 16-alpine
-    pullPolicy: IfNotPresent
   persistence:
     existingClaim: ""
     size: 20Gi
