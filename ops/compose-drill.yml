@@ -1,0 +1,13 @@
+# Added to docker-compose.yml by ops/compose-restore-drill.sh: an
+# S3-compatible bucket for the backup agent's off-site copies. Adobe S3Mock,
+# pinned: MinIO's images are no longer published to Docker Hub. It accepts
+# any credentials and serves path-style requests.
+services:
+  s3:
+    image: adobe/s3mock:4.7.0
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: syntra-drill
+  backup:
+    depends_on:
+      s3:
+        condition: service_started

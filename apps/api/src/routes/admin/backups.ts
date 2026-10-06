@@ -126,6 +126,18 @@ export async function registerAdminBackupRoutes(
     return reply.status(202).send({ job });
   });
 
+  app.post('/backups/:name/verify', guard, async (request, reply) => {
+    const { name } = nameParam.parse(request.params);
+    const job = await relay(() => agent().verify(name, request.session.userId));
+    await audit(request, 'deployment.backup_verify_requested', { backupName: name, jobId: job.id });
+    return reply.status(202).send({ job });
+  });
+
+  app.post('/backups/offsite/test', guard, async () => {
+    await relay(() => agent().testOffsite());
+    return { ok: true };
+  });
+
   app.get('/backups/jobs/:id', guard, async (request) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     return { job: await relay(() => agent().job(id)) };

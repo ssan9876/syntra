@@ -350,3 +350,40 @@ describe('security event counts', () => {
     expect(Number(match![1])).toBe(1);
   });
 });
+
+describe('the backup agent gauges', () => {
+  it('publishes when backups, restore tests and off-site copies last succeeded', async () => {
+    const { createServer } = await import('node:http');
+    const status = {
+      intervalHours: 1,
+      offsite: { bucket: 'b', endpoint: null, prefix: 'syntra/' },
+      health: {
+        lastBackupSuccessAt: '2026-10-06T02:00:00Z',
+        lastVerifySuccessAt: '2026-10-05T03:00:00Z',
+        lastCopySuccessAt: null,
+      },
+    };
+    const agent = createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(status)));
+    await new Promise<void>((resolve) => agent.listen(0, '127.0.0.1', () => resolve()));
+    try {
+      const port = (agent.address() as { port: number }).port;
+      ctx = await buildTestApp({ env: { METRICS_TOKEN: TOKEN, BACKUP_AGENT_URL: `http://127.0.0.1:${port}` } });
+      const body = (await scrape()).body;
+      expect(body).toMatch(/^syntra_backup_agent_up 1$/m);
+      expect(body).toMatch(/^syntra_backup_interval_seconds 3600$/m);
+      expect(body).toMatch(new RegExp(`^syntra_backup_last_success_timestamp_seconds ${Date.UTC(2026, 9, 6, 2) / 1000}$`, 'm'));
+      expect(body).toMatch(/^syntra_backup_last_restore_test_success_timestamp_seconds \d+$/m);
+      // No copy has succeeded: an absent series, not a zero that reads as 1970.
+      expect(body).not.toMatch(/^syntra_backup_offsite_last_success_timestamp_seconds/m);
+    } finally {
+      agent.close();
+    }
+  });
+
+  it('reports an agent that does not answer, and publishes no timestamps', async () => {
+    ctx = await buildTestApp({ env: { METRICS_TOKEN: TOKEN, BACKUP_AGENT_URL: 'http://127.0.0.1:9' } });
+    const body = (await scrape()).body;
+    expect(body).toMatch(/^syntra_backup_agent_up 0$/m);
+    expect(body).not.toMatch(/^syntra_backup_last_success_timestamp_seconds/m);
+  });
+});

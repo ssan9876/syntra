@@ -273,6 +273,12 @@ your own tooling.
 A restore keeps the API running. Every API pod restarts twice and comes back
 held until somebody selects **Resume**.
 
+A restore test runs every `backup.verifyEveryDays` (default 7). For off-site
+copies set `backup.offsite.bucket` (and `endpoint` for anything that is not
+AWS), and put `BACKUP_S3_PASSPHRASE` in the Secret; the access keys too,
+unless the pod has an IAM role. Allow the bucket in
+`networkPolicy.extraBackupEgress`.
+
 ## Upgrading from 1.20 or earlier
 
 - `backup.enabled` now runs the backup agent (a Deployment and a Service)

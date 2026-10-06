@@ -295,6 +295,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/restore-hold/resume', 'Resumes background work after a restore; installation-wide, no tenant data.'],
   ['POST /api/admin/backups', 'Takes a backup of the whole installation; takes no id.'],
   ['POST /api/admin/backups/upload', 'Receives a backup file of the whole installation; references no saved object.'],
+  ['POST /api/admin/backups/offsite/test', "Writes and deletes a test object in the installation's backup bucket; takes no id."],
   ['POST /api/admin/sources/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/connector-documents/validate', 'Checks an unsaved connector document against the schema; references no saved object.'],

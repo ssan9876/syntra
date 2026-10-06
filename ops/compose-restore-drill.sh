@@ -7,7 +7,7 @@
 #   ops/compose-restore-drill.sh <env-file> [project]
 #
 # The env file needs POSTGRES_PASSWORD, SYNTRA_APP_PASSWORD, SESSION_SECRET,
-# MASTER_KEY and PUBLIC_URL. The project (default syntra-drill) is brought up
+# MASTER_KEY and PUBLIC_URL; BACKUP_S3_* and the s3 service are added here. The project (default syntra-drill) is brought up
 # and left running; `docker compose -p <project> down -v` removes it.
 
 set -euo pipefail
@@ -16,7 +16,11 @@ export MSYS_NO_PATHCONV=1
 
 ENV_FILE="${1:?usage: compose-restore-drill.sh <env-file> [project]}"
 PROJECT="${2:-syntra-drill}"
-compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" "$@"; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Git Bash: a path Docker for Windows can open.
+command -v cygpath >/dev/null 2>&1 && HERE="$(cygpath -m "$HERE")"
+# The stack, plus an S3-compatible bucket for the off-site copy (ops/compose-drill.yml).
+compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" -f "$HERE/../docker-compose.yml" -f "$HERE/compose-drill.yml" "$@"; }
 log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() {
   printf 'drill failed: %s\n' "$*" >&2
@@ -61,6 +65,10 @@ wait_job() {
   die "job $id did not finish"
 }
 
+# The off-site bucket: ops/compose-drill.yml's S3Mock.
+DRILL_PASSPHRASE="drill-offsite-passphrase"
+export BACKUP_S3_BUCKET=syntra-drill BACKUP_S3_ENDPOINT=http://s3:9090 BACKUP_S3_PASSPHRASE="$DRILL_PASSPHRASE"   BACKUP_S3_ACCESS_KEY_ID=drill BACKUP_S3_SECRET_ACCESS_KEY=drill-secret
+
 log "starting $PROJECT"
 compose up -d --wait postgres api backup
 
@@ -78,6 +86,32 @@ done_job="$(wait_job "$job")"
 [ "$(printf '%s' "$done_job" | field 'JSON.parse(s).job.state')" = succeeded ] || die "backup: $done_job"
 name="$(printf '%s' "$done_job" | field 'JSON.parse(s).job.backupName')"
 log "took $name"
+
+log "checking the off-site copy"
+status="$(agent GET /v1/status)"
+[ "$(printf '%s' "$status" | field 'JSON.parse(s).health.lastCopy.ok')" = true ]   || die "off-site copy failed: $(printf '%s' "$status" | field 'JSON.stringify(JSON.parse(s).health.lastCopy)')"
+# Fetched back from the bucket and decrypted with the passphrase, in the
+# agent's own container: an upload that happened is not a file that opens.
+opened="$(compose exec -T -e NAME="$name" -e PASSPHRASE="$DRILL_PASSPHRASE" backup node --import tsx --input-type=module -e "
+  import { Readable } from 'node:stream';
+  import { pipeline } from 'node:stream/promises';
+  import { createBackupDecryptor } from '@syntra/core';
+  const r = await fetch('http://s3:9090/syntra-drill/syntra/' + process.env.NAME + '.syntra-backup');
+  if (!r.ok) { console.error('GET', r.status); process.exit(1); }
+  const d = createBackupDecryptor(process.env.PASSPHRASE);
+  let head = Buffer.alloc(0);
+  d.on('data', (c) => { if (head.length < 5) head = Buffer.concat([head, c]); });
+  await pipeline(Readable.fromWeb(r.body), d);
+  const m = await d.manifest;
+  console.log(head.subarray(0, 5).toString() + ' ' + m.createdAt);
+")" || die "the off-site copy of $name could not be fetched and decrypted"
+case "$opened" in PGDMP\ *) log "off-site copy decrypts: $opened" ;; *) die "the off-site copy of $name did not decrypt to a dump: $opened" ;; esac
+
+log "testing a restore of $name"
+job="$(agent POST /v1/verifies "{\"name\":\"$name\",\"requestedBy\":\"drill\"}" | field 'JSON.parse(s).job.id')"
+done_job="$(wait_job "$job")"
+[ "$(printf '%s' "$done_job" | field 'JSON.parse(s).job.state')" = succeeded ] || die "restore test: $done_job"
+printf '%s' "$done_job" | field 'JSON.parse(s).job.message'
 
 # Unique per run: tenants are never deleted, so a rerun cannot reuse one.
 marker="after-$(date -u +%s)"

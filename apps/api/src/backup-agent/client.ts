@@ -1,11 +1,15 @@
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-import type { BackupManifest, RetentionPolicy } from '@syntra/core';
+import type { BackupHealth, BackupManifest, RetentionPolicy } from '@syntra/core';
 import type { Job } from './agent.js';
 import type { StoredBackup } from './store.js';
 
 export interface AgentStatus {
   version: string;
+  startedAt: string;
+  health: BackupHealth;
+  verifyEveryDays: number;
+  offsite: { bucket: string; endpoint: string | null; prefix: string } | null;
   intervalHours: number;
   retention: RetentionPolicy;
   fingerprint: string | null;
@@ -65,11 +69,17 @@ export function backupAgentClient(agent: { url: string; token: string }) {
   });
 
   return {
-    status: () => json<AgentStatus>('/v1/status'),
+    /** Three seconds at most: an incident list or a scrape must not wait on a dead agent. */
+    status: () => json<AgentStatus>('/v1/status', { signal: AbortSignal.timeout(3_000) }),
     list: async () => (await json<{ backups: StoredBackup[] }>('/v1/backups')).backups,
     backupNow: async (requestedBy: string) => (await json<{ job: Job }>('/v1/backups', post({ requestedBy }))).job,
     restore: async (name: string, requestedBy: string) =>
       (await json<{ job: Job }>('/v1/restores', post({ name, requestedBy }))).job,
+    verify: async (name: string | null, requestedBy: string) =>
+      (await json<{ job: Job }>('/v1/verifies', post({ name, requestedBy }))).job,
+    testOffsite: async () => {
+      await call('/v1/offsite/test', { method: 'POST' });
+    },
     job: async (id: string) => (await json<{ job: Job }>(`/v1/jobs/${encodeURIComponent(id)}`)).job,
     remove: async (name: string) => {
       await call(`/v1/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -96,3 +106,9 @@ export function backupAgentClient(agent: { url: string; token: string }) {
 }
 
 export type BackupAgentClient = ReturnType<typeof backupAgentClient>;
+
+/** The agent's status for a metrics scrape, or null when it did not answer. */
+export function backupStatusReader(agent: { url: string; token: string }): () => Promise<AgentStatus | null> {
+  const client = backupAgentClient(agent);
+  return () => client.status().catch(() => null);
+}

@@ -2,6 +2,7 @@ import { scrubText } from '@syntra/connectors';
 import type { TenantClient } from '@syntra/db';
 import type { MailSinkWarning } from '../notify/mail-check.js';
 import type { InsecureDefault } from './insecure-defaults.js';
+import type { BackupProblem } from '../backup/health.js';
 
 /**
  * Everything in this tenant that has quietly stopped working.
@@ -33,7 +34,8 @@ export type IncidentKind =
   | 'provision_run_failed'
   | 'sync_run_failed'
   | 'task_failing'
-  | 'credential_expired';
+  | 'credential_expired'
+  | 'backups_failing';
 
 export type IncidentSeverity = 'critical' | 'warning';
 
@@ -109,6 +111,7 @@ export const INCIDENT_KINDS: readonly IncidentKind[] = [
   'sync_run_failed',
   'task_failing',
   'credential_expired',
+  'backups_failing',
 ];
 
 export const RESOLVABLE_INCIDENTS: readonly IncidentKind[] = [
@@ -172,6 +175,11 @@ export async function listIncidents(
      * these only to a caller who holds `deployment.manage`.
      */
     insecureDefaults?: readonly InsecureDefault[];
+    /**
+     * `backupProblems(...)` from the backup agent's status. Installation-wide
+     * like the two above, and passed only to a `deployment.manage` caller.
+     */
+    backups?: readonly BackupProblem[];
   } = {},
 ): Promise<Incident[]> {
   const stored = await tx.incidentState.findMany();
@@ -194,6 +202,28 @@ export async function listIncidents(
       lastAt: null,
       href: '/admin/settings?tab=email',
       items: [],
+    });
+  }
+
+  // --- Backups --------------------------------------------------------------
+  // A condition: it clears by itself once a backup, a restore test or an
+  // off-site copy succeeds again.
+  const backups = options.backups ?? [];
+  if (backups.length > 0) {
+    drafts.push({
+      kind: 'backups_failing',
+      severity: 'critical',
+      title: 'Backups failing',
+      detail: backups.length === 1 ? backups[0]!.detail : `${backups.length} problems with backups.`,
+      count: backups.length,
+      lastAt: latest(backups.map((problem) => problem.at)),
+      href: '/admin/backups',
+      items: backups.map((problem) => ({
+        label: problem.label,
+        detail: scrub(problem.detail),
+        at: problem.at,
+        href: '/admin/backups',
+      })),
     });
   }
 

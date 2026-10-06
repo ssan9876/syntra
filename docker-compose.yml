@@ -161,6 +161,19 @@ services:
       BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-8}
       BACKUP_KEEP_MANUAL: ${BACKUP_KEEP_MANUAL:-10}
       BACKUP_COPY_COMMAND: ${BACKUP_COPY_COMMAND:-}
+      # Days between automatic restore tests into a scratch database; 0 is off.
+      BACKUP_VERIFY_EVERY_DAYS: ${BACKUP_VERIFY_EVERY_DAYS:-7}
+      # An off-site, S3-compatible bucket (AWS, R2, B2, MinIO). Each backup is
+      # copied there encrypted under BACKUP_S3_PASSPHRASE, as a .syntra-backup
+      # file you can upload in the console. Unset BACKUP_S3_BUCKET: no copy.
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_PASSPHRASE: ${BACKUP_S3_PASSPHRASE:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-}
+      BACKUP_S3_FORCE_PATH_STYLE: ${BACKUP_S3_FORCE_PATH_STYLE:-}
       NODE_ENV: production
     volumes:
       - syntra-backups:/backups

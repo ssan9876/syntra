@@ -16,7 +16,18 @@ export const backupsOpenApi = describeAdminRoutes('Backups', {
     description: 'Accepted, not finished; poll `GET /api/admin/backups/jobs/{id}`. `409 backup-busy` while another backup or restore runs.',
     status: 202,
   },
-  'GET /backups/jobs/:id': { summary: 'Read a backup or restore job' },
+  'GET /backups/jobs/:id': { summary: 'Read a backup, restore or restore-test job' },
+  'POST /backups/:name/verify': {
+    summary: 'Test that a backup restores',
+    description:
+      'Accepted, not finished. Restores the backup into a scratch database, counts its tables and rows, and drops it; the live database is not touched. A pass is recorded on the backup as `verifiedAt`.',
+    status: 202,
+  },
+  'POST /backups/offsite/test': {
+    summary: 'Check the off-site bucket',
+    description:
+      'Writes and deletes a small object in BACKUP_S3_BUCKET. `422 backup-refused` with what the bucket answered when it fails, or when no bucket is configured.',
+  },
   'DELETE /backups/:name': { summary: 'Delete a backup', status: 204 },
   'POST /backups/:name/download': {
     summary: 'Download a backup, encrypted under a passphrase',

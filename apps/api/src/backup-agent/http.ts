@@ -20,6 +20,8 @@ import { BackupRefusedError, type BackupStore } from './store.js';
  *   GET    /v1/backups/:name/dump       the pg_dump archive
  *   POST   /v1/uploads                  x-syntra-manifest: base64 JSON; body: the dump
  *   POST   /v1/restores                 { name, requestedBy }  -> 202 job
+ *   POST   /v1/verifies                 { name?, requestedBy } -> 202 job
+ *   POST   /v1/offsite/test             write and delete a test object
  *   GET    /v1/jobs/:id
  */
 export function agentServer(agent: Agent, store: BackupStore, token: string): Server {
@@ -102,6 +104,20 @@ export function agentServer(agent: Agent, store: BackupStore, token: string): Se
       if (!name || !BACKUP_NAME.test(name)) return send(response, 400, { error: 'invalid', message: 'Backup name missing.' });
       if (!(await store.get(name))) return send(response, 404, { error: 'not-found' });
       return send(response, 202, { job: agent.restore(name, text(body['requestedBy'])) });
+    }
+
+    if (collection === 'verifies' && method === 'POST' && !id) {
+      const body = await readJson(request);
+      const name = text(body['name']);
+      if (name !== null && (!BACKUP_NAME.test(name) || !(await store.get(name)))) {
+        return send(response, 404, { error: 'not-found' });
+      }
+      return send(response, 202, { job: agent.verify(name, text(body['requestedBy'])) });
+    }
+
+    if (collection === 'offsite' && id === 'test' && method === 'POST') {
+      await agent.testOffsite();
+      return send(response, 200, { ok: true });
     }
 
     if (collection === 'jobs' && id && method === 'GET') {

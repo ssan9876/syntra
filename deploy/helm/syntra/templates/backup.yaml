@@ -84,6 +84,27 @@ spec:
             {{- with .Values.backup.copyCommand }}
             - { name: BACKUP_COPY_COMMAND, value: {{ . | quote }} }
             {{- end }}
+            - { name: BACKUP_VERIFY_EVERY_DAYS, value: {{ .Values.backup.verifyEveryDays | quote }} }
+            {{- with .Values.backup.offsite }}
+            {{- if .bucket }}
+            - { name: BACKUP_S3_BUCKET, value: {{ .bucket | quote }} }
+            {{- with .region }}
+            - { name: BACKUP_S3_REGION, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .endpoint }}
+            - { name: BACKUP_S3_ENDPOINT, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .prefix }}
+            - { name: BACKUP_S3_PREFIX, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .forcePathStyle }}
+            - { name: BACKUP_S3_FORCE_PATH_STYLE, value: {{ . | quote }} }
+            {{- end }}
+            {{- include "syntra.secretEnv" (dict "name" "BACKUP_S3_PASSPHRASE" "secret" $secret "key" .passphraseKey) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "BACKUP_S3_ACCESS_KEY_ID" "secret" $secret "key" .accessKeyIdKey "optional" true) | nindent 12 }}
+            {{- include "syntra.secretEnv" (dict "name" "BACKUP_S3_SECRET_ACCESS_KEY" "secret" $secret "key" .secretAccessKeyKey "optional" true) | nindent 12 }}
+            {{- end }}
+            {{- end }}
             {{- include "syntra.secretEnv" (dict "name" "SUPERUSER_DATABASE_URL" "secret" $secret "key" .Values.backup.databaseUrlKey) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}

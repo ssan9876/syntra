@@ -13,11 +13,20 @@ export interface BackupRow {
   kind: Kind;
   key: 'match' | 'mismatch' | 'unknown';
   versionCheck: 'ok' | 'newer' | 'unknown';
+  /** When a restore test last passed for this backup. */
+  verifiedAt?: string | undefined;
+}
+
+export interface BackupEvent {
+  at: string;
+  ok: boolean;
+  name: string | null;
+  message: string | null;
 }
 
 export interface BackupJob {
   id: string;
-  kind: 'backup' | 'restore';
+  kind: 'backup' | 'restore' | 'verify';
   state: 'running' | 'succeeded' | 'failed';
   step: string;
   message: string | null;
@@ -36,6 +45,16 @@ export interface BackupsResponse {
     copyConfigured: boolean;
     current: BackupJob | null;
     recent: BackupJob[];
+    verifyEveryDays: number;
+    offsite: { bucket: string; endpoint: string | null; prefix: string } | null;
+    health: {
+      lastBackup: BackupEvent | null;
+      lastBackupSuccessAt: string | null;
+      lastVerify: BackupEvent | null;
+      lastVerifySuccessAt: string | null;
+      lastCopy: BackupEvent | null;
+      lastCopySuccessAt: string | null;
+    };
   } | null;
 }
 
@@ -47,6 +66,12 @@ const KIND_LABEL: Record<Kind, string> = {
 };
 
 const MIN_PASSPHRASE = 12;
+
+const JOB_TITLE: Record<BackupJob['kind'], (name: string | null) => string> = {
+  backup: () => 'Backing up',
+  restore: (name) => `Restoring ${name ?? ''}`,
+  verify: (name) => `Testing a restore of ${name ?? 'the newest backup'}`,
+};
 const POLL_MS = 2_000;
 
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -87,6 +112,30 @@ export function BackupsPage() {
   const [deleting, setDeleting] = useState<BackupRow | null>(null);
   const [uploading, setUploading] = useState(false);
   const [restoreJob, setRestoreJob] = useState<{ id: string; name: string } | null>(null);
+  const [testingBucket, setTestingBucket] = useState(false);
+  const [bucketResult, setBucketResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  async function testBucket() {
+    setTestingBucket(true);
+    setBucketResult(null);
+    try {
+      await api('/api/admin/backups/offsite/test', { method: 'POST', body: '{}' });
+      setBucketResult({ ok: true, message: 'A test object was written and deleted.' });
+    } catch (cause) {
+      setBucketResult({ ok: false, message: problemText(cause, 'The bucket did not answer.') });
+    } finally {
+      setTestingBucket(false);
+    }
+  }
+
+  async function testRestore(backup: BackupRow) {
+    try {
+      await api(`/api/admin/backups/${backup.name}/verify`, { method: 'POST', body: '{}' });
+      await load();
+    } catch (cause) {
+      setError(problemText(cause, 'Restore test did not start.'));
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -166,8 +215,16 @@ export function BackupsPage() {
   }
 
   const { status } = data;
+  const { health } = status;
   const lastFinished = status.recent[0];
   const retention = status.retention;
+  const testedValue = health.lastVerify
+    ? health.lastVerify.ok
+      ? `Passed ${when(health.lastVerify.at)}`
+      : `Failed ${when(health.lastVerify.at)}`
+    : status.verifyEveryDays === 0
+      ? 'Off'
+      : 'Not yet';
 
   return (
     <>
@@ -182,19 +239,51 @@ export function BackupsPage() {
             label: 'Kept',
             value: `${retention.hourly} hourly · ${retention.daily} daily · ${retention.weekly} weekly`,
           },
-          { label: 'Off-host copy', value: status.copyConfigured ? 'On' : 'Off' },
+          { label: 'Last backup', value: health.lastBackupSuccessAt ? when(health.lastBackupSuccessAt) : 'None yet' },
+          { label: 'Restore test', value: testedValue },
+          {
+            label: 'Off-site',
+            value: status.offsite ? (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm">{status.offsite.bucket}</span>
+                <Button size="sm" variant="ghost" loading={testingBucket} onClick={() => void testBucket()}>
+                  Test bucket
+                </Button>
+              </span>
+            ) : status.copyConfigured ? 'Copy command' : 'Off',
+          },
         ]}
       />
 
       <div className="mb-4 space-y-2">
         {error ? <Alert tone="danger">{error}</Alert> : null}
+        {bucketResult ? (
+          <Alert tone={bucketResult.ok ? 'success' : 'danger'} title={bucketResult.ok ? 'Bucket works' : 'Bucket test failed'}>
+            {bucketResult.message}
+          </Alert>
+        ) : null}
         {running ? (
-          <Alert tone="info" title={running.kind === 'restore' ? `Restoring ${running.backupName ?? ''}` : 'Backing up'}>
+          <Alert tone="info" title={JOB_TITLE[running.kind](running.backupName)}>
             {running.step}
           </Alert>
-        ) : lastFinished?.state === 'failed' ? (
-          <Alert tone="danger" title={lastFinished.kind === 'restore' ? 'Restore failed' : 'Backup failed'}>
+        ) : lastFinished?.state === 'failed' && lastFinished.kind === 'restore' ? (
+          <Alert tone="danger" title="Restore failed">
             {lastFinished.message}
+          </Alert>
+        ) : null}
+        {health.lastBackup && !health.lastBackup.ok ? (
+          <Alert tone="danger" title="Backup failed">
+            {health.lastBackup.message}
+          </Alert>
+        ) : null}
+        {health.lastVerify && !health.lastVerify.ok ? (
+          <Alert tone="danger" title={`Restore test failed: ${health.lastVerify.name ?? ''}`}>
+            {health.lastVerify.message}
+          </Alert>
+        ) : null}
+        {status.offsite && health.lastCopy && !health.lastCopy.ok ? (
+          <Alert tone="danger" title="Off-site copy failed">
+            {health.lastCopy.message}
           </Alert>
         ) : null}
       </div>
@@ -216,7 +305,10 @@ export function BackupsPage() {
                       {KIND_LABEL[backup.kind]} · {backup.version} · {size(backup.bytes)}
                     </p>
                   </div>
-                  <KeyStatus backup={backup} />
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <KeyStatus backup={backup} />
+                    <TestedStatus backup={backup} />
+                  </div>
                 </div>
                 <BackupActions
                   backup={backup}
@@ -225,6 +317,7 @@ export function BackupsPage() {
                   onDownload={() => setDownloading(backup)}
                   onRestore={() => setRestoring(backup)}
                   onDelete={() => setDeleting(backup)}
+                  onTest={() => void testRestore(backup)}
                 />
               </li>
             ))}
@@ -237,7 +330,7 @@ export function BackupsPage() {
                 <th scope="col">Kind</th>
                 <th scope="col">Version</th>
                 <th scope="col">Size</th>
-                <th scope="col">Key</th>
+                <th scope="col">Checks</th>
                 <th scope="col">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -254,7 +347,10 @@ export function BackupsPage() {
                   <td className="tabular-nums">{backup.version}</td>
                   <td className="tabular-nums whitespace-nowrap">{size(backup.bytes)}</td>
                   <td>
-                    <KeyStatus backup={backup} />
+                    <div className="flex flex-wrap gap-1">
+                      <KeyStatus backup={backup} />
+                      <TestedStatus backup={backup} />
+                    </div>
                   </td>
                   <td>
                     <BackupActions
@@ -264,6 +360,7 @@ export function BackupsPage() {
                       onDownload={() => setDownloading(backup)}
                       onRestore={() => setRestoring(backup)}
                       onDelete={() => setDeleting(backup)}
+                      onTest={() => void testRestore(backup)}
                     />
                   </td>
                 </tr>
@@ -315,6 +412,15 @@ function KeyStatus({ backup }: { backup: BackupRow }) {
   return <Status tone="neutral" glyph="minus">Unknown</Status>;
 }
 
+function TestedStatus({ backup }: { backup: BackupRow }) {
+  if (!backup.verifiedAt) return null;
+  return (
+    <Status tone="active" glyph="check">
+      <span title={`Restore test passed ${when(backup.verifiedAt)}`}>Tested</span>
+    </Status>
+  );
+}
+
 function BackupActions({
   backup,
   disabled,
@@ -322,6 +428,7 @@ function BackupActions({
   onDownload,
   onRestore,
   onDelete,
+  onTest,
 }: {
   backup: BackupRow;
   disabled: boolean;
@@ -329,6 +436,7 @@ function BackupActions({
   onDownload(): void;
   onRestore(): void;
   onDelete(): void;
+  onTest(): void;
 }) {
   return (
     <div className="row-actions max-sm:justify-start">
@@ -349,6 +457,9 @@ function BackupActions({
         onClick={onRestore}
       >
         Restore
+      </Button>
+      <Button size="sm" variant="secondary" disabled={disabled} onClick={onTest}>
+        Test
       </Button>
       <Button size="sm" variant="ghost" disabled={disabled} onClick={onDelete}>
         Delete
