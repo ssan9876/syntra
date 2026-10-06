@@ -5803,8 +5803,10 @@
           "Backups"
         ],
         "summary": "List restore points and the backup service status",
-        "description": "`configured` is false when BACKUP_AGENT_URL is not set. Each backup carries `key` (`match`, `mismatch`, `unknown`) against the running master key and `versionCheck` (`ok`, `newer`, `unknown`).\n\nRequires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "`configured` is false when BACKUP_AGENT_URL is not set. Each backup carries `key` (`match`, `mismatch`, `unknown`) against the running master key and `versionCheck` (`ok`, `newer`, `unknown`).\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -5846,8 +5848,10 @@
           "Backups"
         ],
         "summary": "Take a backup now",
-        "description": "Accepted, not finished; poll `GET /api/admin/backups/jobs/{id}`. `409 backup-busy` while another backup or restore runs.\n\nRequires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "Accepted, not finished; poll `GET /api/admin/backups/jobs/{id}`. `409 backup-busy` while another backup or restore runs.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -5891,8 +5895,10 @@
           "Backups"
         ],
         "summary": "Delete a backup",
-        "description": "Requires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "Requires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -5944,8 +5950,10 @@
           "Backups"
         ],
         "summary": "Download a backup, encrypted under a passphrase",
-        "description": "The body is the backup file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from the passphrase with scrypt. The same passphrase is needed to upload it. Recorded as `deployment.backup_downloaded`.\n\nRequires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "The body is the backup file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from the passphrase with scrypt. The same passphrase is needed to upload it. Recorded as `deployment.backup_downloaded`.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -6022,8 +6030,10 @@
           "Backups"
         ],
         "summary": "Restore a backup over the whole installation",
-        "description": "Accepted, not finished. A backup of the current state is taken first; the API restarts twice and comes back held until somebody resumes it. `422 key-mismatch` for a backup taken under a different master key, `422 backup-newer` for one from a newer release.\n\nRequires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "Accepted, not finished. A backup of the current state is taken first; the API restarts twice and comes back held until somebody resumes it. `422 key-mismatch` for a backup taken under a different master key, `422 backup-newer` for one from a newer release.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -6098,8 +6108,10 @@
           "Backups"
         ],
         "summary": "Read a backup or restore job",
-        "description": "Requires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "Requires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
@@ -6156,8 +6168,10 @@
           "Backups"
         ],
         "summary": "Upload a backup file",
-        "description": "Send the file as `application/octet-stream` with the passphrase in `X-Backup-Passphrase`. Stored as an uploaded restore point; `422 backup-wrong-passphrase`, `backup-incomplete` or `backup-damaged` when it cannot be read.\n\nRequires an administrative session; no further permission.",
-        "x-syntra-permission": [],
+        "description": "Send the file as `application/octet-stream` with the passphrase in `X-Backup-Passphrase`. Stored as an uploaded restore point; `422 backup-wrong-passphrase`, `backup-incomplete` or `backup-damaged` when it cannot be read.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
         "x-syntra-token-allowed": true,
         "security": [
           {
