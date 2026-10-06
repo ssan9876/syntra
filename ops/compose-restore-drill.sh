@@ -26,11 +26,13 @@ SESSION_SECRET="$(value SESSION_SECRET)"
 TOKEN="$(value BACKUP_AGENT_TOKEN)"
 [ -n "$TOKEN" ] || TOKEN="$(printf '%s' 'syntra-backup-agent-v1' | openssl dgst -sha256 -hmac "$SESSION_SECRET" -r | cut -d' ' -f1)"
 
-# Calls the backup service from inside the api container, as the API does.
+# Calls the backup service from inside its own container. Not from `api`:
+# the api container restarts twice during a restore, by design, and a call
+# made through it in that moment gets no answer at all.
 agent() {
-  compose exec -T -e TOKEN="$TOKEN" api node -e "
+  compose exec -T -e TOKEN="$TOKEN" backup node -e "
     const [method, path, body] = process.argv.slice(1);
-    fetch('http://backup:3100' + path, {
+    fetch('http://127.0.0.1:3100' + path, {
       method, headers: { authorization: 'Bearer ' + process.env.TOKEN, 'content-type': 'application/json' },
       body: body || undefined,
     }).then(async (r) => { const t = await r.text(); if (!r.ok) { console.error(r.status, t); process.exit(1); } console.log(t); });
@@ -41,9 +43,10 @@ field() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>consol
 wait_job() {
   local id="$1" job state
   for _ in $(seq 180); do
-    job="$(agent GET "/v1/jobs/$id")" || true
-    state="$(printf '%s' "$job" | field 'JSON.parse(s).job.state')" || state=''
-    [ "$state" = running ] || { printf '%s' "$job"; return 0; }
+    job="$(agent GET "/v1/jobs/$id" 2>/dev/null)" || job=''
+    state="$(printf '%s' "$job" | field 'JSON.parse(s).job.state' 2>/dev/null)" || state=''
+    # Only a finished job ends the wait. No answer is not an answer.
+    case "$state" in succeeded|failed) printf '%s' "$job"; return 0 ;; esac
     sleep 1
   done
   die "job $id did not finish"
