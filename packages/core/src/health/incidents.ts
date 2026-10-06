@@ -35,7 +35,8 @@ export type IncidentKind =
   | 'sync_run_failed'
   | 'task_failing'
   | 'credential_expired'
-  | 'backups_failing';
+  | 'backups_failing'
+  | 'siem_export_failing';
 
 export type IncidentSeverity = 'critical' | 'warning';
 
@@ -112,6 +113,7 @@ export const INCIDENT_KINDS: readonly IncidentKind[] = [
   'task_failing',
   'credential_expired',
   'backups_failing',
+  'siem_export_failing',
 ];
 
 export const RESOLVABLE_INCIDENTS: readonly IncidentKind[] = [
@@ -223,6 +225,33 @@ export async function listIncidents(
         detail: scrub(problem.detail),
         at: problem.at,
         href: '/admin/backups',
+      })),
+    });
+  }
+
+  // --- SIEM export ----------------------------------------------------------
+  // A condition: a stream that has failed three times running (about seven
+  // minutes, with its backoff) is losing ground, and the SIEM is missing
+  // whatever happened meanwhile. It clears on the next delivery.
+  const failingStreams = await tx.auditStream.findMany({
+    where: { enabled: true, consecutiveFailures: { gte: 3 } },
+    orderBy: { lastErrorAt: 'desc' },
+    select: { name: true, lastError: true, lastErrorAt: true },
+  });
+  if (failingStreams.length > 0) {
+    drafts.push({
+      kind: 'siem_export_failing',
+      severity: 'critical',
+      title: 'SIEM export failing',
+      detail: `${failingStreams.length} ${plural(failingStreams.length, 'stream is', 'streams are')} not delivering the audit log.`,
+      count: failingStreams.length,
+      lastAt: latest(failingStreams.map((stream) => stream.lastErrorAt)),
+      href: '/admin/settings?tab=siem',
+      items: failingStreams.slice(0, ITEM_LIMIT).map((stream) => ({
+        label: stream.name,
+        detail: scrub(stream.lastError),
+        at: stream.lastErrorAt,
+        href: '/admin/settings?tab=siem',
       })),
     });
   }

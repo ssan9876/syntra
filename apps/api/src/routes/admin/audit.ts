@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { auditSavedViewBody, auditSearchQuery, idParam } from '@syntra/contracts';
+import { z } from 'zod';
+import { prisma } from '@syntra/db';
 import {
   PERMISSIONS,
   SavedViewLimitError,
+  buildInfo,
+  eventJson,
   deleteSavedView,
   listSavedViews,
   saveView,
@@ -26,8 +30,15 @@ import { requirePermission } from '../../plugins/require-permission.js';
  * by a background job, sealed, watermarked and audited, and the request that
  * asked for it returns at once.
  */
+export const auditStreamQuery = z.object({
+  /** Events with a higher sequence than this; 0 for the whole log. */
+  after: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(1000).default(500),
+});
+
 export async function registerAdminAuditRoutes(
   app: FastifyInstance,
+  options: { host?: string } = {},
 ): Promise<void> {
   app.addHook('preHandler', requireSession('admin'));
 
@@ -72,6 +83,33 @@ export async function registerAdminAuditRoutes(
   );
 
   // ---- saved searches: filters only, private to the administrator --------
+
+  // THE PULL SIDE OF SIEM EXPORT. Oldest first from a cursor, for a SIEM that
+  // polls with an API token (Splunk's REST input, Sentinel's codeless
+  // connector) rather than receiving a stream. The same event shape the push
+  // streams send. No whole-chain verification per call, unlike `/audit`: a
+  // poller every minute would re-hash the whole log every minute, and every
+  // event carries its own `hash` and `prevHash` to check against.
+  app.get(
+    '/audit/stream',
+    { preHandler: requirePermission(PERMISSIONS.AUDIT_READ) },
+    async (request) => {
+      const q = auditStreamQuery.parse(request.query);
+      const tenant = await prisma.tenant.findUnique({ where: { id: request.tenantId }, select: { slug: true } });
+      const events = await request.db((tx) =>
+        tx.auditEvent.findMany({
+          where: { sequence: { gt: q.after } },
+          orderBy: { sequence: 'asc' },
+          take: q.limit,
+        }),
+      );
+      const ctx = { tenant: tenant?.slug ?? '', host: options.host ?? '', version: buildInfo().version };
+      return {
+        events: events.map((event) => eventJson(event, ctx)),
+        nextAfter: events.at(-1)?.sequence ?? q.after,
+      };
+    },
+  );
 
   app.get(
     '/audit/views',

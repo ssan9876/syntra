@@ -20,7 +20,6 @@ ones you need. Nothing here has a date.
 
 - Verify more connectors against real systems: Google Workspace, Mattermost and
   Snipe-IT.
-- Audit export to a SIEM.
 - A guided upgrade checklist.
 
 ## Later

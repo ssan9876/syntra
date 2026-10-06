@@ -7,6 +7,9 @@ import {
   applySourceSchedule,
   applyLogoutSchedule,
   applyWebhookSchedule,
+  buildInfo,
+  applyAuditStreamSchedule,
+  registerAuditStreamJobs,
   applyTargetSchedule,
   automateSettings,
   createScheduler,
@@ -299,6 +302,8 @@ export async function scheduleBackgroundWork(
       await applyWebhookSchedule(scheduler, tenant.id);
       attempt('logout delivery');
       await applyLogoutSchedule(scheduler, tenant.id);
+      attempt('audit streaming');
+      await applyAuditStreamSchedule(scheduler, tenant.id);
     } catch (cause) {
       failure('webhook delivery');
       logger.error(
@@ -492,6 +497,12 @@ export async function startSyncScheduler(
     // a shared installation says otherwise in its configuration.
     registerWebhookJobs(scheduler, provider, {
       allowPrivateAddresses: config.outboundAllowPrivate,
+    });
+    // Audit streaming to a SIEM dials an administrator-supplied address too.
+    registerAuditStreamJobs(scheduler, provider, {
+      allowPrivateAddresses: config.outboundAllowPrivate,
+      host: new URL(config.publicUrl).host,
+      version: buildInfo().version,
     });
     // The same private-address policy: a back-channel logout URI is an
     // administrator-supplied address the SERVER dials, exactly as a webhook

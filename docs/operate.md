@@ -2056,6 +2056,47 @@ bounded; that check is not, and on a log of millions of events it is what a
 page's latency is made of. Moving the page onto the checkpointed, incremental
 verification Govern already runs nightly is the follow-up.
 
+## Streaming the audit log to a SIEM
+
+**Settings → SIEM**, with `tenant.manage`. A stream sends every audit event
+of the tenant, oldest first, to a SIEM, about once a minute. Each stream
+keeps a cursor: it moves only after the receiver accepts a batch, so a
+receiver that is down gets the same events when it is back, never a gap.
+
+| Send over | Format | For |
+|---|---|---|
+| HTTPS | Splunk HEC | Splunk (`/services/collector/event`, header `Authorization: Splunk <token>`) |
+| HTTPS | JSON | One JSON array per batch: Elastic, Logstash, Vector, Datadog (`DD-API-KEY`), anything that takes JSON over HTTPS |
+| Syslog (TCP, TLS) | CEF | QRadar, ArcSight, Microsoft Sentinel through its CEF/syslog connector |
+| Syslog (TCP, TLS) | JSON | Graylog, rsyslog, syslog-ng, Splunk syslog inputs |
+
+- **Every event carries** its tenant, `sequence`, `hash` and `prevHash`, so the
+  receiving side can check the chain has no gaps.
+- **Syslog** is RFC 5424 with facility `log audit`, severity `notice` for a
+  success and `warning` otherwise, the action as MSGID, and
+  `[syntra@32473 tenant sequence outcome]`, framed by octet counting
+  (RFC 6587). TLS is on by default and verifies the receiver's certificate
+  against the host name; trust a private CA with `NODE_EXTRA_CA_CERTS`. TCP
+  syslog has no acknowledgement, so "delivered" there means written and
+  closed without an error.
+- **The header value** (a token) is sealed in the vault and never shown
+  again. **Test** sends one `audit_stream.test` event that is not in the log.
+- **New streams** start with events from now on, or with the whole log first
+  (`Start with: The whole audit log`).
+- **HTTPS only**, unless `OUTBOUND_ALLOW_PRIVATE` is set: then plain `http://`
+  works for a receiver on a private network. Destinations pass the same
+  outbound-address checks as webhooks.
+- **When it fails**, the stream backs off (1, 2, 4 … 30 minutes) and its
+  status says why. Three failures in a row raise **SIEM export failing**
+  under Activity → Attention.
+- Creating, changing and deleting a stream are audited
+  (`audit.stream_created`, `_updated`, `_deleted`) and can be sent to a
+  webhook.
+
+**To poll instead**, use an API token with `audit.read`:
+`GET /api/admin/audit/stream?after=<sequence>&limit=500` returns events oldest
+first in the same shape, and `nextAfter` for the next call.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request, every push to `main`,

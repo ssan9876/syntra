@@ -63,6 +63,7 @@ import { registerAdminEmailDomainRoutes } from './routes/admin/email-domains.js'
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminRestoreHoldRoutes } from './routes/admin/restore-hold.js';
+import { registerAdminAuditStreamRoutes } from './routes/admin/audit-streams.js';
 import { registerAdminBackupRoutes } from './routes/admin/backups.js';
 import { backupStatusReader } from './backup-agent/client.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
@@ -525,7 +526,14 @@ export async function buildApp(
     publicUrl: config.publicUrl,
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
-  await app.register(registerAdminAuditRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminAuditRoutes, { prefix: '/api/admin', host: new URL(config.publicUrl).host });
+  await app.register(registerAdminAuditStreamRoutes, {
+    prefix: '/api/admin',
+    keyProvider,
+    allowPrivateAddresses: config.outboundAllowPrivate,
+    host: new URL(config.publicUrl).host,
+    version: buildInfo().version,
+  });
   // The export center. The key provider opens what the export job sealed
   // with it; the scheduler is how a request becomes a background job.
   await app.register(registerAdminExportRoutes, {

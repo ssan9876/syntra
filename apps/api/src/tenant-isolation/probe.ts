@@ -124,6 +124,7 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
   // ---- tenant administration ---------------------------------------------------
   ['deletion/requests/:id', 'deletionRequest'],
   ['webhooks/:id', 'webhook'],
+  ['audit-streams/:id', 'auditStream'],
   ['email-domains/:id', 'emailDomain'],
   ['deliveries/:deliveryId', 'webhookDelivery'],
   ['views/:id', 'auditView'],
@@ -294,6 +295,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/update/rollback', 'Deployment rollback; installation-wide, no tenant data.'],
   ['POST /api/admin/restore-hold/resume', 'Resumes background work after a restore; installation-wide, no tenant data.'],
   ['POST /api/admin/backups', 'Takes a backup of the whole installation; takes no id.'],
+  ['POST /api/admin/audit-streams', 'Creates a SIEM stream from a destination; takes no object id.'],
   ['POST /api/admin/backups/upload', 'Receives a backup file of the whole installation; references no saved object.'],
   ['POST /api/admin/backups/offsite/test', "Writes and deletes a test object in the installation's backup bucket; takes no id."],
   ['POST /api/admin/sources/test', 'Tests an unsaved connection description; references no saved object.'],

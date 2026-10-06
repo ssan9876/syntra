@@ -1,4 +1,5 @@
 import { auditSavedViewBody, auditSearchQuery, idParam } from '@syntra/contracts';
+import { auditStreamQuery } from './audit.js';
 import { describeAdminRoutes } from '../../openapi/describe.js';
 
 /** The OpenAPI description of the routes in `audit.ts`. See openapi/describe.ts. */
@@ -11,6 +12,12 @@ export const auditOpenApi = describeAdminRoutes('Audit', {
   },
   'GET /audit/views': {
     summary: 'List your saved audit searches',
+  },
+  'GET /audit/stream': {
+    summary: 'Read audit events oldest first from a cursor, for a SIEM that polls',
+    description:
+      'Events with a sequence above `after`, in order, in the shape the SIEM streams send. Pass `nextAfter` as `after` on the next call; it stays the same when there is nothing new. Use an API token with `audit.read`. Every event carries `hash` and `prevHash`, so the chain can be checked on the receiving side.',
+    query: auditStreamQuery,
   },
   'PUT /audit/views': {
     summary: 'Save an audit search under a name',

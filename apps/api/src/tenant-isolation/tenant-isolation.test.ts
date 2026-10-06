@@ -874,6 +874,7 @@ const JOB_PAYLOADS: ReadonlyMap<string, () => Record<string, unknown>> = new Map
   ['sync.run', () => ({ tenantId: A.tenantId, sourceId: B.ids.source, runId: B.ids.syncRun })],
   ['personSource.run', () => ({ tenantId: A.tenantId, sourceId: B.ids.personSource, runId: B.ids.personImportRun })],
   ['notify.webhook', () => ({ tenantId: A.tenantId })],
+  ['audit.stream', () => ({ tenantId: A.tenantId })],
   ['identity.person-purge', () => ({ tenantId: A.tenantId })],
   ['directory.group-rules', () => ({ tenantId: A.tenantId })],
   ['access.logout_deliver', () => ({ tenantId: A.tenantId })],
