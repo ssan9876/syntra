@@ -638,15 +638,19 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /work/minimal.yaml /work/full.yaml
 
-      - name: The backup CronJob's script parses
-        # It is shell inside YAML inside a template, which is three chances
-        # for an indentation slip to produce a script `sh` rejects -- at 2am,
-        # on the first scheduled run.
+      - name: The backup agent is wired to the API
+        # Three templates must agree for Administration -> Backups to work:
+        # the agent's Service, the URL the API is given, and the network
+        # policy that lets one reach the other. A rename in one renders fine
+        # and fails only when somebody presses Back up now.
         run: |
-          yq 'select(.kind == "ConfigMap" and .metadata.name == "syntra-backup") | .data["backup.sh"]' \
-            "$RUNNER_TEMP/helm/full.yaml" > "$RUNNER_TEMP/helm/backup.sh"
-          test -s "$RUNNER_TEMP/helm/backup.sh"
-          sh -n "$RUNNER_TEMP/helm/backup.sh"
+          full="$RUNNER_TEMP/helm/full.yaml"
+          test "$(yq 'select(.kind == "Service" and .metadata.name == "syntra-backup") | .spec.ports[0].port' "$full")" = 3100
+          test "$(yq 'select(.kind == "Deployment" and .metadata.name == "syntra-api") | .spec.template.spec.containers[0].env[] | select(.name == "BACKUP_AGENT_URL") | .value' "$full")" = http://syntra-backup:3100
+          yq 'select(.kind == "NetworkPolicy" and .metadata.name == "syntra-api") | .spec.egress[].ports[]?.port' "$full" | grep -qx 3100
+          yq 'select(.kind == "NetworkPolicy" and .metadata.name == "syntra-backup") | .spec.ingress[].ports[].port' "$full" | grep -qx 3100
+          # Off by default: the minimal install renders no agent at all.
+          ! grep -q 'syntra-backup' "$RUNNER_TEMP/helm/minimal.yaml"
 
       - name: The PrometheusRule matches ops/prometheus-alerts.yml
         # Helm cannot read outside the chart directory, so the chart carries
