@@ -6,6 +6,7 @@ import {
   loadConfig,
   mailSinkWarning,
   masterKeyProviderFor,
+  waitForRestoreRelease,
 } from '@syntra/core';
 import { setOperationalLog } from '@syntra/connectors';
 import { startTelemetry } from './telemetry.js';
@@ -63,8 +64,33 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => void shutdown(signal));
 }
 
+// Stops the restore-hold wait on shutdown. Registered before listen: Fastify
+// refuses new hooks once it is listening.
+const held = new AbortController();
+app.addHook('onClose', async () => { held.abort(); });
+
 await app.listen({ port: config.port, host: '0.0.0.0' });
-void recovery.start();
+
+// After a restore, background work waits until an administrator resumes it.
+// Sign-in and the console run meanwhile, so the restored data can be checked.
+void waitForRestoreRelease({
+  signal: held.signal,
+  onHeld: (hold, err) => {
+    if (hold) {
+      app.log.warn(
+        { backupName: hold.backupName, restoredAt: hold.restoredAt.toISOString() },
+        `background work held: restored from ${hold.backupName}, not resumed`,
+      );
+    } else {
+      app.log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        'background work held: restore hold could not be read',
+      );
+    }
+  },
+}).then((released) => {
+  if (released) void recovery.start();
+});
 
 // The master-key provider, said out loud once at startup: which one wraps,
 // what is still configured decrypt-only, and whether it answers. Reachability

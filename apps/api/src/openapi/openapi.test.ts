@@ -165,6 +165,10 @@ describe('the document', () => {
       // what it lists (provision.read; an approver permission for change
       // requests), and is null otherwise.
       'get /api/admin/attention/summary',
+      // The restore banner: a restore holds every tenant, so every
+      // administrator sees why their scheduled runs stopped. Resuming is
+      // guarded by deployment.manage.
+      'get /api/admin/restore-hold',
     ]);
     for (const [path, methods] of Object.entries(document.paths)) {
       for (const [method, operation] of Object.entries(methods)) {

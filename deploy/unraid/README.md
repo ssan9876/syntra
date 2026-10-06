@@ -81,8 +81,10 @@ terminal commands above keep working beside it.
 
 The database lives in the `syntra-data` Docker volume, inside Unraid's Docker
 image or directory, which appdata backup tools do not copy. Take dumps as in
-[Operating Syntra](../../docs/operate.md#backups), and keep `.env` (it holds
-`MASTER_KEY`) with them.
+[Operating Syntra](../../docs/operate.md#compose-and-helm-backups). Keep a copy
+of `.env` (it holds `MASTER_KEY` and `SESSION_SECRET`) in a password manager,
+not on the same share as the dumps: a dump and its key in one place are one
+theft away from every stored credential.
 
 ## Updates
 

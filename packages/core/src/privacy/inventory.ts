@@ -2766,6 +2766,14 @@ const RAW = {
     erasure: 'retain',
     why: "Risk-acceptance evidence, including its justification.",
   }),
+  RestoreHold: table('configuration', {
+    id: 'none',
+    backupName: 'none',
+    backupTakenAt: 'none',
+    backupVersion: 'none',
+    restoredAt: 'none',
+    releasedAt: 'none',
+  }),
   RateLimitBucket: table('protocol', {
     key: 'authentication',
     hits: 'none',

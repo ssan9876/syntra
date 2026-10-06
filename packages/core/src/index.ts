@@ -16,6 +16,7 @@ export * from './health/readiness.js';
 export * from './health/incidents.js';
 export * from './health/attention.js';
 export * from './update/update-service.js';
+export * from './deployment/restore-hold.js';
 export * from './health/version.js';
 export * from './health/metrics.js';
 export * from './health/error-class.js';

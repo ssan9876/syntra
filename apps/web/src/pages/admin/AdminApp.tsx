@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from '../../components/AppShell.js';
 import { AdminNav } from './AdminNav.js';
 import { BreakGlassBanner } from './BreakGlassBanner.js';
+import { RestoreHoldBanner } from './RestoreHoldBanner.js';
 import { AttentionBanner } from './AttentionBanner.js';
 import { HeldChangePrompt } from './HeldChangePrompt.js';
 
@@ -91,6 +92,7 @@ export function AdminApp() {
           {/* Above every page: emergency access nobody can miss, work held
               for a person's decision, and the reason prompt every held
               privileged change goes through. */}
+          <RestoreHoldBanner />
           <BreakGlassBanner />
           <AttentionBanner />
           <HeldChangePrompt />

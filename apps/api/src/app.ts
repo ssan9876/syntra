@@ -61,6 +61,7 @@ import { registerAdminMailRoutes } from './routes/admin/mail.js';
 import { registerAdminEmailDomainRoutes } from './routes/admin/email-domains.js';
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
+import { registerAdminRestoreHoldRoutes } from './routes/admin/restore-hold.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
@@ -550,6 +551,7 @@ export async function buildApp(
     prefix: '/api/admin',
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
+  await app.register(registerAdminRestoreHoldRoutes, { prefix: '/api/admin' });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,

@@ -27,6 +27,7 @@ import { policiesOpenApi } from '../routes/admin/policies.openapi.js';
 import { profilesOpenApi } from '../routes/admin/profiles.openapi.js';
 import { protocolAppsOpenApi } from '../routes/admin/protocol-apps.openapi.js';
 import { provisionRunsOpenApi } from '../routes/admin/provision-runs.openapi.js';
+import { restoreHoldOpenApi } from '../routes/admin/restore-hold.openapi.js';
 import { rolesOpenApi } from '../routes/admin/roles.openapi.js';
 import { rulesOpenApi } from '../routes/admin/rules.openapi.js';
 import { sessionsOpenApi } from '../routes/admin/sessions.openapi.js';
@@ -85,6 +86,7 @@ export const ADMIN_ROUTE_DESCRIPTIONS: readonly DescribedRoute[] = [
   ...tenantOpenApi,
   ...tokensOpenApi,
   ...updateOpenApi,
+  ...restoreHoldOpenApi,
   ...upstreamsOpenApi,
   ...usersOpenApi,
   ...webhooksOpenApi,

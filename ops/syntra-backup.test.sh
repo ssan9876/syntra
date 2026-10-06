@@ -336,5 +336,25 @@ rm -rf "$CP_ROOT"
 
 # ---------------------------------------------------------------------------
 
+# --- restore_version_verdict ------------------------------------------------
+
+ok "a backup from the running version restores" "$(restore_version_verdict 1.20.0 1.20.0)" ok
+ok "an older backup restores, and is migrated after" "$(restore_version_verdict 1.19.1 1.20.0)" ok
+ok "a newer backup is refused" "$(restore_version_verdict 1.21.0 1.20.0)" newer
+ok "versions compare numerically, not as text" "$(restore_version_verdict 1.10.0 1.9.0)" newer
+ok "an unknown backup version is allowed with a warning" "$(restore_version_verdict unknown 1.20.0)" unknown
+ok "an absent backup version is unknown" "$(restore_version_verdict '' 1.20.0)" unknown
+ok "an unknown running version is unknown" "$(restore_version_verdict 1.20.0 unknown)" unknown
+
+# --- restore_hold_sql ---------------------------------------------------------
+
+ok "the hold names the backup, when it was taken and on which version" \
+   "$(restore_hold_sql syntra-20261005T020000Z 2026-10-05T02:00:00Z 1.20.0)" \
+   "INSERT INTO \"RestoreHold\" (\"id\", \"backupName\", \"backupTakenAt\", \"backupVersion\") VALUES (gen_random_uuid(), 'syntra-20261005T020000Z', '2026-10-05T02:00:00Z', '1.20.0');"
+ok "an unknown version and time are NULL, not the word unknown" \
+   "$(restore_hold_sql syntra-x '' unknown)" \
+   "INSERT INTO \"RestoreHold\" (\"id\", \"backupName\", \"backupTakenAt\", \"backupVersion\") VALUES (gen_random_uuid(), 'syntra-x', NULL, NULL);"
+ok "a quote in a name cannot end the literal" "$(sql_literal_or_null "it's")" "'it''s'"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

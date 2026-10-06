@@ -728,12 +728,12 @@ resolve_environment() {
   [ -n "$DB_URL" ] \
     || refuse "no DATABASE_URL in $SHARED/.env, so the migration step has nothing to connect to"
 
-  # Named in the datasource block, so the schema does not LOAD without it --
-  # even though `migrate deploy` never connects to it and only `migrate dev`
-  # does. Falling back to the real URL is therefore correct rather than a
-  # compromise: nothing will open it.
+  # Optional, and passed only when configured. packages/db/prisma.config.ts
+  # leaves it out when unset, and Prisma 7 refuses `migrate deploy` outright
+  # when it names the main database ("The shadow database you configured
+  # appears to be the same as the main database") -- which is what the old
+  # fallback to DATABASE_URL did on every install without one.
   SHADOW_URL="${SYNTRA_SHADOW_DATABASE_URL:-$(env_value SHADOW_DATABASE_URL "$SHARED/.env")}"
-  [ -n "$SHADOW_URL" ] || SHADOW_URL="$DB_URL"
 
   # THE PORT THIS DEPLOYMENT ACTUALLY SERVES ON.
   #
@@ -858,7 +858,7 @@ do_update() {
   #
   # Before the dump, deliberately: this is the last step that can fail with
   # nothing to undo.
-  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" ${SHADOW_URL:+"SHADOW_DATABASE_URL=$SHADOW_URL"} \
       pnpm --filter @syntra/db exec prisma generate ) \
     || die "the database client could not be generated for v$target"
 
@@ -876,7 +876,7 @@ do_update() {
   # is not in scope for it. Every console update reached this line and failed
   # with "Environment variable not found: DATABASE_URL", and every one of them
   # rolled back.
-  ( cd "$dir" && env DATABASE_URL="$DB_URL" SHADOW_DATABASE_URL="$SHADOW_URL" \
+  ( cd "$dir" && env DATABASE_URL="$DB_URL" ${SHADOW_URL:+"SHADOW_DATABASE_URL=$SHADOW_URL"} \
       pnpm --filter @syntra/db exec prisma migrate deploy ) \
     || { restore_after_failure "$from" "$dump" "migrations failed"; }
 

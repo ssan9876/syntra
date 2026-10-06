@@ -284,6 +284,7 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['PUT /api/admin/audit/views', 'Saves the caller\'s own filter; the filter\'s ids are search terms matched under RLS.'],
   ['POST /api/admin/update', 'Deployment update; installation-wide, no tenant data.'],
   ['POST /api/admin/update/rollback', 'Deployment rollback; installation-wide, no tenant data.'],
+  ['POST /api/admin/restore-hold/resume', 'Resumes background work after a restore; installation-wide, no tenant data.'],
   ['POST /api/admin/sources/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/connector-documents/validate', 'Checks an unsaved connector document against the schema; references no saved object.'],

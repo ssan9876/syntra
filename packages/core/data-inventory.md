@@ -2441,6 +2441,10 @@ Linked to a data subject by person: `ownerPersonId`. Erasure: **retain** -- Conf
 
 Not personal data: `id`, `tenantId`, `resourceType`, `resourceId`, `ownerGroupId`, `createdAt`, `updatedAt`.
 
+#### `RestoreHold`
+
+No personal data. Columns: `id`, `backupName`, `backupTakenAt`, `backupVersion`, `restoredAt`, `releasedAt`.
+
 #### `Role`
 
 No personal data. Columns: `id`, `tenantId`, `name`, `description`, `permissions`, `builtIn`, `systemKey`.

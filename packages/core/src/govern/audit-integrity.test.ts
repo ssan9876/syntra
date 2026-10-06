@@ -569,3 +569,27 @@ describe('integrityStatus', () => {
     expect(status.anchoring.statement).toContain('outside the database');
   });
 });
+
+describe('fileAnchorSink after a restore', () => {
+  const at = new Date('2026-10-05T02:00:00Z');
+  const tenant = '00000000-0000-4000-8000-000000000001';
+
+  it('treats the same checkpoint delivered twice as done', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'syntra-anchor-'));
+    const sink = fileAnchorSink(dir);
+    const payload = { tenantId: tenant, sequence: 7, hash: 'a'.repeat(64), anchoredAt: at };
+    expect(await sink.deliver(payload)).toBe(`anchor-${tenant}-7.json`);
+    expect(await sink.deliver(payload)).toBe(`anchor-${tenant}-7.json`);
+    expect(readdirSync(dir)).toEqual([`anchor-${tenant}-7.json`]);
+  });
+
+  it('keeps the old anchor and writes the rewound one beside it, named by hash', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'syntra-anchor-'));
+    const sink = fileAnchorSink(dir);
+    await sink.deliver({ tenantId: tenant, sequence: 7, hash: 'a'.repeat(64), anchoredAt: at });
+    const name = await sink.deliver({ tenantId: tenant, sequence: 7, hash: 'b'.repeat(64), anchoredAt: at });
+    expect(name).toBe(`anchor-${tenant}-7-${'b'.repeat(16)}.json`);
+    expect(readdirSync(dir).sort()).toEqual([`anchor-${tenant}-7-${'b'.repeat(16)}.json`, `anchor-${tenant}-7.json`]);
+    expect(JSON.parse(readFileSync(join(dir, `anchor-${tenant}-7.json`), 'utf8')).hash).toBe('a'.repeat(64));
+  });
+});
