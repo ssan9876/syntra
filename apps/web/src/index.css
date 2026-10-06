@@ -383,6 +383,25 @@
   }
 }
 
+/*
+ * Phone widths only (below `sm`). iOS Safari zooms the page into any field
+ * set under 16px and leaves it zoomed, so on a phone every control reads at
+ * 16px. Unlayered on purpose: it has to beat `text-sm` on a mono textarea.
+ */
+@media (max-width: 39.99rem) {
+  input:not([type='checkbox'], [type='radio'], [type='range']),
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+
+  .data-table thead th,
+  .data-table tbody td,
+  .data-table tbody th {
+    padding-inline: 0.75rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

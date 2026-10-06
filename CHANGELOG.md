@@ -8,6 +8,9 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+### Changed
+- Console on phones: fields are 16px so iOS no longer zooms on tap, count cards sit two per row, menu links are 44px tall, and side margins are 16px. Desktop layout is unchanged.
+
 ## [1.20.0] - 2026-10-04
 
 ### Added

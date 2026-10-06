@@ -54,7 +54,7 @@ export function StatCard({ label, value, tone = 'neutral', to, quietWhenZero }: 
         className={[
           // `.figure`: tabular, lining, tracked in. The count is the point of
           // the card, and a row of them has to align.
-          'figure text-2xl font-semibold tabular-nums',
+          'figure text-2xl font-semibold tabular-nums max-sm:text-xl',
           quiet ? 'text-muted' : TONES[tone],
         ].join(' ')}
       >
@@ -65,7 +65,7 @@ export function StatCard({ label, value, tone = 'neutral', to, quietWhenZero }: 
   );
 
   const shell =
-    'rounded-panel border border-border-subtle bg-surface px-4 py-3 transition-colors duration-150 ease-out-quart';
+    'rounded-panel border border-border-subtle bg-surface px-4 py-3 max-sm:px-3 max-sm:py-2 transition-colors duration-150 ease-out-quart';
 
   if (!to) return <div className={shell}>{body}</div>;
 
@@ -93,7 +93,7 @@ export function StatCard({ label, value, tone = 'neutral', to, quietWhenZero }: 
  */
 export function StatGrid({ children }: { children: ReactNode }) {
   return (
-    <div className="mb-5 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(10rem,1fr))]">
+    <div className="mb-5 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(10rem,1fr))] max-sm:grid-cols-2 max-sm:gap-2">
       {children}
     </div>
   );
