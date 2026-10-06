@@ -8,6 +8,8 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-10-06
+
 ### Added
 - **Administration → Backups**: restore points every hour (kept 48 hourly, 14 daily, 8 weekly), Back up now, download as a passphrase-encrypted file, upload, and restore, for `deployment.manage`. Docker Compose runs it as the new `backup` service, which holds the superuser connection the API does not.
 - A restore from the console backs up the current state first, keeps the API out of the database while it runs, rolls back by itself if the restore fails, and comes back on hold until somebody resumes it.
@@ -476,7 +478,8 @@ Not published. The changes below first install with 1.0.4.
 ### Added
 - First release: SCIM 2.0 target connector, compound AND/OR/NOT business rules, and the self-updater (`syntra-update`) with rollback.
 
-[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.20.0...HEAD
+[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.21.0...HEAD
+[1.21.0]: https://github.com/ssan9876/syntra/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/ssan9876/syntra/compare/v1.19.1...v1.20.0
 [1.19.1]: https://github.com/ssan9876/syntra/compare/v1.19.0...v1.19.1
 [1.19.0]: https://github.com/ssan9876/syntra/compare/v1.18.6...v1.19.0
