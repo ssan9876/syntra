@@ -1,0 +1,34 @@
+# The backup agent for the release layout: restore points every hour and
+# Administration -> Backups (Back up now, download, upload, restore).
+#
+# Installed by syntra-install and by syntra-update, and left disabled. To use
+# it, enable it and point the API at it:
+#
+#   systemctl enable --now syntra-backup-agent.service
+#   echo 'BACKUP_AGENT_URL=http://127.0.0.1:3100' >> /opt/syntra/shared/.env
+#   systemctl restart syntra
+#
+# It runs the PostgreSQL client tools inside PG_CONTAINER with `docker exec`,
+# as syntra-backup does, so it runs as root. It listens on loopback only, and
+# every request needs the token both sides derive from SESSION_SECRET.
+# Restore points land in /opt/syntra/restore-points, apart from
+# syntra-backup's /opt/syntra/backups: each prunes its own directory.
+[Unit]
+Description=Syntra backup agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/syntra/current/apps/api
+Environment=BACKUP_DIR=/opt/syntra/restore-points
+Environment=BACKUP_AGENT_HOST=127.0.0.1
+ExecStart=/usr/bin/env node --env-file-if-exists=/opt/syntra/shared/.env --import tsx src/backup-agent/main.ts
+User=root
+UMask=0077
+Restart=always
+RestartSec=5
+# A restore in progress is not something to cut short.
+TimeoutStopSec=300
+NoNewPrivileges=true

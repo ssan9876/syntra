@@ -70,6 +70,14 @@ spec:
     {{- with $np.extraApiEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    {{- if .Values.backup.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "backup") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 3100 }
+    {{- end }}
 ---
 # Migration and backup Jobs: no inbound traffic; outbound only to DNS and
 # Postgres. (On a first install the migration hook runs before this policy
@@ -86,11 +94,40 @@ spec:
       app.kubernetes.io/name: syntra
       app.kubernetes.io/instance: {{ .Release.Name }}
     matchExpressions:
-      - { key: app.kubernetes.io/component, operator: In, values: [migrate, backup] }
+      - { key: app.kubernetes.io/component, operator: In, values: [migrate] }
   policyTypes: [Ingress, Egress]
   egress:
     {{- include "syntra.np.dns" $np.dns | nindent 4 }}
     {{- include "syntra.np.cidrRule" (dict "rule" $np.postgres "except" $np.metadataExcept) | nindent 4 }}
+{{- if .Values.backup.enabled }}
+---
+# The backup agent: reached only by the API, and reaching only Postgres
+# (plus whatever backup.copyCommand needs, in extraBackupEgress).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "syntra.fullname" . }}-backup
+  labels:
+    {{- include "syntra.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "backup") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "syntra.selectorLabels" (dict "ctx" $ "component" "api") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 3100 }
+  egress:
+    {{- include "syntra.np.dns" $np.dns | nindent 4 }}
+    {{- include "syntra.np.cidrRule" (dict "rule" $np.postgres "except" $np.metadataExcept) | nindent 4 }}
+    {{- with $np.extraBackupEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
 {{- if .Values.apiRolloutRestart.enabled }}
 ---
 # The restart Job reaches only the Kubernetes API server. Its address is

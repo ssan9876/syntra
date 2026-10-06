@@ -171,9 +171,9 @@ fi
 say "installing the backup tool"
 if [ -f "$ROOT/releases/$VERSION/ops/syntra-backup" ]; then
   run install -m 0755 "$ROOT/releases/$VERSION/ops/syntra-backup" "$ROOT/bin/syntra-backup"
-  run mkdir -p "$ROOT/backups"
+  run mkdir -p "$ROOT/backups" "$ROOT/restore-points"
   # 0700: a backup is an unfiltered copy of every tenant's data.
-  run chmod 0700 "$ROOT/backups"
+  run chmod 0700 "$ROOT/backups" "$ROOT/restore-points"
   # syntra-backup-failed@.service is the OnFailure= handler both service units
   # name. It is NOT a timer and is never enabled: systemd instantiates it on
   # demand. Missing, the failing unit's OnFailure= would simply find nothing --
@@ -182,7 +182,7 @@ if [ -f "$ROOT/releases/$VERSION/ops/syntra-backup" ]; then
   # installed with the rest rather than left to be remembered.
   for unit in syntra-backup.service syntra-backup.timer \
               syntra-backup-verify.service syntra-backup-verify.timer \
-              syntra-backup-failed@.service; do
+              syntra-backup-failed@.service syntra-backup-agent.service; do
     if [ -f "$ROOT/releases/$VERSION/ops/systemd/$unit" ]; then
       run install -m 0644 "$ROOT/releases/$VERSION/ops/systemd/$unit" "/etc/systemd/system/$unit"
     fi
@@ -198,6 +198,9 @@ if [ -f "$ROOT/releases/$VERSION/ops/syntra-backup" ]; then
   say "  timers installed but NOT enabled. To start taking backups:"
   say "    systemctl enable --now syntra-backup.timer"
   say "    systemctl enable --now syntra-backup-verify.timer"
+  say "  For restore points and Administration -> Backups, instead of the timers:"
+  say "    systemctl enable --now syntra-backup-agent.service"
+  say "    echo 'BACKUP_AGENT_URL=http://127.0.0.1:3100' >> $ROOT/shared/.env && systemctl restart $SERVICE"
 else
   say "  (no ops/syntra-backup in this tree -- deploy a release that has one)"
 fi

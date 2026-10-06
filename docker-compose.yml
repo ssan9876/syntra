@@ -139,7 +139,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    command: ['pnpm', '--filter', '@syntra/api', 'exec', 'tsx', 'src/backup-agent/main.ts']
+    working_dir: /app/apps/api
+    command: ['node', '--import', 'tsx', 'src/backup-agent/main.ts']
     environment:
       SUPERUSER_DATABASE_URL: postgresql://syntra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/syntra
       DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}@postgres:5432/syntra

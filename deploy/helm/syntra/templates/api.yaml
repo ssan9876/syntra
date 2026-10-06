@@ -111,6 +111,9 @@ spec:
             {{- end }}
             {{- include "syntra.secretEnv" (dict "name" "DATABASE_URL" "secret" $secret "key" .Values.secretKeys.databaseUrl) | nindent 12 }}
             {{- include "syntra.secretEnv" (dict "name" "SESSION_SECRET" "secret" $secret "key" .Values.secretKeys.sessionSecret) | nindent 12 }}
+            {{- if .Values.backup.enabled }}
+            - { name: BACKUP_AGENT_URL, value: {{ printf "http://%s-backup:3100" $fullname | quote }} }
+            {{- end }}
             {{- include "syntra.secretEnv" (dict "name" "MASTER_KEY" "secret" $secret "key" .Values.secretKeys.masterKey) | nindent 12 }}
             - { name: MAIL_TRANSPORT, value: {{ .Values.mail.transport | quote }} }
             {{- with .Values.mail.from }}

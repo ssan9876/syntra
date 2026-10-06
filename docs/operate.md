@@ -437,9 +437,15 @@ not the same bucket or share as the dumps.
 
 ### Backups from the console
 
-**Administration → Backups**, with `deployment.manage`. On Docker Compose the
-`backup` service provides it; the page says `No backup service configured`
-where `BACKUP_AGENT_URL` is not set.
+**Administration → Backups**, with `deployment.manage`. The backup agent
+provides it; the page says `No backup service configured` where the API has
+no `BACKUP_AGENT_URL`.
+
+| Install | Agent |
+|---|---|
+| Docker Compose | The `backup` service. On by default. |
+| Helm | `backup.enabled=true`. See the chart README. |
+| Release layout (systemd) | `syntra-backup-agent.service`, installed and left disabled. Enable it, add `BACKUP_AGENT_URL=http://127.0.0.1:3100` to `shared/.env`, and restart `syntra`. It runs the client tools in `PG_CONTAINER`, keeps restore points in `/opt/syntra/restore-points`, and replaces `syntra-backup.timer`: run one or the other. |
 
 | Action | What happens |
 |---|---|
@@ -826,16 +832,14 @@ cluster. Choose one of these:
    cross-region snapshot copies covers what `pg_dump` cannot. It still does
    not cover `MASTER_KEY`, so keep that in your secret manager, backed up
    separately.
-2. **The chart's backup CronJob** (`backup.enabled=true`). It applies the
-   same checks as `syntra-backup create`: `.partial` then atomic rename,
-   `0600`, `PGDMP` plus a non-empty TABLE DATA check, the salted master-key
-   fingerprint, and retention. It writes the same layout to a
-   PersistentVolume. See the chart README. It needs a role that bypasses RLS,
-   supplied as `BACKUP_DATABASE_URL`. As `syntra_app`, `pg_dump` fails with
-   "query would be affected by row-level security policy" and the job fails.
-   Copy the PVC off-cluster yourself.
+2. **The chart's backup agent** (`backup.enabled=true`): restore points and
+   [Backups from the console](#backups-from-the-console), on a
+   PersistentVolume, with the same checks as `syntra-backup create`. See the
+   chart README. It needs a role that bypasses RLS, supplied as
+   `BACKUP_DATABASE_URL`, over a direct connection. Copy the PVC off-cluster
+   yourself, or set `backup.copyCommand`.
 
-To restore from a CronJob backup:
+To restore one by hand, without the console:
 
 1. Scale the API to zero: `kubectl scale deploy/<release>-api --replicas=0`.
 2. Start a pod with the `postgres` image, mounting the backup PVC and the
