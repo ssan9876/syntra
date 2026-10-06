@@ -576,7 +576,7 @@ jobs:
 
       - name: Logs
         if: failure()
-        run: docker compose -p syntra-drill --env-file "$RUNNER_TEMP/drill.env" logs --tail 200 api backup
+        run: docker compose -p syntra-drill --env-file "$RUNNER_TEMP/drill.env" logs --timestamps api backup postgres
 
   # ---------------------------------------------------------------------------
   # The Helm chart. Nothing else here renders it, so a template error -- a

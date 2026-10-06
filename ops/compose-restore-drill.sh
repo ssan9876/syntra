@@ -18,7 +18,16 @@ ENV_FILE="${1:?usage: compose-restore-drill.sh <env-file> [project]}"
 PROJECT="${2:-syntra-drill}"
 compose() { docker compose -p "$PROJECT" --env-file "$ENV_FILE" "$@"; }
 log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
-die() { printf 'drill failed: %s\n' "$*" >&2; exit 1; }
+die() {
+  printf 'drill failed: %s\n' "$*" >&2
+  # Enough to tell "exited and was not restarted" from "restarted and hung".
+  local id
+  id="$(compose ps -aq api 2>/dev/null)" && [ -n "$id" ] && docker inspect -f \
+    'api: status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}} started={{.State.StartedAt}} finished={{.State.FinishedAt}} health={{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+    "$id" >&2 || true
+  compose ps -a >&2 || true
+  exit 1
+}
 psql_q() { compose exec -T postgres psql -U syntra -d syntra -tAc "$1" | tr -d '\r'; }
 
 value() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
