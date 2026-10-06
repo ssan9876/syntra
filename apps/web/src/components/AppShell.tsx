@@ -61,7 +61,7 @@ export function AppShell({
             // `min-h` and wrap rather than a fixed height: at phone widths the
             // three header actions do not fit beside the wordmark, and a row
             // that cannot wrap pushes the whole page sideways instead.
-            'flex min-h-14 w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-1 sm:px-6',
+            'flex min-h-14 w-full flex-wrap items-center justify-between gap-x-2 gap-y-1 px-4 py-1 sm:gap-x-4 sm:px-6',
             'mx-auto',
             sidebar ? 'max-w-[var(--shell-max)]' : 'max-w-7xl',
           ].join(' ')}
@@ -74,14 +74,14 @@ export function AppShell({
             {session?.mayElevate && (
               <Link
                 to={session.scope === 'admin' ? '/admin' : '/elevate'}
-                className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
+                className="rounded-control px-2 py-1.5 text-sm font-medium text-muted sm:px-2.5 transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
               >
                 {t('shell.administration')}
               </Link>
             )}
             <Link
               to="/security"
-              className="rounded-control px-2.5 py-1.5 text-sm font-medium text-muted transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
+              className="rounded-control px-2 py-1.5 text-sm font-medium text-muted sm:px-2.5 transition-colors duration-150 ease-out-quart hover:bg-surface-2 hover:text-ink"
             >
               {t('shell.security')}
             </Link>
@@ -109,7 +109,7 @@ export function AppShell({
       {sidebar ? (
         <div className="mx-auto flex w-full max-w-[var(--shell-max)] flex-1 items-stretch max-lg:flex-col">
           {sidebar}
-          <main className="min-w-0 flex-1 px-6 py-7 lg:px-8">{children}</main>
+          <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 sm:py-7 lg:px-8">{children}</main>
         </div>
       ) : (
         <>

@@ -73,7 +73,7 @@ export function GovernSnapshotDetailPage() {
         <div className="space-y-6">
           {/* The uncomfortable numbers come FIRST, above the totals. */}
           <Panel title="Unexplained">
-            <div className="grid grid-cols-3 gap-4 p-4">
+            <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-3">
               <div>
                 <p className="figure text-2xl font-semibold text-ink">{snapshot.unattributableCount}</p>
                 <p className="text-muted">holdings with no explaining source</p>

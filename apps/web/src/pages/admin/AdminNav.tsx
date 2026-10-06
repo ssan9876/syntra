@@ -261,7 +261,7 @@ export function AdminNav() {
         aria-expanded={menuOpen}
         aria-controls="admin-nav-groups"
         onClick={() => setMenuOpen((open) => !open)}
-        className="flex w-full items-center gap-2.5 px-6 py-3 text-sm font-semibold text-ink lg:hidden"
+        className="flex w-full items-center gap-2.5 px-6 py-3 text-sm font-semibold text-ink max-sm:px-4 lg:hidden"
       >
         {current ? <Icon name={current.icon} className="size-4 text-primary" /> : null}
         <span className="flex-1 text-left">{current?.label ?? 'Menu'}</span>
@@ -273,7 +273,7 @@ export function AdminNav() {
       </button>
       <div
         id="admin-nav-groups"
-        className={`px-3 py-5 max-lg:px-6 max-lg:pt-0 max-lg:pb-4 ${menuOpen ? '' : 'max-lg:hidden'}`}
+        className={`px-3 py-5 max-lg:px-6 max-lg:pt-0 max-lg:pb-4 max-sm:px-4 ${menuOpen ? '' : 'max-lg:hidden'}`}
       >
         {groups.length > 0 && (
           <NavLink to={OVERVIEW.to} end className={({ isActive }) => linkClass(isActive)}>
@@ -351,7 +351,9 @@ export function AdminNav() {
 
 function linkClass(isActive: boolean) {
   return [
-    'group flex items-center gap-2.5 rounded-control px-3 py-1.5 text-sm',
+    // A finger needs a taller row than a pointer: 44px below `lg`, where the
+    // rail is a touch menu.
+    'group flex items-center gap-2.5 rounded-control px-3 py-1.5 text-sm max-lg:min-h-11',
     'transition-colors duration-150 ease-out-quart',
     isActive
       ? // The selected item is the only place weight and colour are spent.
