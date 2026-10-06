@@ -47,6 +47,17 @@ export async function createRestoreHold(hold: {
   });
 }
 
+/**
+ * The newest hold row, released or not. A new one means a restore happened,
+ * whether or not somebody has already resumed it.
+ */
+export async function findLatestRestoreHold(client: Client = prisma): Promise<RestoreHoldRow | null> {
+  return client.restoreHold.findFirst({
+    orderBy: { restoredAt: 'desc' },
+    select: { id: true, backupName: true, backupTakenAt: true, backupVersion: true, restoredAt: true },
+  });
+}
+
 /** Releases every unreleased hold and returns how many there were. */
 export async function releaseAllRestoreHolds(now: Date = new Date()): Promise<number> {
   const { count } = await prisma.restoreHold.updateMany({

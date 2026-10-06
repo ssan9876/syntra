@@ -197,6 +197,11 @@ export const WEBHOOK_EVENT_GROUPS = {
       'deployment.update_requested',
       'deployment.rollback_requested',
       'deployment.restore_resumed',
+      'deployment.backup_requested',
+      'deployment.backup_deleted',
+      'deployment.backup_downloaded',
+      'deployment.backup_uploaded',
+      'deployment.restore_requested',
       // An identity provider that starts creating accounts is a configuration
       // change somebody should be able to watch, and the first sign of a
       // misconfigured provisioning rule is a burst of these.

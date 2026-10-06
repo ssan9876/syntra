@@ -33,6 +33,7 @@ const PersonDetailPage = page(() => import('./PersonDetailPage.js'), 'PersonDeta
 const ActivityPage = page(() => import('./ActivityPage.js'), 'ActivityPage');
 const OperationsPage = page(() => import('./OperationsPage.js'), 'OperationsPage');
 const UpdatesPage = page(() => import('./UpdatesPage.js'), 'UpdatesPage');
+const BackupsPage = page(() => import('./BackupsPage.js'), 'BackupsPage');
 const SourcesPage = page(() => import('./SourcesPage.js'), 'SourcesPage');
 const PersonSourceDetailPage = page(() => import('./PersonSourceDetailPage.js'), 'PersonSourceDetailPage');
 const PersonImportRunDetailPage = page(() => import('./PersonImportRunDetailPage.js'), 'PersonImportRunDetailPage');
@@ -216,6 +217,7 @@ export function AdminApp() {
             <Route path="webhooks" element={<Navigate to="/admin/settings?tab=webhooks" replace />} />
             <Route path="incidents" element={<Navigate to="/admin/activity?tab=attention" replace />} />
             <Route path="updates" element={<UpdatesPage />} />
+            <Route path="backups" element={<BackupsPage />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
           </Routes>
           </Suspense>

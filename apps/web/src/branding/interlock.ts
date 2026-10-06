@@ -21,6 +21,7 @@ export const CONSOLE_ICONS = {
   activity: { outline: 'M2 13h4l3-8 5 15 3-7h5', detail: 'M17 13h5' },
   settings: { outline: 'M9 2h6l.5 3 2 1.2 2.6-1 2 3.6-2.1 2.1v2.2l2.1 2.1-2 3.6-2.6-1-2 1.2-.5 3H9l-.5-3-2-1.2-2.6 1-2-3.6L4 13.1v-2.2L1.9 8.8l2-3.6 2.6 1 2-1.2.5-3Z', detail: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z' },
   updates: { outline: 'M4 17v4h16v-4M12 2v12', detail: 'M7 9l5 5 5-5' },
+  backups: { outline: 'M4 5c0-1.7 3.6-3 8-3s8 1.3 8 3v14c0 1.7-3.6 3-8 3s-8-1.3-8-3V5ZM4 5c0 1.7 3.6 3 8 3s8-1.3 8-3', detail: 'M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3' },
   privacy: { outline: 'M5 10h14v12H5zM8 10V6a4 4 0 0 1 8 0v4', detail: 'M12 15v3' },
   operations: { outline: 'M3 19a10 10 0 1 1 18 0H3ZM6 14h.01M12 6h.01M18 14h.01', detail: 'M12 16l4-6' },
   overview: { outline: 'M3 3h7v8H3zM3 15h7v6H3zM14 11h7v10h-7z', detail: 'M14 3h7v4h-7z' },

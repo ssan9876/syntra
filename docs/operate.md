@@ -435,6 +435,53 @@ Keep these as well. None is in the database:
 Keep secrets apart from the backups: a password manager or a secrets vault,
 not the same bucket or share as the dumps.
 
+### Backups from the console
+
+**Administration → Backups**, with `deployment.manage`. On Docker Compose the
+`backup` service provides it; the page says `No backup service configured`
+where `BACKUP_AGENT_URL` is not set.
+
+| Action | What happens |
+|---|---|
+| Restore points | One every `BACKUP_INTERVAL_HOURS` (default 1), on the hour. Kept: every one from the last 48 hours, then one a day for 14 days, then one a week for 8 weeks. |
+| Back up now | A manual backup. The 10 newest manual, uploaded and pre-restore backups are kept apart from the schedule (`BACKUP_KEEP_MANUAL`). |
+| Download | A `.syntra-backup` file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from your passphrase (scrypt, at least 12 characters). Recorded as `deployment.backup_downloaded`. |
+| Upload | The same file and passphrase. A wrong passphrase, a cut-short file and a damaged one are each refused by name. |
+| Restore | Type the backup's name. Refused for a backup taken under a different master key (`Key: Different`) or on a newer release. |
+
+A restore, in order:
+
+1. The current state is backed up (`syntra-<stamp>-before`). An empty
+   database is not.
+2. Every API process restarts and comes back
+   [on hold](#after-a-restore-background-work-is-paused).
+3. The application role is locked out (`NOLOGIN`) and its connections ended.
+4. Every schema is dropped, the backup is restored, and rows are counted.
+5. The restored database is put on hold, the role let back in, and
+   migrations applied.
+6. Every API process restarts once more, so nothing cached from before the
+   restore survives it.
+
+If step 4 or 5 fails, the backup from step 1 is put back the same way and
+the page says `Restore failed`. Everybody is signed out. Sign in, reconcile,
+then select **Resume**.
+
+**Restoring onto a new server:** install Syntra with the same `MASTER_KEY`
+(or Vault/KMS key), sign in as the first Owner, upload the file, restore it.
+
+Backups live in the `syntra-backups` volume, apart from `syntra-data`. A
+backup on the same host is lost with it: set `BACKUP_COPY_COMMAND` (run in
+the `backup` container, the backup directory as `$1`) or copy the volume off
+the host on a schedule of your own.
+
+| Variable | Default | |
+|---|---|---|
+| `BACKUP_INTERVAL_HOURS` | `1` | `0` turns restore points off |
+| `BACKUP_KEEP_HOURLY` / `_DAILY` / `_WEEKLY` | `48` / `14` / `8` | |
+| `BACKUP_KEEP_MANUAL` | `10` | Back up now, uploads, pre-restore |
+| `BACKUP_COPY_COMMAND` | unset | Shell command after each backup |
+| `BACKUP_AGENT_TOKEN` | derived from `SESSION_SECRET` | Set on both `api` and `backup` |
+
 `syntra-backup` takes care of the first and **detects** a mismatch in the
 second. It does not fix one: keeping the key is still yours.
 

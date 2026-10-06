@@ -95,6 +95,14 @@ export const PARAM_KINDS: ReadonlyMap<string, Kind | StaticParam | DerivedParam>
     why: 'A contract is addressed by its position inside the person the route\'s :id names; that :id is the tenant boundary.',
   }],
   ['sessions/:sessionId', 'session'],
+  ['backups/:name', {
+    static: 'syntra-20200101T000000Z',
+    why: 'A backup of the whole installation, named by when it was taken and held by the backup agent on its own volume; no tenant has rows in it to cross.',
+  }],
+  ['jobs/:id', {
+    static: '00000000-0000-4000-8000-000000000000',
+    why: "A backup agent job, held in the agent's memory and volume, not a tenant row.",
+  }],
   ['portal/sessions/:id', 'session'],
   ['tokens/:tokenId', 'token'],
   ['factors/:type', {
@@ -285,6 +293,8 @@ export const NO_ID_INPUT: ReadonlyMap<string, string> = new Map<string, string>(
   ['POST /api/admin/update', 'Deployment update; installation-wide, no tenant data.'],
   ['POST /api/admin/update/rollback', 'Deployment rollback; installation-wide, no tenant data.'],
   ['POST /api/admin/restore-hold/resume', 'Resumes background work after a restore; installation-wide, no tenant data.'],
+  ['POST /api/admin/backups', 'Takes a backup of the whole installation; takes no id.'],
+  ['POST /api/admin/backups/upload', 'Receives a backup file of the whole installation; references no saved object.'],
   ['POST /api/admin/sources/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/test', 'Tests an unsaved connection description; references no saved object.'],
   ['POST /api/admin/targets/connector-documents/validate', 'Checks an unsaved connector document against the schema; references no saved object.'],

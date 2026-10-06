@@ -9,6 +9,11 @@ message, shown on the GitHub release and in Administration → Updates.
 ## [Unreleased]
 
 ### Added
+- **Administration → Backups**: restore points every hour (kept 48 hourly, 14 daily, 8 weekly), Back up now, download as a passphrase-encrypted file, upload, and restore, for `deployment.manage`. Docker Compose runs it as the new `backup` service, which holds the superuser connection the API does not.
+- A restore from the console backs up the current state first, keeps the API out of the database while it runs, rolls back by itself if the restore fails, and comes back on hold until somebody resumes it.
+- A running API restarts when it sees a restore, so nothing cached from before it survives.
+
+### Added
 - After `syntra-backup restore`, the installation starts on hold: sign-in and the console work, but scheduled runs, queued jobs and writes to target systems wait until somebody with `deployment.manage` selects **Resume** on the console banner. Recorded as `deployment.restore_resumed`. `ops/restore-hold.sql` does the same for Compose and Helm restores.
 - `syntra-backup restore` refuses a backup taken on a newer release, and migrates an older one before the service starts.
 

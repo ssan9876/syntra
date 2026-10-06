@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isIpRangeUsable } from './policy/ip-match.js';
 import { parseKeyManagement, type KeyManagementConfig } from './vault/key-management.js';
+import { backupAgentToken } from './backup/agent-token.js';
 
 /**
  * An empty variable is an unset one, for the mail settings.
@@ -105,6 +106,13 @@ const schema = z.object({
    * own schema comment calls anchoring the only protection against them.
    */
   GOVERN_ANCHOR_DIR: z.string().min(1).optional(),
+  /**
+   * The backup agent (apps/api/src/backup-agent), e.g. `http://backup:3100`.
+   * Unset: the console's Backups page says no backup service is configured.
+   * BACKUP_AGENT_TOKEN is optional; see `backupAgentToken`.
+   */
+  BACKUP_AGENT_URL: blankIsUnset(z.string().url()),
+  BACKUP_AGENT_TOKEN: blankIsUnset(z.string().min(32)),
   GOVERN_ANCHOR_EMAIL: z.string().email().optional(),
   // Password attempts per minute per tenant per IP. Deployment-tuned rather
   // than fixed: a busy shared-NAT site needs headroom, and an end-to-end suite
@@ -412,6 +420,8 @@ export interface Config {
   governCheckpointKey: Buffer | null;
   governCheckpointKeyId: string;
   governAnchorDir: string | null;
+  /** Null when BACKUP_AGENT_URL is unset. */
+  backupAgent: { url: string; token: string } | null;
   governAnchorEmail: string | null;
   /** false, or a comma-separated list of trusted proxies. Never a hop count. */
   trustProxy: false | string;
@@ -496,6 +506,9 @@ export function loadConfig(
         : Buffer.from(v.GOVERN_CHECKPOINT_KEY, 'base64'),
     governCheckpointKeyId: v.GOVERN_CHECKPOINT_KEY_ID,
     governAnchorDir: v.GOVERN_ANCHOR_DIR ?? null,
+    backupAgent: v.BACKUP_AGENT_URL
+      ? { url: v.BACKUP_AGENT_URL.replace(/\/+$/, ''), token: backupAgentToken(v)! }
+      : null,
     governAnchorEmail: v.GOVERN_ANCHOR_EMAIL ?? null,
     authRateLimitMax: v.AUTH_RATE_LIMIT_MAX,
     authRateLimitTenantMax:

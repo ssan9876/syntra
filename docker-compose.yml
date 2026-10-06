@@ -80,6 +80,10 @@ services:
       # would believe X-Forwarded-For from any client. See TRUST_PROXY's own
       # documentation in packages/core/src/config.ts and .env.example.
       TRUST_PROXY: '172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16'
+      # The `backup` service below. The token is derived from SESSION_SECRET
+      # on both sides unless BACKUP_AGENT_TOKEN is set.
+      BACKUP_AGENT_URL: http://backup:3100
+      BACKUP_AGENT_TOKEN: ${BACKUP_AGENT_TOKEN:-}
     healthcheck:
       # READINESS, not /health: a liveness check that only proves the process
       # is listening would report the api "healthy" while it cannot reach
@@ -125,5 +129,56 @@ services:
       api:
         condition: service_healthy
 
+  # Restore points, Back up now, downloads, uploads and restores from the
+  # console (Administration -> Backups). The API image, run as the backup
+  # agent: it holds the superuser connection the API deliberately does not,
+  # and the backup volume. It publishes no port; only `api` reaches it.
+  backup:
+    restart: unless-stopped
+    image: ghcr.io/ssan9876/syntra-api:${SYNTRA_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ['pnpm', '--filter', '@syntra/api', 'exec', 'tsx', 'src/backup-agent/main.ts']
+    environment:
+      SUPERUSER_DATABASE_URL: postgresql://syntra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/syntra
+      DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD:?set SYNTRA_APP_PASSWORD}@postgres:5432/syntra
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      BACKUP_AGENT_TOKEN: ${BACKUP_AGENT_TOKEN:-}
+      # Fingerprinted into each manifest, never written out: the same key
+      # settings the api service has, so a restore can tell a backup sealed
+      # under a different key.
+      MASTER_KEY: ${MASTER_KEY:-}
+      MASTER_KEY_PROVIDER: ${MASTER_KEY_PROVIDER:-local}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TRANSIT_KEY: ${VAULT_TRANSIT_KEY:-}
+      VAULT_TRANSIT_MOUNT: ${VAULT_TRANSIT_MOUNT:-transit}
+      AWS_KMS_KEY_ID: ${AWS_KMS_KEY_ID:-}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-1}
+      BACKUP_KEEP_HOURLY: ${BACKUP_KEEP_HOURLY:-48}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-14}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-8}
+      BACKUP_KEEP_MANUAL: ${BACKUP_KEEP_MANUAL:-10}
+      BACKUP_COPY_COMMAND: ${BACKUP_COPY_COMMAND:-}
+      NODE_ENV: production
+    volumes:
+      - syntra-backups:/backups
+    # Its own check, not the image's /health/ready: the agent serves 3100, and
+    # answering at all -- 401 without the token -- is what alive means here.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:3100/v1/status').then(r=>process.exit(r.status===401||r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   syntra-data:
+  # Kept apart from syntra-data: a backup on the database's own volume is
+  # lost with it. Copy it off the host too (BACKUP_COPY_COMMAND).
+  syntra-backups:
