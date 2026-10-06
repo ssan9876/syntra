@@ -536,6 +536,49 @@ jobs:
           cache-to: type=gha,mode=max,scope=syntra-web
 
   # ---------------------------------------------------------------------------
+  # A real restore, through the Compose stack and the `backup` service: back
+  # up, change something, restore, and check what came back, that the API
+  # restarted, and that it came back held. Nothing else here runs pg_restore
+  # against a live stack.
+  # ---------------------------------------------------------------------------
+  restore-drill:
+    name: restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build api image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: false
+          load: true
+          tags: ghcr.io/ssan9876/syntra-api:drill
+          cache-from: type=gha,scope=syntra-api
+
+      - name: Drill
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "SYNTRA_APP_PASSWORD=$(openssl rand -hex 16)"
+            echo "SESSION_SECRET=$(openssl rand -base64 32)"
+            echo "MASTER_KEY=$(openssl rand -base64 32)"
+            echo "PUBLIC_URL=http://localhost:8080"
+            echo "SMTP_URL=smtp://127.0.0.1:2525"
+            echo "SYNTRA_VERSION=drill"
+            echo "BACKUP_INTERVAL_HOURS=0"
+          } > "$RUNNER_TEMP/drill.env"
+          bash ops/compose-restore-drill.sh "$RUNNER_TEMP/drill.env" syntra-drill
+
+      - name: Logs
+        if: failure()
+        run: docker compose -p syntra-drill --env-file "$RUNNER_TEMP/drill.env" logs --tail 200 api backup
+
+  # ---------------------------------------------------------------------------
   # The Helm chart. Nothing else here renders it, so a template error -- a
   # bad indent, a value renamed in values.yaml but not in a template -- would
   # otherwise surface as `helm install` failing on somebody's cluster, which

@@ -12,6 +12,7 @@ import {
   readiness,
   redactReport,
   insecureDefaults,
+  keyFingerprint,
   mailSinkWarning,
   mailTransport,
   type Config,
@@ -62,6 +63,7 @@ import { registerAdminEmailDomainRoutes } from './routes/admin/email-domains.js'
 import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminRestoreHoldRoutes } from './routes/admin/restore-hold.js';
+import { registerAdminBackupRoutes } from './routes/admin/backups.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
@@ -552,6 +554,11 @@ export async function buildApp(
     ...(options.scheduler ? { scheduler: options.scheduler } : {}),
   });
   await app.register(registerAdminRestoreHoldRoutes, { prefix: '/api/admin' });
+  await app.register(registerAdminBackupRoutes, {
+    prefix: '/api/admin',
+    agent: config.backupAgent,
+    fingerprint: keyFingerprint(process.env),
+  });
   await app.register(registerAdminUpdateRoutes, {
     prefix: '/api/admin',
     releaseRepo: config.releaseRepo,

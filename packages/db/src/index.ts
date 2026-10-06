@@ -1,5 +1,5 @@
 export { prisma } from './client.js';
-export { createRestoreHold, findActiveRestoreHold, releaseAllRestoreHolds } from './restore-hold.js';
+export { createRestoreHold, findActiveRestoreHold, findLatestRestoreHold, releaseAllRestoreHolds } from './restore-hold.js';
 export type { RestoreHoldRow } from './restore-hold.js';
 export { withTenant, TenantRetiredError, TENANT_DELETED_STATUS } from './with-tenant.js';
 export type { WithTenantOptions } from './with-tenant.js';

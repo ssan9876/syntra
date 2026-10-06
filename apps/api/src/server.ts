@@ -5,6 +5,7 @@ import {
   keyManagementWarnings,
   loadConfig,
   mailSinkWarning,
+  latestRestore,
   masterKeyProviderFor,
   waitForRestoreRelease,
 } from '@syntra/core';
@@ -64,10 +65,42 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => void shutdown(signal));
 }
 
-// Stops the restore-hold wait on shutdown. Registered before listen: Fastify
-// refuses new hooks once it is listening.
+// Stops the restore-hold wait and watch on shutdown. Registered before
+// listen: Fastify refuses new hooks once it is listening.
 const held = new AbortController();
 app.addHook('onClose', async () => { held.abort(); });
+
+// A RESTORE WHILE THIS PROCESS RUNS restarts it. Its caches hold the database
+// as it was -- an OIDC provider cached before the restore is still "fresh"
+// against the restored, LOWER generation counter -- and its scheduler would
+// otherwise carry on over a database being replaced. The backup agent writes
+// a hold before it touches anything and waits 20 seconds; this checks every
+// 5. The supervisor (Compose, systemd, Kubernetes) starts it again, held.
+//
+// The NEWEST hold row, released or not: a restore resumed within seconds of
+// finishing is still a restore this process's caches did not see.
+let knownRestore: string | null | undefined = await latestRestore().then(
+  (hold) => hold?.id ?? null,
+  () => undefined,
+);
+const restoreWatch = setInterval(() => {
+  latestRestore().then(
+    (hold) => {
+      const id = hold?.id ?? null;
+      if (knownRestore !== undefined && hold && id !== knownRestore) {
+        clearInterval(restoreWatch);
+        app.log.warn({ backupName: hold.backupName }, `restarting: restore of ${hold.backupName} detected`);
+        void shutdown('restore').finally(() => process.exit(0));
+        return;
+      }
+      knownRestore = id;
+    },
+    // Unreachable mid-restore, while the agent has the role locked out.
+    () => undefined,
+  );
+}, 5_000);
+restoreWatch.unref();
+held.signal.addEventListener('abort', () => clearInterval(restoreWatch));
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 

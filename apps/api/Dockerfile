@@ -55,6 +55,11 @@ ENV NODE_ENV=production
 # Until then the tree is copied whole, on purpose.
 COPY --from=build /app /app
 
+# The backup agent runs from this image (the `backup` service in
+# docker-compose.yml): it needs the PostgreSQL 16 client tools, and a
+# /backups owned by `node`, so a named volume mounted there starts writable.
+RUN apk add --no-cache postgresql16-client   && mkdir -p /backups   && chown node:node /backups
+
 # Not root. Nothing in this container writes to the tree it runs from, and a
 # process that does not need to own its own source should not be able to
 # rewrite it -- an RCE in an XML or SCIM parser then cannot persist itself

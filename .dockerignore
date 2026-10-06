@@ -19,3 +19,5 @@ docs
 e2e
 infra
 ops
+# Read by the backup agent when it restores (apps/api/src/backup-agent/restore.ts).
+!ops/restore-hold.sql

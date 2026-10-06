@@ -42,6 +42,9 @@
       "name": "Automate"
     },
     {
+      "name": "Backups"
+    },
+    {
       "name": "Break-glass"
     },
     {
@@ -5768,6 +5771,418 @@
         },
         "responses": {
           "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups": {
+      "get": {
+        "operationId": "getBackups",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "List restore points and the backup service status",
+        "description": "`configured` is false when BACKUP_AGENT_URL is not set. Each backup carries `key` (`match`, `mismatch`, `unknown`) against the running master key and `versionCheck` (`ok`, `newer`, `unknown`).\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postBackups",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Take a backup now",
+        "description": "Accepted, not finished; poll `GET /api/admin/backups/jobs/{id}`. `409 backup-busy` while another backup or restore runs.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/{name}": {
+      "delete": {
+        "operationId": "deleteBackupsByName",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Delete a backup",
+        "description": "Requires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/{name}/download": {
+      "post": {
+        "operationId": "postBackupsByNameDownload",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Download a backup, encrypted under a passphrase",
+        "description": "The body is the backup file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from the passphrase with scrypt. The same passphrase is needed to upload it. Recorded as `deployment.backup_downloaded`.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "passphrase": {
+                    "type": "string",
+                    "minLength": 12,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "passphrase"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/{name}/restore": {
+      "post": {
+        "operationId": "postBackupsByNameRestore",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Restore a backup over the whole installation",
+        "description": "Accepted, not finished. A backup of the current state is taken first; the API restarts twice and comes back held until somebody resumes it. `422 key-mismatch` for a backup taken under a different master key, `422 backup-newer` for one from a newer release.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/jobs/{id}": {
+      "get": {
+        "operationId": "getBackupsJobsById",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Read a backup or restore job",
+        "description": "Requires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/upload": {
+      "post": {
+        "operationId": "postBackupsUpload",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Upload a backup file",
+        "description": "Send the file as `application/octet-stream` with the passphrase in `X-Backup-Passphrase`. Stored as an uploaded restore point; `422 backup-wrong-passphrase`, `backup-incomplete` or `backup-damaged` when it cannot be read.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
             "description": "Success.",
             "content": {
               "application/json": {

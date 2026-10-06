@@ -1,5 +1,6 @@
 import {
   findActiveRestoreHold,
+  findLatestRestoreHold,
   releaseAllRestoreHolds,
   type RestoreHoldRow,
   type TenantClient,
@@ -23,6 +24,11 @@ export type RestoreHold = RestoreHoldRow;
  */
 export function activeRestoreHold(tx?: TenantClient): Promise<RestoreHold | null> {
   return findActiveRestoreHold(tx);
+}
+
+/** The newest restore, resumed or not; see `findLatestRestoreHold`. */
+export function latestRestore(): Promise<RestoreHold | null> {
+  return findLatestRestoreHold();
 }
 
 /**

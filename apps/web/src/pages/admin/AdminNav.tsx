@@ -110,6 +110,7 @@ export const GROUPS: NavGroup[] = [
       // `deployment.manage`, not `tenant.manage`: this updates the
       // installation every tenant shares, not one tenant's configuration.
       { to: '/admin/updates', label: 'Updates', permission: 'deployment.manage', icon: 'updates' },
+      { to: '/admin/backups', label: 'Backups', permission: 'deployment.manage', icon: 'backups' },
     ],
   },
 ];
