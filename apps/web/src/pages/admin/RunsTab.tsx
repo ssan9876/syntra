@@ -117,7 +117,7 @@ export function RunsTab() {
           )}
 
           {loaded && rows.length > 0 && (
-            <Table stickyHeader label="Runs">
+            <Table stackOnPhone stickyHeader label="Runs">
               <thead>
                 <tr>
                   <th scope="col">Started</th>

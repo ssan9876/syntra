@@ -401,7 +401,7 @@ export function AccountsTab() {
           )}
 
           {users.length > 0 && (
-            <Table stickyHeader label="Accounts" density={density}>
+            <Table stackOnPhone stickyHeader label="Accounts" density={density}>
               <thead>
                 <tr>
                   <th scope="col">Name</th>

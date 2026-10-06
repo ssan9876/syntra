@@ -224,7 +224,7 @@ export function GroupsPage() {
               hand-written list here carried its own padding, which is exactly
               how the console came to have several row heights. */}
           {groups.length > 0 && (
-            <Table stickyHeader label="Groups">
+            <Table stackOnPhone stickyHeader label="Groups">
               <thead>
                 <tr>
                   <th scope="col">Name</th>

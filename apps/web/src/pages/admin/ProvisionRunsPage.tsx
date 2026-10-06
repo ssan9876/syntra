@@ -168,7 +168,7 @@ export function ProvisionRunsPage() {
           )}
 
           {!loading && runs.length > 0 && (
-            <Table stickyHeader label="Provisioning runs">
+            <Table stackOnPhone stickyHeader label="Provisioning runs">
               <thead>
                 <tr>
                   <th scope="col">
