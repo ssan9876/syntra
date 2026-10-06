@@ -68,7 +68,9 @@ export function Table({
     <div
       ref={ref}
       className={[
-        'w-full overflow-x-auto',
+        // Positioned, so absolutely placed content (an sr-only header label) is
+        // clipped by this scroller instead of widening the page.
+        'relative w-full overflow-x-auto',
         stackOnPhone ? 'data-table-stack-scope' : '',
         stickyHeader ? 'data-table-scroll max-h-[min(70vh,48rem)] overflow-y-auto' : '',
       ].join(' ')}
