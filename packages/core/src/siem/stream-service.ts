@@ -159,7 +159,8 @@ const PREFIX = /^[a-z0-9_.-]{1,100}$/;
 export function normalizePrefixes(prefixes: string[] | undefined): string[] {
   const out: string[] = [];
   for (const raw of prefixes ?? []) {
-    const prefix = raw.trim().toLowerCase().replace(/\*+$/, '');
+    let prefix = raw.trim().toLowerCase();
+    while (prefix.endsWith('*')) prefix = prefix.slice(0, -1);
     if (prefix && !out.includes(prefix)) out.push(prefix);
   }
   return out;
