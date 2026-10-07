@@ -7,20 +7,14 @@ ones you need. Nothing here has a date.
 
 ## Now
 
-- First-run setup in the browser: create the first tenant and administrator
-  without a command line.
-- Warnings in the console when an install runs with insecure defaults.
-- Signed releases, each with an SBOM.
-- A documentation site with task guides.
-- A connector compatibility table: each system, what is supported, and what was
-  tested against the real system.
-- A public demo instance.
+- A guided upgrade checklist: what an update will change and whether this
+  install is ready for it, before **Update** runs.
+- A public demo instance, run from [`deploy/demo`](deploy/demo/README.md).
 
 ## Next
 
 - Verify more connectors against real systems: Google Workspace, Mattermost and
   Snipe-IT.
-- A guided upgrade checklist.
 
 ## Later
 
