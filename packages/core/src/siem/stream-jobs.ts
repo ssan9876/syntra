@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { prisma, withTenant } from '@syntra/db';
+import { prisma, withTenant, type TenantClient } from '@syntra/db';
 import type { Scheduler } from '../jobs/scheduler.js';
 import { guardedFetch } from '../net/guarded-fetch.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
@@ -13,7 +13,7 @@ import {
   type StreamableEvent,
   type StreamContext,
 } from './stream-format.js';
-import { streamSecretName, type StreamFormat, type StreamTransport } from './stream-service.js';
+import { latestSequence, streamFilter, streamSecretName, type StreamFormat, type StreamTransport } from './stream-service.js';
 import { syslogSender, type SyslogSender } from './syslog-sender.js';
 
 export const AUDIT_STREAM_JOB = 'audit.stream';
@@ -57,6 +57,8 @@ export interface AuditStreamJobOptions {
 }
 
 const LEASE_MS = 2 * 60_000;
+/** Deliveries kept per stream in its history. */
+export const DELIVERY_HISTORY = 500;
 const MAX_BACKOFF_MS = 30 * 60_000;
 
 /** 1, 2, 4 ... minutes after each consecutive failure, at most 30. */
@@ -161,40 +163,99 @@ async function deliverOne(
   const target: StreamTarget = { ...stream, transport: stream.transport as StreamTransport, format: stream.format as StreamFormat, credential };
   let cursor = stream.cursor;
   let failures = stream.consecutiveFailures;
+  const filter = streamFilter(stream);
+  let recorded = false;
 
   while (now().getTime() < deadline) {
+    // Events at or below the ceiling are all the stream will see this round,
+    // so a cursor moved to it skips only events the filter left out.
+    const ceiling = await withTenant(tenantId, (tx) => latestSequence(tx));
+    if (ceiling <= cursor) break;
     const events = await withTenant(tenantId, (tx) =>
-      tx.auditEvent.findMany({ where: { sequence: { gt: cursor } }, orderBy: { sequence: 'asc' }, take: batchSize }),
-    );
-    if (events.length === 0) break;
-    try {
-      await sendBatch(target, events, ctx, senders);
-    } catch (err) {
-      failures += 1;
-      const message = scrubText(err instanceof Error ? err.message : String(err), 300);
-      await withTenant(tenantId, (tx) =>
-        tx.auditStream.updateMany({
-          where: { id },
-          data: {
-            consecutiveFailures: failures,
-            lastError: message,
-            lastErrorAt: now(),
-            nextAttemptAt: new Date(now().getTime() + streamBackoffMs(failures)),
-          },
-        }),
-      );
-      return;
-    }
-    cursor = events.at(-1)!.sequence;
-    failures = 0;
-    await withTenant(tenantId, (tx) =>
-      tx.auditStream.updateMany({
-        where: { id },
-        data: { cursor, lastDeliveredAt: now(), consecutiveFailures: 0, lastError: null, nextAttemptAt: null },
+      tx.auditEvent.findMany({
+        where: { sequence: { gt: cursor, lte: ceiling }, ...filter },
+        orderBy: { sequence: 'asc' },
+        take: batchSize,
       }),
     );
+    const next = events.length < batchSize ? ceiling : events.at(-1)!.sequence;
+    if (events.length > 0) {
+      const started = Date.now();
+      try {
+        await sendBatch(target, events, ctx, senders);
+      } catch (err) {
+        failures += 1;
+        const message = scrubText(err instanceof Error ? err.message : String(err), 300);
+        await withTenant(tenantId, async (tx) => {
+          await recordDelivery(tx, tenantId, id, events, false, message, Date.now() - started);
+          await tx.auditStream.updateMany({
+            where: { id, cursor, generation: stream.generation },
+            data: {
+              consecutiveFailures: failures,
+              lastError: message,
+              lastErrorAt: now(),
+              nextAttemptAt: new Date(now().getTime() + streamBackoffMs(failures)),
+            },
+          });
+        });
+        recorded = true;
+        break;
+      }
+      await withTenant(tenantId, (tx) => recordDelivery(tx, tenantId, id, events, true, null, Date.now() - started));
+      recorded = true;
+    }
+    // Conditional on the cursor and generation this round started from: a
+    // resend meanwhile wins, and this runner stops.
+    const moved = await withTenant(tenantId, (tx) =>
+      tx.auditStream.updateMany({
+        where: { id, cursor, generation: stream.generation },
+        data: {
+          cursor: next,
+          ...(events.length > 0 ? { lastDeliveredAt: now(), consecutiveFailures: 0, lastError: null, nextAttemptAt: null } : {}),
+        },
+      }),
+    );
+    if (moved.count === 0) break;
+    cursor = next;
+    failures = 0;
     if (events.length < batchSize) break;
   }
+  if (recorded) await withTenant(tenantId, (tx) => pruneDeliveries(tx, id));
+}
+
+async function recordDelivery(
+  tx: TenantClient,
+  tenantId: string,
+  streamId: string,
+  events: StreamableEvent[],
+  ok: boolean,
+  error: string | null,
+  durationMs: number,
+): Promise<void> {
+  await tx.auditStreamDelivery.create({
+    data: {
+      tenantId,
+      streamId,
+      kind: 'batch',
+      firstSequence: events[0]!.sequence,
+      lastSequence: events.at(-1)!.sequence,
+      count: events.length,
+      ok,
+      error,
+      durationMs,
+    },
+  });
+}
+
+/** Keeps the newest DELIVERY_HISTORY deliveries of a stream. */
+async function pruneDeliveries(tx: TenantClient, streamId: string): Promise<void> {
+  const oldestKept = await tx.auditStreamDelivery.findFirst({
+    where: { streamId },
+    orderBy: { at: 'desc' },
+    skip: DELIVERY_HISTORY - 1,
+    select: { at: true },
+  });
+  if (oldestKept) await tx.auditStreamDelivery.deleteMany({ where: { streamId, at: { lt: oldestKept.at } } });
 }
 
 /**
@@ -232,15 +293,29 @@ export async function testAuditStream(
     hash: '',
     prevHash: '',
   };
-  await sendBatch(
-    { ...loaded.stream, transport: loaded.stream.transport as StreamTransport, format: loaded.stream.format as StreamFormat, credential: loaded.credential },
-    [event],
-    { tenant: loaded.tenant.slug, host: options.host, version: options.version },
-    {
-      https: options.https ?? httpsPoster(allowPrivate),
-      syslog: options.syslog ?? syslogSender({ allowPrivateAddresses: allowPrivate }),
-    },
-  );
+  const started = Date.now();
+  let error: string | null = null;
+  try {
+    await sendBatch(
+      { ...loaded.stream, transport: loaded.stream.transport as StreamTransport, format: loaded.stream.format as StreamFormat, credential: loaded.credential },
+      [event],
+      { tenant: loaded.tenant.slug, host: options.host, version: options.version },
+      {
+        https: options.https ?? httpsPoster(allowPrivate),
+        syslog: options.syslog ?? syslogSender({ allowPrivateAddresses: allowPrivate }),
+      },
+    );
+  } catch (err) {
+    error = scrubText(err instanceof Error ? err.message : String(err), 300);
+    throw err;
+  } finally {
+    await withTenant(tenantId, async (tx) => {
+      await tx.auditStreamDelivery.create({
+        data: { tenantId, streamId: id, kind: 'test', count: 1, ok: error === null, error, durationMs: Date.now() - started },
+      });
+      await pruneDeliveries(tx, id);
+    });
+  }
 }
 
 export function registerAuditStreamJobs(

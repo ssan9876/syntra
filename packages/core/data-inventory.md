@@ -2212,7 +2212,16 @@ No personal data. Columns: `id`, `tenantId`, `sourceId`, `objectType`, `sourceAt
 
 #### `AuditStream`
 
-No personal data. Columns: `id`, `tenantId`, `name`, `enabled`, `transport`, `format`, `url`, `host`, `port`, `tls`, `authHeader`, `cursor`, `lastDeliveredAt`, `lastError`, `lastErrorAt`, `consecutiveFailures`, `nextAttemptAt`, `leaseUntil`, `createdAt`, `updatedAt`.
+No personal data. Columns: `id`, `tenantId`, `name`, `enabled`, `transport`, `format`, `url`, `host`, `port`, `tls`, `authHeader`, `cursor`, `lastDeliveredAt`, `lastError`, `lastErrorAt`, `consecutiveFailures`, `nextAttemptAt`, `leaseUntil`, `actionPrefixes`, `outcome`, `generation`, `createdAt`, `updatedAt`.
+
+#### `AuditStreamDelivery`
+
+| Column | Category | Erasure | Notes |
+| --- | --- | --- | --- |
+| `at` | operational |  |  |
+| `error` | operational |  |  |
+
+Not personal data: `id`, `tenantId`, `streamId`, `kind`, `firstSequence`, `lastSequence`, `count`, `ok`, `durationMs`.
 
 #### `AuthPolicy`
 
