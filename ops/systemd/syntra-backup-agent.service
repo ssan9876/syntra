@@ -32,3 +32,6 @@ RestartSec=5
 # A restore in progress is not something to cut short.
 TimeoutStopSec=300
 NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
