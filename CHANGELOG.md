@@ -8,6 +8,9 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+### Fixed
+- Release layout: `systemctl enable --now syntra-backup-agent.service` failed with "no installation config", so the backup agent could not be set to start at boot.
+
 ## [1.22.0] - 2026-10-06
 
 ### Added
