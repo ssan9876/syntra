@@ -8,6 +8,8 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-10-07
+
 ### Added
 - Settings → SIEM: **Actions starting with** and **Outcome** choose which audit events a stream sends.
 - Settings → SIEM → **History**: the newest 500 batches and tests per stream, with what the receiver answered. **Resend…** sends again from a date and time, an event number or the whole log, or skips to now (`audit.stream_replayed`).
@@ -497,7 +499,8 @@ Not published. The changes below first install with 1.0.4.
 ### Added
 - First release: SCIM 2.0 target connector, compound AND/OR/NOT business rules, and the self-updater (`syntra-update`) with rollback.
 
-[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.22.0...HEAD
+[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.23.0...HEAD
+[1.23.0]: https://github.com/ssan9876/syntra/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/ssan9876/syntra/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/ssan9876/syntra/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/ssan9876/syntra/compare/v1.19.1...v1.20.0
