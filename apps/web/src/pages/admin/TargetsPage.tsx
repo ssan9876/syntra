@@ -250,7 +250,7 @@ export function TargetsPage() {
           )}
 
           {data && data.targets.length > 0 && (
-            <Table>
+            <Table stackOnPhone label="Target systems">
               <thead>
                 <tr>
                   <th scope="col">

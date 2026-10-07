@@ -241,7 +241,7 @@ export function PeopleTab() {
           )}
 
           {persons.length > 0 && (
-            <Table stickyHeader label="People" density={density}>
+            <Table stackOnPhone stickyHeader label="People" density={density}>
               <thead>
                 <tr>
                   <th scope="col">

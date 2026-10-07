@@ -575,7 +575,7 @@ export function EmployeeWorkPage() {
             />
           )
         ) : (
-          <Table stickyHeader label="Employee work results" density={density}>
+          <Table stackOnPhone stickyHeader label="Employee work results" density={density}>
             <thead>
               <tr>
                 <th scope="col" className="w-10">

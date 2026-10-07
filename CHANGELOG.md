@@ -13,6 +13,9 @@ message, shown on the GitHub release and in Administration → Updates.
 - Restore tests: every 7 days (`BACKUP_VERIFY_EVERY_DAYS`), and from **Test** on any backup, the agent restores a backup into a scratch database, counts what arrived and drops it. A pass marks the backup **Tested**.
 - Off-site copies to an S3-compatible bucket (`BACKUP_S3_BUCKET`: AWS S3, R2, B2, MinIO), encrypted under `BACKUP_S3_PASSPHRASE` as a `.syntra-backup` file the console can upload. **Test bucket** on the Backups page checks the settings.
 
+### Changed
+- Console on phones: Users (people and accounts), Groups, Target systems, Employee work and Runs show one card per row, each value labelled with its column, instead of a table that scrolls sideways. Desktop is unchanged.
+
 ## [1.21.0] - 2026-10-06
 
 ### Added

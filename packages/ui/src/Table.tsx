@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 export type Density = 'comfortable' | 'compact';
 
@@ -21,6 +21,7 @@ export function Table({
   stickyHeader = false,
   label,
   className = '',
+  stackOnPhone = false,
 }: {
   children: ReactNode;
   /** For a table read as a reference rather than worked through row by row. */
@@ -49,12 +50,28 @@ export function Table({
    */
   label?: string | undefined;
   className?: string;
+  /**
+   * Below `sm`, each row becomes a card: the row header (`th scope="row"`)
+   * as its title and every other cell with its column's heading as a label.
+   * A six-column table on a phone is a sideways scroll to reach the buttons;
+   * a card is not. Desktop is unchanged.
+   */
+  stackOnPhone?: boolean;
 }) {
   const compact = tight || density === 'compact';
+  const ref = useRef<HTMLDivElement>(null);
+  // After every render, not once: rows come and go with paging and filters.
+  useLayoutEffect(() => {
+    if (stackOnPhone && ref.current) labelCells(ref.current);
+  });
   return (
     <div
+      ref={ref}
       className={[
-        'w-full overflow-x-auto',
+        // Positioned, so absolutely placed content (an sr-only header label) is
+        // clipped by this scroller instead of widening the page.
+        'relative w-full overflow-x-auto',
+        stackOnPhone ? 'data-table-stack-scope' : '',
         stickyHeader ? 'data-table-scroll max-h-[min(70vh,48rem)] overflow-y-auto' : '',
       ].join(' ')}
       {...(stickyHeader ? { tabIndex: 0, role: 'region', 'aria-label': label ?? 'Table' } : {})}
@@ -65,6 +82,7 @@ export function Table({
           'data-table',
           compact ? 'data-table--tight' : '',
           stickyHeader ? 'data-table--sticky' : '',
+          stackOnPhone ? 'data-table--stack' : '',
           className,
         ]
           .filter(Boolean)
@@ -267,4 +285,40 @@ export function useHiddenColumns(list: string, initiallyHidden: string[] = []) {
     }
   }, [key, hidden]);
   return [hidden, setHidden] as const;
+}
+
+/**
+ * Gives each body cell its column's heading, for the stacked layout's labels
+ * (`data-label`, drawn by CSS). A heading that is only for screen readers --
+ * "Actions" in an `sr-only` span -- labels nothing on screen.
+ *
+ * Also states the table roles outright. Safari drops a table's semantics once
+ * CSS changes its `display`, which the stacked layout does; explicit roles keep
+ * a screen reader announcing rows and cells.
+ */
+function labelCells(root: HTMLElement): void {
+  const table = root.querySelector('table');
+  if (!table) return;
+  const headings = [...table.querySelectorAll<HTMLTableCellElement>('thead tr:last-child th')].map((th) => {
+    const visible = [...th.childNodes].filter(
+      (node) => !(node instanceof HTMLElement && node.classList.contains('sr-only')),
+    );
+    return visible.map((node) => node.textContent ?? '').join('').trim();
+  });
+  table.setAttribute('role', 'table');
+  for (const group of table.querySelectorAll('thead, tbody')) group.setAttribute('role', 'rowgroup');
+  for (const th of table.querySelectorAll('thead th')) th.setAttribute('role', 'columnheader');
+  for (const row of table.querySelectorAll<HTMLTableRowElement>('tr')) {
+    row.setAttribute('role', 'row');
+    if (row.parentElement?.tagName !== 'TBODY') continue;
+    let column = 0;
+    for (const cell of row.cells) {
+      const isRowHeader = cell.tagName === 'TH';
+      cell.setAttribute('role', isRowHeader ? 'rowheader' : 'cell');
+      const text = cell.colSpan === 1 ? headings[column] ?? '' : '';
+      if (!isRowHeader && text) cell.setAttribute('data-label', text);
+      else cell.removeAttribute('data-label');
+      column += cell.colSpan;
+    }
+  }
 }
