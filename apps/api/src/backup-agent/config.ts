@@ -15,6 +15,8 @@ import { backupAgentToken, DEFAULT_RETENTION, keyFingerprint, type RetentionPoli
  *   BACKUP_PG_CONTAINER     run the client tools in this container (or PG_CONTAINER)
  *   BACKUP_COPY_COMMAND     shell command run after each backup, its directory as $1
  *   BACKUP_RESTORE_SETTLE_SECONDS  how long API processes get to see a restore start (20)
+ *   BACKUP_VERIFY_EVERY_DAYS       days between automatic restore tests (7; 0 is off)
+ *   BACKUP_S3_*                    an off-site bucket; see offsite.ts
  */
 export interface AgentConfig {
   superuserUrl: string;
@@ -29,6 +31,8 @@ export interface AgentConfig {
   copyCommand: string | null;
   fingerprint: string | null;
   settleMs: number;
+  /** Days between automatic restore tests; 0 turns them off. */
+  verifyEveryDays: number;
 }
 
 const count = (env: Record<string, string | undefined>, name: string, fallback: number): number => {
@@ -81,5 +85,6 @@ export function loadAgentConfig(env: Record<string, string | undefined>): AgentC
     copyCommand: env['BACKUP_COPY_COMMAND']?.trim() || null,
     fingerprint: keyFingerprint(env),
     settleMs: count(env, 'BACKUP_RESTORE_SETTLE_SECONDS', 20) * 1000,
+    verifyEveryDays: count(env, 'BACKUP_VERIFY_EVERY_DAYS', 7),
   };
 }

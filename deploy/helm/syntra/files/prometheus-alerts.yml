@@ -177,3 +177,35 @@ groups:
         annotations:
           summary: The scheduler is running but its queue cannot be read, so orphaned work cannot be detected
           runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#runbook-queue-recovery
+      - alert: SyntraBackupAgentDown
+        expr: syntra_backup_agent_up == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: The backup agent is not answering; no restore points, restore tests or off-site copies are being taken
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#backups-from-the-console
+      - alert: SyntraBackupStale
+        expr: syntra_backup_interval_seconds > 0 and (time() - syntra_backup_last_success_timestamp_seconds) > (2 * syntra_backup_interval_seconds + 3600)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: No backup has succeeded for more than twice the restore-point interval
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#backups-from-the-console
+      - alert: SyntraBackupUntested
+        expr: (time() - syntra_backup_last_restore_test_success_timestamp_seconds) > 8 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: No restore test has passed for more than eight days
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#backups-from-the-console
+      - alert: SyntraBackupOffsiteStale
+        expr: syntra_backup_interval_seconds > 0 and (time() - syntra_backup_offsite_last_success_timestamp_seconds) > (2 * syntra_backup_interval_seconds + 3600)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: No backup has been copied to the off-site bucket for more than twice the restore-point interval
+          runbook: https://github.com/ssan9876/syntra/blob/main/docs/operate.md#backups-from-the-console

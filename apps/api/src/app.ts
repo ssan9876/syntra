@@ -64,6 +64,7 @@ import { registerAdminCredentialRoutes } from './routes/admin/credentials.js';
 import { registerAdminUpdateRoutes } from './routes/admin/update.js';
 import { registerAdminRestoreHoldRoutes } from './routes/admin/restore-hold.js';
 import { registerAdminBackupRoutes } from './routes/admin/backups.js';
+import { backupStatusReader } from './backup-agent/client.js';
 import { registerAdminPersonSourceRoutes } from './routes/admin/person-sources.js';
 import { registerAdminSourceRoutes } from './routes/admin/sources.js';
 import { registerAdminSyncRunRoutes } from './routes/admin/sync-runs.js';
@@ -272,6 +273,7 @@ export async function buildApp(
   // exists. See the plugin's own docstring.
   await registerMetricsRoutes(app, {
     token: config.metricsToken,
+    ...(config.backupAgent ? { backupStatus: backupStatusReader(config.backupAgent) } : {}),
     ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
     // The same call `/health/ready` makes below, so there is one readiness
     // definition rather than two that can disagree.
@@ -467,6 +469,7 @@ export async function buildApp(
     prefix: '/api/admin',
     mailSink,
     insecureDefaults: insecureDefaults(config),
+    backupAgent: config.backupAgent,
     ...(options.scheduler ? { schedulerRunning: () => options.scheduler!() !== null } : {}),
   });
   // Outgoing mail as configured, and the console's test send.

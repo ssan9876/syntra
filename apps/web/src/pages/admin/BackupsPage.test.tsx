@@ -28,6 +28,16 @@ const configured = (backups: BackupRow[]): BackupsResponse => ({
     copyConfigured: false,
     current: null,
     recent: [],
+    verifyEveryDays: 7,
+    offsite: null,
+    health: {
+      lastBackup: { at: '2026-10-05T02:00:00Z', ok: true, name: 'syntra-20261005T020000Z', message: null },
+      lastBackupSuccessAt: '2026-10-05T02:00:00Z',
+      lastVerify: null,
+      lastVerifySuccessAt: null,
+      lastCopy: null,
+      lastCopySuccessAt: null,
+    },
   },
 });
 
@@ -118,5 +128,43 @@ describe('BackupsPage', () => {
     expect(download).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText('Passphrase again'), ' battery');
     expect(download).toBeEnabled();
+  });
+
+  it('shows what failed: a restore test and an off-site copy, and tests the bucket', async () => {
+    const response = configured([row({ verifiedAt: '2026-10-04T03:00:00Z' })]);
+    response.status!.offsite = { bucket: 'acme-backups', endpoint: null, prefix: 'syntra/' };
+    response.status!.health.lastVerify = { at: '2026-10-05T03:00:00Z', ok: false, name: 'syntra-20261005T020000Z', message: 'restored 3 tables and no rows.' };
+    response.status!.health.lastCopy = { at: '2026-10-05T02:01:00Z', ok: false, name: 'syntra-20261005T020000Z', message: 'AccessDenied' };
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/offsite/test') && init?.method === 'POST') {
+        return Promise.resolve(json({ type: 'https://syntra/problems/backup-refused', title: 'Backup service refused', status: 422, detail: 'acme-backups: AccessDenied' }, 422));
+      }
+      return Promise.resolve(json(response));
+    });
+    renderPage();
+    expect(await screen.findByText('Restore test failed: syntra-20261005T020000Z')).toBeInTheDocument();
+    expect(screen.getByText('Off-site copy failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Tested').length).toBeGreaterThan(0);
+    expect(screen.getByText('acme-backups')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Test bucket' }));
+    expect(await screen.findByText('Bucket test failed')).toBeInTheDocument();
+    expect(screen.getByText('acme-backups: AccessDenied')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith('/api/admin/backups/offsite/test', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('starts a restore test from a backup', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/verify') && init?.method === 'POST') {
+        return Promise.resolve(json({ job: { id: 'job-2', kind: 'verify', state: 'running', step: 'Starting' } }, 202));
+      }
+      return Promise.resolve(json(configured([row()])));
+    });
+    renderPage();
+    const table = await screen.findByRole('table', { name: 'Backups' });
+    await userEvent.click(within(table).getByRole('button', { name: 'Test' }));
+    await vi.waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith('/api/admin/backups/syntra-20261005T020000Z/verify', expect.objectContaining({ method: 'POST' })),
+    );
   });
 });

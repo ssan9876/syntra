@@ -25,6 +25,7 @@ import { createAgent } from '../../backup-agent/agent.js';
 import { agentServer } from '../../backup-agent/http.js';
 import type { PgTools } from '../../backup-agent/postgres.js';
 import { backupStore } from '../../backup-agent/store.js';
+import type { Offsite } from '../../backup-agent/offsite.js';
 
 const TOKEN = 'test-backup-agent-token-0123456789abcdef';
 const silent = { info: () => undefined, warn: () => undefined, error: () => undefined };
@@ -59,7 +60,7 @@ afterEach(async () => {
   server = null;
 });
 
-async function startAgent(): Promise<string> {
+async function startAgent(offsite: Offsite | null = null): Promise<string> {
   const store = backupStore(dir, fakePg);
   const agent = createAgent({
     config: {
@@ -75,6 +76,7 @@ async function startAgent(): Promise<string> {
       copyCommand: null,
       fingerprint: keyFingerprint(process.env),
       settleMs: 0,
+      verifyEveryDays: 0,
     },
     store,
     pg: fakePg,
@@ -83,6 +85,8 @@ async function startAgent(): Promise<string> {
     appRole: 'syntra_app',
     superRole: 'syntra',
     migrate: async () => undefined,
+    toolsFor: () => fakePg,
+    offsite,
     log: silent,
     settleMs: 0,
   });
@@ -231,6 +235,46 @@ describe('backup routes', () => {
       'deployment.restore_requested',
       'deployment.backup_deleted',
     ]);
+  });
+
+  it('lists failing backups as an incident to deployment.manage, and tests the bucket', async () => {
+    const failing: Offsite = {
+      describe: () => ({ bucket: 'acme-backups', endpoint: null, prefix: 'syntra/' }),
+      keyFor: (name) => name,
+      upload: async () => {
+        throw new Error('AccessDenied');
+      },
+      remove: async () => undefined,
+      test: async () => {
+        throw new Error('AccessDenied');
+      },
+    };
+    const url = await startAgent(failing);
+    ctx = await buildTestApp({
+      scheduler: () => createFakeScheduler(),
+      env: { BACKUP_AGENT_URL: url, BACKUP_AGENT_TOKEN: TOKEN },
+    });
+    const operator = await cookieFor('operator', [PERMISSIONS.DEPLOYMENT_MANAGE, PERMISSIONS.AUDIT_READ]);
+    const auditor = await cookieFor('auditor', [PERMISSIONS.AUDIT_READ]);
+
+    const started = await call('POST', '/api/admin/backups', operator, {});
+    expect((await settle(operator, started.json().job.id)).state).toBe('succeeded');
+
+    const kinds = async (cookie: string) =>
+      ((await call('GET', '/api/admin/incidents', cookie)).json() as { incidents: { kind: string; items: { detail: string }[] }[] }).incidents;
+    const seen = (await kinds(operator)).find((incident) => incident.kind === 'backups_failing');
+    expect(seen?.items.map((item) => item.detail)).toEqual([expect.stringMatching(/^Failed at .* UTC: AccessDenied$/)]);
+    expect((await kinds(auditor)).some((incident) => incident.kind === 'backups_failing')).toBe(false);
+
+    const bucket = await call('POST', '/api/admin/backups/offsite/test', operator, {});
+    expect(bucket.statusCode).toBe(422);
+    expect(bucket.json().detail).toBe('acme-backups: AccessDenied');
+
+    const name = (await call('GET', '/api/admin/backups', operator)).json().backups[0].name;
+    const test = await call('POST', `/api/admin/backups/${name}/verify`, operator, {});
+    expect(test.statusCode).toBe(202);
+    expect(await settle(operator, test.json().job.id)).toMatchObject({ state: 'succeeded' });
+    expect((await call('GET', '/api/admin/backups', operator)).json().backups[0].verifiedAt).toEqual(expect.any(String));
   });
 
   it('refuses a request to the agent without its token', async () => {

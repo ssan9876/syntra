@@ -6101,13 +6101,73 @@
         }
       }
     },
+    "/api/admin/backups/{name}/verify": {
+      "post": {
+        "operationId": "postBackupsByNameVerify",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Test that a backup restores",
+        "description": "Accepted, not finished. Restores the backup into a scratch database, counts its tables and rows, and drops it; the live database is not touched. A pass is recorded on the backup as `verifiedAt`.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/backups/jobs/{id}": {
       "get": {
         "operationId": "getBackupsJobsById",
         "tags": [
           "Backups"
         ],
-        "summary": "Read a backup or restore job",
+        "summary": "Read a backup, restore or restore-test job",
         "description": "Requires `deployment.manage`.",
         "x-syntra-permission": [
           "deployment.manage"
@@ -6151,6 +6211,53 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/backups/offsite/test": {
+      "post": {
+        "operationId": "postBackupsOffsiteTest",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Check the off-site bucket",
+        "description": "Writes and deletes a small object in BACKUP_S3_BUCKET. `422 backup-refused` with what the bucket answered when it fails, or when no bucket is configured.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"

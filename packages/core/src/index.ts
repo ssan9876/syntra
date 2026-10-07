@@ -18,6 +18,7 @@ export * from './health/attention.js';
 export * from './update/update-service.js';
 export * from './deployment/restore-hold.js';
 export * from './backup/agent-token.js';
+export * from './backup/health.js';
 export * from './backup/archive.js';
 export * from './backup/manifest.js';
 export * from './backup/retention.js';

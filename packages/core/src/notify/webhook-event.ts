@@ -199,6 +199,7 @@ export const WEBHOOK_EVENT_GROUPS = {
       'deployment.restore_resumed',
       'deployment.backup_requested',
       'deployment.backup_deleted',
+      'deployment.backup_verify_requested',
       'deployment.backup_downloaded',
       'deployment.backup_uploaded',
       'deployment.restore_requested',

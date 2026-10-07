@@ -19,6 +19,10 @@ export const backupManifest = z.object({
   bytes: z.number().int().nonnegative(),
   masterKeyFingerprint: z.string().nullable(),
   kind: z.enum(BACKUP_KINDS).default('scheduled'),
+  /** When a restore test last restored it into a scratch database, and what arrived. */
+  verifiedAt: z.string().optional(),
+  verifiedTables: z.number().int().nonnegative().optional(),
+  verifiedRows: z.number().int().nonnegative().optional(),
 });
 export type BackupManifest = z.infer<typeof backupManifest>;
 

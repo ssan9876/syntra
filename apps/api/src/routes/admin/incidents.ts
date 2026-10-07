@@ -10,11 +10,14 @@ import {
   readAttentionSummary,
   recordEvent,
   resolveIncident,
+  backupProblems,
+  type BackupProblem,
   type IncidentKind,
   type InsecureDefault,
   type MailSinkWarning,
   type Permission,
 } from '@syntra/core';
+import { backupAgentClient } from '../../backup-agent/client.js';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission, tokenScopeAllows } from '../../plugins/require-permission.js';
@@ -61,8 +64,17 @@ export async function registerAdminIncidentRoutes(
      * administrator is not the operator.
      */
     insecureDefaults?: readonly InsecureDefault[];
+    /** BACKUP_AGENT_URL and its token; its health is listed to the same caller. */
+    backupAgent?: { url: string; token: string } | null;
   } = {},
 ): Promise<void> {
+  const backupClient = options.backupAgent ? backupAgentClient(options.backupAgent) : null;
+  const backupHealth = async (now: Date): Promise<BackupProblem[]> => {
+    if (!backupClient) return [];
+    const status = await backupClient.status().catch(() => null);
+    return backupProblems(status, now);
+  };
+
   app.addHook('preHandler', requireSession('admin'));
 
   app.get(
@@ -71,13 +83,15 @@ export async function registerAdminIncidentRoutes(
     async (request) => {
       const now = new Date();
       const operator =
-        (options.insecureDefaults?.length ?? 0) > 0 &&
+        ((options.insecureDefaults?.length ?? 0) > 0 || backupClient !== null) &&
         tokenScopeAllows(request, PERMISSIONS.DEPLOYMENT_MANAGE) &&
         (await request.db((tx) => hasPermission(tx, request.session.userId, PERMISSIONS.DEPLOYMENT_MANAGE)));
+      const backups = operator ? await backupHealth(now) : [];
       const incidents = await request.db((tx) =>
         listIncidents(tx, now, {
           mailSink: options.mailSink ?? null,
           insecureDefaults: operator ? (options.insecureDefaults ?? []) : [],
+          backups,
         }),
       );
       // Names for whoever acknowledged, read once. An id on screen is

@@ -44,6 +44,8 @@ export interface BackupStore {
   importUpload(manifest: BackupManifest, dump: Readable): Promise<StoredBackup>;
   remove(name: string): Promise<void>;
   prune(policy: RetentionPolicy): Promise<string[]>;
+  /** Records a passed restore test in the backup's manifest. */
+  markVerified(name: string, result: { at: Date; tables: number; rows: number }): Promise<void>;
 }
 
 const PGDMP = Buffer.from('PGDMP', 'ascii');
@@ -174,6 +176,23 @@ export function backupStore(dir: string, pg: PgTools, now: () => Date = () => ne
 
     async remove(name) {
       await rm(pathOf(name), { recursive: true, force: true });
+    },
+
+    async markVerified(name, result) {
+      const backup = await read(name);
+      if (!backup) throw new BackupRefusedError(`No backup named ${name}.`);
+      const { name: _name, ...manifest } = backup;
+      const file = join(pathOf(name), 'manifest.json');
+      // Written beside it and renamed over it: a manifest half-written by a
+      // killed process would make the backup unreadable.
+      const updated = {
+        ...manifest,
+        verifiedAt: result.at.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        verifiedTables: result.tables,
+        verifiedRows: result.rows,
+      };
+      await writeFile(`${file}.tmp`, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
+      await rename(`${file}.tmp`, file);
     },
 
     async prune(policy) {

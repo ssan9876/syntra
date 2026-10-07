@@ -7,6 +7,7 @@ import {
   Gauge,
   Histogram,
 } from '@prometheus-io/client';
+import type { AgentStatus } from '../backup-agent/client.js';
 import {
   buildInfo,
   cachedMetrics,
@@ -28,6 +29,8 @@ export interface MetricsRouteOptions {
   isReady: () => Promise<boolean>;
   /** Process-local worker status; independent of sign-in readiness. */
   schedulerRunning?: () => boolean;
+  /** The backup agent's status, null when it did not answer. Absent: no agent. */
+  backupStatus?: () => Promise<AgentStatus | null>;
 }
 
 /**
@@ -333,6 +336,7 @@ export async function registerMetricsRoutes(
 
   const { registry, httpDuration, setGauges, setReadiness, copyAuditCounts } =
     buildRegistry();
+  const setBackupGauges = backupGauges(registry);
   const schedulerRunning = options.schedulerRunning
     ? new Gauge({
         name: 'syntra_scheduler_running',
@@ -382,6 +386,7 @@ export async function registerMetricsRoutes(
       }
 
       setGauges(await readSnapshot());
+      if (options.backupStatus) setBackupGauges(await options.backupStatus());
       if (schedulerRunning && options.schedulerRunning) {
         schedulerRunning.set(options.schedulerRunning() ? 1 : 0);
       }
@@ -395,4 +400,44 @@ export async function registerMetricsRoutes(
         .send(await registry.metrics());
     },
   );
+}
+
+/**
+ * The backup agent's health, for the alerts in ops/prometheus-alerts.yml.
+ *
+ * Timestamps rather than ages, so a rule can compare them with `time()` and an
+ * agent that stops answering does not look like one whose last backup is
+ * getting older. A value that is not known is not published, as above.
+ */
+function backupGauges(registry: Registry) {
+  const up = new Gauge({
+    name: 'syntra_backup_agent_up',
+    help: '1 when the backup agent answered the scrape, 0 when it did not.',
+    registers: [registry],
+  });
+  const interval = new Gauge({ name: 'syntra_backup_interval_seconds', help: 'Seconds between scheduled restore points; 0 when off.', registers: [] });
+  const lastBackup = new Gauge({ name: 'syntra_backup_last_success_timestamp_seconds', help: 'When a backup last succeeded.', registers: [] });
+  const lastTest = new Gauge({ name: 'syntra_backup_last_restore_test_success_timestamp_seconds', help: 'When a restore test last passed.', registers: [] });
+  const lastCopy = new Gauge({ name: 'syntra_backup_offsite_last_success_timestamp_seconds', help: 'When an off-site copy last succeeded.', registers: [] });
+  // `registers: []`: registered on `registry` only while their value is
+  // known, below. Without it a Gauge joins the process-wide default registry,
+  // and a second app built in the same process (every test file) collides.
+  const publish = (metric: Gauge, value: number | null) => {
+    const name = (metric as unknown as { name: string }).name;
+    if (value === null) {
+      registry.removeSingleMetric(name);
+      return;
+    }
+    if (registry.getSingleMetric(name) === undefined) registry.registerMetric(metric);
+    metric.set(value);
+  };
+  const seconds = (iso: string | null | undefined) => (iso ? Math.floor(new Date(iso).getTime() / 1000) : null);
+
+  return (status: AgentStatus | null) => {
+    up.set(status ? 1 : 0);
+    publish(interval, status ? status.intervalHours * 3600 : null);
+    publish(lastBackup, seconds(status?.health.lastBackupSuccessAt));
+    publish(lastTest, seconds(status?.health.lastVerifySuccessAt));
+    publish(lastCopy, status?.offsite ? seconds(status.health.lastCopySuccessAt) : null);
+  };
 }

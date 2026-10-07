@@ -6,6 +6,7 @@ import { buildInfo } from '@syntra/core';
 import { createAgent } from './agent.js';
 import { loadAgentConfig } from './config.js';
 import { agentServer } from './http.js';
+import { offsiteConfigFrom, s3Offsite } from './offsite.js';
 import { pgTargetFrom, pgTools } from './postgres.js';
 import { backupStore } from './store.js';
 
@@ -31,6 +32,7 @@ const superTarget = pgTargetFrom(config.superuserUrl);
 const appTarget = pgTargetFrom(config.databaseUrl);
 const pg = pgTools(superTarget, { container: config.pgContainer });
 const store = backupStore(config.dir, pg);
+const offsiteConfig = offsiteConfigFrom(process.env);
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
 /**
@@ -71,6 +73,8 @@ const agent = createAgent({
   migrate,
   log,
   settleMs: config.settleMs,
+  toolsFor: (database) => pgTools({ ...superTarget, database }, { container: config.pgContainer }),
+  offsite: offsiteConfig ? s3Offsite(offsiteConfig) : null,
 });
 await agent.ready;
 
@@ -82,18 +86,19 @@ server.listen(config.port, config.host, () => {
   );
 });
 
-// Restore points on the hour, every `intervalHours` hours.
-if (config.intervalHours > 0) {
-  const tick = () => {
-    const at = new Date();
-    if (at.getUTCHours() % config.intervalHours === 0) agent.scheduled();
-  };
-  const msToNextHour = 3_600_000 - (Date.now() % 3_600_000);
-  setTimeout(() => {
-    tick();
-    setInterval(tick, 3_600_000).unref();
-  }, msToNextHour).unref();
-}
+// On the hour: a restore point every `intervalHours` hours, then a restore
+// test when one is due. The test waits for the next hour if the backup is
+// still running.
+const tick = () => {
+  const at = new Date();
+  if (config.intervalHours > 0 && at.getUTCHours() % config.intervalHours === 0) agent.scheduled();
+  agent.verifyIfDue();
+};
+const msToNextHour = 3_600_000 - (Date.now() % 3_600_000);
+setTimeout(() => {
+  tick();
+  setInterval(tick, 3_600_000).unref();
+}, msToNextHour).unref();
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {

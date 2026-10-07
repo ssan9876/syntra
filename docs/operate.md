@@ -454,6 +454,7 @@ no `BACKUP_AGENT_URL`.
 | Download | A `.syntra-backup` file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from your passphrase (scrypt, at least 12 characters). Recorded as `deployment.backup_downloaded`. |
 | Upload | The same file and passphrase. A wrong passphrase, a cut-short file and a damaged one are each refused by name. |
 | Restore | Type the backup's name. Refused for a backup taken under a different master key (`Key: Different`) or on a newer release. |
+| Test | A restore test: the backup is restored into a scratch database, its tables and rows counted, and the database dropped. The live database is not touched. A pass marks the backup **Tested**. One runs on its own every `BACKUP_VERIFY_EVERY_DAYS` (default 7). |
 
 A restore, in order:
 
@@ -476,9 +477,32 @@ then select **Resume**.
 (or Vault/KMS key), sign in as the first Owner, upload the file, restore it.
 
 Backups live in the `syntra-backups` volume, apart from `syntra-data`. A
-backup on the same host is lost with it: set `BACKUP_COPY_COMMAND` (run in
-the `backup` container, the backup directory as `$1`) or copy the volume off
-the host on a schedule of your own.
+backup on the same host is lost with it, so copy them off it.
+
+**Off-site copies.** Set `BACKUP_S3_BUCKET` and `BACKUP_S3_PASSPHRASE` and
+every backup is also written to an S3-compatible bucket (AWS S3, Cloudflare
+R2, Backblaze B2, MinIO) as `<prefix><name>.syntra-backup`: the same
+encrypted file a download is. To recover from it, download the file from the
+bucket and select **Upload backup** with `BACKUP_S3_PASSPHRASE`. Keep that
+passphrase with `MASTER_KEY`, not in the bucket.
+
+- A copy is deleted from the bucket only when local retention prunes the
+  same backup. A bucket is never emptied because the local volume is.
+- The settings live in the `backup` service's environment, not in the
+  database: credentials stored there would be inside the backups being
+  copied. **Test bucket** on the Backups page writes and deletes an object.
+- Without access keys the AWS default chain is used (an instance role, IRSA).
+
+`BACKUP_COPY_COMMAND` still works for anything else: it runs in the `backup`
+container, the backup directory as `$1`.
+
+**When something fails.** A failed backup, a failed or overdue restore test,
+and a failed off-site copy each show on the Backups page and as the
+**Backups failing** incident under Activity → Attention, for
+`deployment.manage`. With `METRICS_TOKEN` set, `/metrics` publishes
+`syntra_backup_agent_up` and the last-success time of each, and
+`ops/prometheus-alerts.yml` alerts on them: `SyntraBackupAgentDown`,
+`SyntraBackupStale`, `SyntraBackupUntested`, `SyntraBackupOffsiteStale`.
 
 | Variable | Default | |
 |---|---|---|
@@ -487,6 +511,14 @@ the host on a schedule of your own.
 | `BACKUP_KEEP_MANUAL` | `10` | Back up now, uploads, pre-restore |
 | `BACKUP_COPY_COMMAND` | unset | Shell command after each backup |
 | `BACKUP_AGENT_TOKEN` | derived from `SESSION_SECRET` | Set on both `api` and `backup` |
+| `BACKUP_VERIFY_EVERY_DAYS` | `7` | Days between restore tests; `0` turns them off |
+| `BACKUP_S3_BUCKET` | unset | Turns off-site copies on |
+| `BACKUP_S3_PASSPHRASE` | | Required with a bucket; at least 12 characters |
+| `BACKUP_S3_REGION` | `us-east-1` | |
+| `BACKUP_S3_ENDPOINT` | unset | For anything that is not AWS |
+| `BACKUP_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | unset | Unset: the AWS default chain |
+| `BACKUP_S3_PREFIX` | `syntra/` | |
+| `BACKUP_S3_FORCE_PATH_STYLE` | `true` with an endpoint | |
 
 `syntra-backup` takes care of the first and **detects** a mismatch in the
 second. It does not fix one: keeping the key is still yours.
