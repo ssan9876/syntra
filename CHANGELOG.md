@@ -8,6 +8,8 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-10-07
+
 ### Added
 - Administration → Updates: **Before you update** lists the releases an update installs with each one's notes, the database changes they make, disk space and the age of the last backup. **Update** stays off while the release files are not published or the disk has under 1 GB free. API: `GET /api/admin/update/preflight`.
 
@@ -502,7 +504,8 @@ Not published. The changes below first install with 1.0.4.
 ### Added
 - First release: SCIM 2.0 target connector, compound AND/OR/NOT business rules, and the self-updater (`syntra-update`) with rollback.
 
-[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.23.0...HEAD
+[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.24.0...HEAD
+[1.24.0]: https://github.com/ssan9876/syntra/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/ssan9876/syntra/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/ssan9876/syntra/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/ssan9876/syntra/compare/v1.20.0...v1.21.0

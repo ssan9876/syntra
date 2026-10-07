@@ -7,9 +7,9 @@ releases do not; update to a supported one.
 
 | Version | Security fixes |
 |---|---|
+| 1.24.x | Yes |
 | 1.23.x | Yes |
-| 1.22.x | Yes |
-| 1.21.x and older | No |
+| 1.22.x and older | No |
 
 When a new minor is released, the oldest row drops off. See
 [docs/releases.md](docs/releases.md).
