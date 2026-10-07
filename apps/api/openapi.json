@@ -33359,6 +33359,53 @@
         }
       }
     },
+    "/api/admin/update/preflight": {
+      "get": {
+        "operationId": "getUpdatePreflight",
+        "tags": [
+          "Deployment updates"
+        ],
+        "summary": "Check this install is ready for the newest release",
+        "description": "For the newest release, when it is newer than the one running: every release it installs, with their notes, and `checks` (`release-files`, `releases`, `migrations`, `disk`, `backups`), each `pass`, `info`, `warn` or `fail`. `ready` is false while any check fails. With nothing to update to, `target` is null and `checks` empty.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/update/rollback": {
       "post": {
         "operationId": "postUpdateRollback",

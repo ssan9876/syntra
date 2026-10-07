@@ -9,6 +9,11 @@ import { describeAdminRoutes } from '../../openapi/describe.js';
 export const updateOpenApi = describeAdminRoutes('Deployment updates', {
   'GET /update': { summary: 'Check for a newer release and read update progress' },
   'GET /update/status': { summary: 'Read the progress of the running or last update' },
+  'GET /update/preflight': {
+    summary: 'Check this install is ready for the newest release',
+    description:
+      'For the newest release, when it is newer than the one running: every release it installs, with their notes, and `checks` (`release-files`, `releases`, `migrations`, `disk`, `backups`), each `pass`, `info`, `warn` or `fail`. `ready` is false while any check fails. With nothing to update to, `target` is null and `checks` empty.',
+  },
   'POST /update': {
     summary: 'Start updating the deployment to a newer release',
     description:

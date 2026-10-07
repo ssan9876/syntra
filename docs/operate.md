@@ -212,7 +212,21 @@ index (`docker buildx imagetools inspect ghcr.io/ssan9876/syntra-api:X.Y.Z
 From the console, **Updates** (`/admin/updates`, `deployment.manage`; the API
 is `POST /api/admin/update` and `POST /api/admin/update/rollback`) shows the
 running version, what is available, and a button. The console cannot
-downgrade. By hand:
+downgrade.
+
+**Before you update** lists checks for the newest release
+(`GET /api/admin/update/preflight`), and **Update** stays off while one is
+blocked. **Check again** reruns them.
+
+| Check | Blocked | Asks you to look |
+|---|---|---|
+| Release files | The tarball or its checksum is not published yet | |
+| Releases | | More than one release since the running one: each one's notes are shown |
+| Database changes | | A migration whose release says it rewrites data |
+| Disk space | Under 1 GB free where releases unpack | Under 3 GB |
+| Backups | | The last backup is over 26 hours old, missing, or the backup service did not answer |
+
+By hand:
 
 ```bash
 /opt/syntra/bin/syntra-update --check        # what is running, what is available; changes nothing

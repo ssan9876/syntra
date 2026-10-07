@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { UpdatesPage } from './UpdatesPage.js';
 
@@ -26,12 +27,20 @@ const availability = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** GET /update returns `body`; every POST returns 202. */
-function mockApi(body: unknown, onPost?: (init: RequestInit) => Response) {
-  return vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => {
+const readyPreflight = {
+  target: '1.5.0',
+  ready: true,
+  releases: [{ version: '1.5.0', released: '2026-08-24T19:02:11Z', notes: 'Directory write-back.' }],
+  checks: [{ id: 'release-files', status: 'pass', title: 'Release files', detail: 'syntra-1.5.0.tar.gz and its checksum are published.' }],
+};
+
+/** GET /update returns `body`, the checks `preflight`; every POST returns 202. */
+function mockApi(body: unknown, onPost?: (init: RequestInit) => Response, preflight: unknown = readyPreflight) {
+  return vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
     if ((init as RequestInit | undefined)?.method === 'POST') {
       return Promise.resolve(onPost?.(init as RequestInit) ?? json({ started: true }, 202));
     }
+    if (String(input).endsWith('/update/preflight')) return Promise.resolve(json(preflight));
     return Promise.resolve(json(body));
   });
 }
@@ -271,5 +280,52 @@ describe('UpdatesPage', () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(screen.queryByRole('button', { name: /update to 1\.5\.0/i })).toBeNull();
+  });
+
+  it('lists the checks before updating, with every release it installs', async () => {
+    mockApi(availability({ current: '1.3.0' }), undefined, {
+      target: '1.5.0',
+      ready: true,
+      releases: [
+        { version: '1.4.0', released: '2026-08-01T00:00:00Z', notes: 'Older notes.' },
+        { version: '1.5.0', released: '2026-08-24T19:02:11Z', notes: 'Directory write-back.' },
+      ],
+      checks: [
+        { id: 'releases', status: 'info', title: 'Releases', detail: '2 releases since 1.3.0. Their notes are below.', items: ['1.4.0', '1.5.0'] },
+        { id: 'migrations', status: 'info', title: 'Database changes', detail: '1 change. The update backs up the database first.', items: ['20260801000000_x: adds a table. Does not rewrite data.'] },
+        { id: 'backups', status: 'warn', title: 'Backups', detail: 'Last backup 3 days ago. Select Back up now on the Backups page first.', href: '/admin/backups' },
+      ],
+    });
+    render(<MemoryRouter><UpdatesPage /></MemoryRouter>);
+
+    const checks = await screen.findByRole('list', { name: 'Update checks' });
+    const rows = within(checks).getAllByRole('listitem').filter((item) => item.parentElement === checks);
+    expect(rows[1]).toHaveTextContent('20260801000000_x: adds a table. Does not rewrite data.');
+    expect(rows[2]).toHaveTextContent('Check');
+    expect(within(rows[2]!).getByRole('link', { name: 'Go to Backups' })).toHaveAttribute('href', '/admin/backups');
+    expect(screen.getByText('1.4.0 release notes')).toBeInTheDocument();
+    expect(screen.getByText('Older notes.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update to 1.5.0' })).toBeEnabled();
+  });
+
+  it('holds the update while a check is blocked, and checks again on request', async () => {
+    const blocked = {
+      ...readyPreflight,
+      ready: false,
+      checks: [{ id: 'disk', status: 'fail', title: 'Disk space', detail: '0.5 GB free on /opt/syntra. An update needs about 1 GB. Free space, then check again.' }],
+    };
+    const fetch = mockApi(availability(), undefined, blocked);
+    render(<MemoryRouter><UpdatesPage /></MemoryRouter>);
+
+    expect(await screen.findByText(/0.5 GB free on \/opt\/syntra/)).toBeInTheDocument();
+    expect(screen.getByText('Fix the blocked check first.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update to 1.5.0' })).toBeDisabled();
+
+    fetch.mockImplementation((input) =>
+      Promise.resolve(String(input).endsWith('/update/preflight') ? json(readyPreflight) : json(availability())),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update to 1.5.0' })).toBeEnabled());
+    expect(screen.queryByText('Fix the blocked check first.')).toBeNull();
   });
 });

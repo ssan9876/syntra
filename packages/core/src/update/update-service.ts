@@ -21,6 +21,8 @@ export interface AvailableRelease {
   notes: string;
   /** Migration directories this release adds. Empty means it does not migrate. */
   migrations: string[];
+  /** The files published with it, by name. */
+  assets: string[];
 }
 
 export interface UpdateAvailability {
@@ -81,7 +83,40 @@ interface ReleaseApi {
   tag_name?: unknown;
   published_at?: unknown;
   body?: unknown;
+  draft?: unknown;
+  prerelease?: unknown;
+  assets?: unknown;
 }
+
+/** One release as the forge describes it; null without a tag. */
+function releaseFrom(body: ReleaseApi): AvailableRelease | null {
+  const tag = typeof body.tag_name === 'string' ? body.tag_name : null;
+  if (tag === null) return null;
+  return {
+    version: tag.replace(/^v/, ''),
+    released: typeof body.published_at === 'string' ? body.published_at : null,
+    notes: typeof body.body === 'string' ? body.body : '',
+    // What the release CONTAINS is read from the release itself once it is
+    // downloaded; the API's notes are prose. Migrations are surfaced from
+    // RELEASE.json after unpacking, and until then the console says
+    // "unknown" rather than "none" -- claiming a release does not touch the
+    // database when nobody has looked is the wrong way to be wrong.
+    migrations: [],
+    assets: Array.isArray(body.assets)
+      ? body.assets.flatMap((asset: unknown) =>
+          asset && typeof asset === 'object' && typeof (asset as { name?: unknown }).name === 'string'
+            ? [(asset as { name: string }).name]
+            : [],
+        )
+      : [],
+  };
+}
+
+const forgeHeaders = (token: string) => ({
+  authorization: `Bearer ${token}`,
+  accept: 'application/vnd.github+json',
+  'user-agent': 'syntra',
+});
 
 /**
  * The forge, reached through the same outbound guard every other
@@ -174,28 +209,47 @@ export async function fetchLatestRelease(
   if (!response.ok) return { ok: false, reason: refusal(response.status, repo) };
 
   try {
-    const body = (await response.json()) as ReleaseApi;
-    const tag = typeof body.tag_name === 'string' ? body.tag_name : null;
-    if (tag === null) {
+    const release = releaseFrom((await response.json()) as ReleaseApi);
+    if (release === null) {
       return { ok: false, reason: 'the forge returned a release with no tag' };
     }
-
-    return {
-      ok: true,
-      release: {
-        version: tag.replace(/^v/, ''),
-        released: typeof body.published_at === 'string' ? body.published_at : null,
-        notes: typeof body.body === 'string' ? body.body : '',
-        // What the release CONTAINS is read from the release itself once it is
-        // downloaded; the API's notes are prose. Migrations are surfaced from
-        // RELEASE.json after unpacking, and until then the console says
-        // "unknown" rather than "none" -- claiming a release does not touch the
-        // database when nobody has looked is the wrong way to be wrong.
-        migrations: [],
-      },
-    };
+    return { ok: true, release };
   } catch {
     return { ok: false, reason: 'The forge did not return a release.' };
+  }
+}
+
+/**
+ * The published releases, newest first: the most recent 50, without drafts
+ * or pre-releases. For the update checklist, which needs every release
+ * between this one and the newest, not only the newest.
+ */
+export async function fetchReleases(
+  token: string,
+  repo: string,
+  fetchImpl: typeof fetch = forgeFetch,
+): Promise<{ ok: true; releases: AvailableRelease[] } | { ok: false; reason: string }> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`https://api.github.com/repos/${repo}/releases?per_page=50`, {
+      headers: forgeHeaders(token),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { ok: false, reason: 'the forge could not be reached' };
+  }
+  if (!response.ok) return { ok: false, reason: refusal(response.status, repo) };
+  try {
+    const body = (await response.json()) as ReleaseApi[];
+    if (!Array.isArray(body)) return { ok: false, reason: 'the forge did not return a release list' };
+    return {
+      ok: true,
+      releases: body
+        .filter((item) => item.draft !== true && item.prerelease !== true)
+        .flatMap((item) => releaseFrom(item) ?? []),
+    };
+  } catch {
+    return { ok: false, reason: 'the forge did not return a release list' };
   }
 }
 

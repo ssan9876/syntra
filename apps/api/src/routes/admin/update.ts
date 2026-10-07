@@ -1,14 +1,25 @@
+import { statfs } from 'node:fs/promises';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   PERMISSIONS,
+  backupsCheck,
   checkForUpdate,
+  diskCheck,
+  fetchReleases,
   isNewer,
   launchUpdater,
+  migrationsCheck,
   readProgress,
   recordEvent,
+  releaseFilesCheck,
+  releasesBetween,
+  releasesCheck,
+  type BackupState,
+  type PreflightCheck,
   type UpdateEnvironment,
 } from '@syntra/core';
+import type { AgentStatus } from '../../backup-agent/client.js';
 import { ProblemError } from '../../plugins/problem-json.js';
 import { requireSession } from '../../plugins/require-session.js';
 import { requirePermission } from '../../plugins/require-permission.js';
@@ -19,6 +30,16 @@ export interface UpdateRouteOptions {
   releaseRoot: string;
   /** Built from the port this process actually bound. See launchUpdater. */
   readyUrl: string;
+  /** The backup agent's status, where one is configured; null when it did not answer. */
+  backupStatus?: (() => Promise<AgentStatus | null>) | undefined;
+  /** Free bytes where releases are unpacked. Test seam; defaults to statfs. */
+  freeBytes?: ((path: string) => Promise<number>) | undefined;
+  fetchImpl?: typeof fetch | undefined;
+}
+
+async function statfsFree(path: string): Promise<number> {
+  const stats = await statfs(path);
+  return stats.bavail * stats.bsize;
 }
 
 export const startRequest = z.object({
@@ -46,6 +67,7 @@ export async function registerAdminUpdateRoutes(
     token: options.releaseToken,
     root: options.releaseRoot,
     readyUrl: options.readyUrl,
+    fetchImpl: options.fetchImpl,
   });
 
   const configured = (): boolean =>
@@ -61,6 +83,50 @@ export async function registerAdminUpdateRoutes(
         // Read from disk rather than remembered: the process that started the
         // last update was restarted by it.
         progress: readProgress(options.releaseRoot),
+      };
+    },
+  );
+
+  // What the update to the newest release would install and change, and
+  // whether this install is ready for it. Every check is read fresh: it is
+  // asked for once, when the page offers an update, and again on Check again.
+  app.get(
+    '/update/preflight',
+    { preHandler: requirePermission(PERMISSIONS.DEPLOYMENT_MANAGE) },
+    async () => {
+      const availability = await checkForUpdate(env());
+      const latest = availability.latest;
+      if (!availability.updateAvailable || latest === null || options.releaseToken === null) {
+        return { target: null, ready: false, releases: [], checks: [] };
+      }
+
+      const listed = await fetchReleases(options.releaseToken, options.releaseRepo ?? '', options.fetchImpl);
+      const between = listed.ok ? releasesBetween(listed.releases, availability.current, latest.version) : [];
+      const releases = between.length > 0 ? between : [latest];
+
+      const checks: PreflightCheck[] = [releaseFilesCheck(latest), releasesCheck(releases, availability.current), migrationsCheck(releases)];
+
+      try {
+        checks.push(diskCheck(await (options.freeBytes ?? statfsFree)(options.releaseRoot), options.releaseRoot));
+      } catch {
+        // No release root here (a working tree never gets this far, but a
+        // misconfigured SYNTRA_ROOT might): the updater reports that itself.
+      }
+
+      let backup: BackupState = { configured: false };
+      if (options.backupStatus) {
+        const status = await options.backupStatus();
+        backup = status
+          ? { configured: true, reachable: true, lastSuccessAt: status.health.lastBackupSuccessAt }
+          : { configured: true, reachable: false };
+      }
+      checks.push(backupsCheck(backup, new Date()));
+
+      return {
+        target: latest.version,
+        ready: !checks.some((check) => check.status === 'fail'),
+        releases: releases.map(({ version, released, notes }) => ({ version, released, notes })),
+        checks,
       };
     },
   );
