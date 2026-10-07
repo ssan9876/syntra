@@ -307,6 +307,7 @@ model Tenant {
   sodRules                  SodRule[]
   sodViolations             SodViolation[]
   sodExceptions             SodException[]
+  auditStreams AuditStream[]
 }
 
 /// One row per user with a recent failed sign-in. Absent is the ordinary
@@ -5558,4 +5559,46 @@ model RestoreHold {
   releasedAt    DateTime?
 
   @@index([releasedAt])
+}
+
+/// Where a tenant's audit log is streamed: a SIEM, over HTTPS or syslog.
+///
+/// Every audit event, in sequence order, from `cursor` on. The cursor moves
+/// only after the receiver has accepted a batch, so a receiver that is down
+/// gets the same events again rather than a gap. The credential (a header
+/// value) is sealed in the vault as `audit-stream:<id>`, never here.
+model AuditStream {
+  id       String  @id @default(uuid()) @db.Uuid
+  tenantId String  @db.Uuid
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name     String
+  enabled  Boolean @default(true)
+  /// `https` or `syslog`.
+  transport String
+  /// https: `json` (an array per batch) or `splunk-hec`. syslog: `json`
+  /// (RFC 5424 with the event as its message) or `cef`.
+  format   String
+  /// https: the URL. syslog: unused.
+  url      String?
+  /// syslog: host, port, and whether to use TLS (RFC 5425).
+  host     String?
+  port     Int?
+  tls      Boolean @default(true)
+  /// The header the sealed credential is sent in (https); null sends none.
+  authHeader String?
+  /// The last audit sequence delivered. New events are those above it.
+  cursor   Int     @default(0)
+  lastDeliveredAt DateTime?
+  lastError       String?
+  lastErrorAt     DateTime?
+  consecutiveFailures Int @default(0)
+  /// Not before this, after a failure (backoff).
+  nextAttemptAt   DateTime?
+  /// Held by the process delivering it, so two replicas never send a batch twice.
+  leaseUntil      DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }

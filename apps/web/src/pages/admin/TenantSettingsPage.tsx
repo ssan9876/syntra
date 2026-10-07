@@ -4,6 +4,7 @@ import { SettingsSignInTab } from './SettingsSignInTab.js';
 import { SettingsSessionsTab } from './SettingsSessionsTab.js';
 import { BrandingTab } from './BrandingTab.js';
 import { WebhooksTab } from './WebhooksTab.js';
+import { SiemTab } from './SiemTab.js';
 import { TenantDeletionTab } from './TenantDeletionTab.js';
 import { CredentialsTab } from './CredentialsTab.js';
 import { SecurityAlertsTab } from './SecurityAlertsTab.js';
@@ -49,6 +50,8 @@ export function TenantSettingsPage() {
           { id: 'data-deletion', label: 'Data deletion', content: <PersonPurgeTab /> },
           { id: 'branding', label: 'Branding', content: <BrandingTab /> },
           { id: 'webhooks', label: 'Webhooks', content: <WebhooksTab /> },
+          // Every audit event, streamed to a SIEM over HTTPS or syslog.
+          { id: 'siem', label: 'SIEM', content: <SiemTab /> },
           // What Syntra signs in with and what it trusts, with expiry and
           // rotation (backlog #34, #67); and who is mailed about security
           // events (backlog #52). The expiry alert mails link here.

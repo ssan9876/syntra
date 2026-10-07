@@ -68,6 +68,7 @@ export const KINDS = [
   'deletionRequest',
   'webhook',
   'webhookDelivery',
+  'auditStream',
   'emailDomain',
   'snapshot',
   'evidencePack',
@@ -340,6 +341,11 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   // unchanged instead of asking DNS about `example.test`.
   const emailDomain = await tx.emailDomain.create({
     data: { tenantId, domain: `${tag}.example.test`, verificationToken: token(), verifiedAt: now },
+  });
+  // Disabled for the same reason as the webhook: the stream job is probed with
+  // A's context and must not dial `example.test`.
+  const auditStream = await tx.auditStream.create({
+    data: { tenantId, name: `${tag} siem`, transport: 'https', format: 'json', url: `https://${tag}.example.test/siem`, enabled: false },
   });
   const webhookDelivery = await tx.webhookDelivery.create({
     data: {
@@ -672,6 +678,7 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
     deletionRequest: deletionRequest.id,
     webhook: webhook.id,
     webhookDelivery: webhookDelivery.id,
+    auditStream: auditStream.id,
     snapshot: snapshot.id,
     evidencePack: evidencePack.id,
     finding: finding.id,

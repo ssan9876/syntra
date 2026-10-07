@@ -2210,6 +2210,10 @@ No personal data. Columns: `id`, `tenantId`, `name`, `description`, `enabled`, `
 
 No personal data. Columns: `id`, `tenantId`, `sourceId`, `objectType`, `sourceAttribute`, `targetField`, `transform`, `isCorrelation`.
 
+#### `AuditStream`
+
+No personal data. Columns: `id`, `tenantId`, `name`, `enabled`, `transport`, `format`, `url`, `host`, `port`, `tls`, `authHeader`, `cursor`, `lastDeliveredAt`, `lastError`, `lastErrorAt`, `consecutiveFailures`, `nextAttemptAt`, `leaseUntil`, `createdAt`, `updatedAt`.
+
 #### `AuthPolicy`
 
 No personal data. Columns: `id`, `tenantId`, `defaultOutcome`, `defaultFactorType`, `updatedAt`.

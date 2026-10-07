@@ -12,6 +12,8 @@ message, shown on the GitHub release and in Administration → Updates.
 - Backups: a failed backup, a failed or overdue restore test and a failed off-site copy each raise the **Backups failing** incident under Activity → Attention for `deployment.manage`, and are published on `/metrics` with four new Prometheus alerts.
 - Restore tests: every 7 days (`BACKUP_VERIFY_EVERY_DAYS`), and from **Test** on any backup, the agent restores a backup into a scratch database, counts what arrived and drops it. A pass marks the backup **Tested**.
 - Off-site copies to an S3-compatible bucket (`BACKUP_S3_BUCKET`: AWS S3, R2, B2, MinIO), encrypted under `BACKUP_S3_PASSPHRASE` as a `.syntra-backup` file the console can upload. **Test bucket** on the Backups page checks the settings.
+- **Settings → SIEM**: stream every audit event to a SIEM, in order and with no gaps, over HTTPS (Splunk HEC, or JSON for Elastic, Datadog, Vector and others) or TLS syslog (CEF for QRadar, ArcSight and Sentinel, or JSON). Each stream shows whether it is delivering, behind or failing; **Test** sends one event. Three failures in a row raise the **SIEM export failing** incident.
+- `GET /api/admin/audit/stream?after=<sequence>`: the audit log oldest first from a cursor, for a SIEM that polls with an API token.
 
 ### Changed
 - Console on phones: Users (people and accounts), Groups, Target systems, Employee work and Runs show one card per row, each value labelled with its column, instead of a table that scrolls sideways. Desktop is unchanged.

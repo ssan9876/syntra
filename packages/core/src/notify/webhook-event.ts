@@ -194,6 +194,11 @@ export const WEBHOOK_EVENT_GROUPS = {
       'notify.webhook_updated',
       'notify.webhook_deleted',
       'notify.webhook_secret_rotated',
+      // Where the audit log goes is a configuration change a SIEM team
+      // should hear about, including from the stream itself.
+      'audit.stream_created',
+      'audit.stream_updated',
+      'audit.stream_deleted',
       'deployment.update_requested',
       'deployment.rollback_requested',
       'deployment.restore_resumed',

@@ -2603,6 +2603,562 @@
         }
       }
     },
+    "/api/admin/audit-streams": {
+      "get": {
+        "operationId": "getAuditStreams",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "List the tenant's SIEM streams",
+        "description": "Each stream with its delivery state: `status` (`delivering`, `behind`, `failing`, `paused`), `behind` (events written but not yet delivered), and the last delivery and error. The credential is never returned; `hasCredential` says whether one is stored.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postAuditStreams",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Stream the audit log to a SIEM",
+        "description": "HTTPS (`json`: an array per batch; `splunk-hec`: Splunk HTTP Event Collector) or syslog over TCP (`json` or `cef` in RFC 5424, TLS by default). `credential` is sent in the `authHeader` header (e.g. `Authorization: Splunk <token>`) and sealed in the vault. `startFrom: beginning` sends the whole log first; the default is events from now on.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "https",
+                      "syslog"
+                    ]
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "splunk-hec",
+                      "cef"
+                    ]
+                  },
+                  "url": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "host": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 253
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "port": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tls": {
+                    "type": "boolean"
+                  },
+                  "authHeader": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "credential": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "startFrom": {
+                    "type": "string",
+                    "enum": [
+                      "now",
+                      "beginning"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "transport",
+                  "format"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit-streams/{id}": {
+      "put": {
+        "operationId": "putAuditStreamsById",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Change a SIEM stream",
+        "description": "Omitting `credential` keeps the stored one; `null` removes it. A changed destination starts with no failures recorded.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "transport": {
+                    "type": "string",
+                    "enum": [
+                      "https",
+                      "syslog"
+                    ]
+                  },
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "splunk-hec",
+                      "cef"
+                    ]
+                  },
+                  "url": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "host": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 253
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "port": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tls": {
+                    "type": "boolean"
+                  },
+                  "authHeader": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "credential": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "startFrom": {
+                    "type": "string",
+                    "enum": [
+                      "now",
+                      "beginning"
+                    ]
+                  }
+                },
+                "required": [
+                  "name",
+                  "transport",
+                  "format"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAuditStreamsById",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Stop streaming to a SIEM and delete the stream",
+        "description": "Requires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit-streams/{id}/test": {
+      "post": {
+        "operationId": "postAuditStreamsByIdTest",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Send a test event to a stream's destination",
+        "description": "One event with action `audit_stream.test`, not recorded in the audit log and not moving the cursor. `422 audit-stream-test-failed` with what the destination answered.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit/stream": {
+      "get": {
+        "operationId": "getAuditStream",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Read audit events oldest first from a cursor, for a SIEM that polls",
+        "description": "Events with a sequence above `after`, in order, in the shape the SIEM streams send. Pass `nextAfter` as `after` on the next call; it stays the same when there is nothing new. Use an API token with `audit.read`. Every event carries `hash` and `prevHash`, so the chain can be checked on the receiving side.\n\nRequires `audit.read`.",
+        "x-syntra-permission": [
+          "audit.read"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/audit/views": {
       "get": {
         "operationId": "getAuditViews",
