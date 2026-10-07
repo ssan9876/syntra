@@ -132,11 +132,19 @@ log "checking what came back"
 [ "$(psql_q "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'public'")" = syntra_app ] || die "public is not owned by syntra_app"
 
 log "waiting for the api to come back healthy"
+# The api restarts twice after a restore, so one healthy answer can come
+# between the two. Healthy five polls running (10 s) is past both.
+steady=0
 for _ in $(seq 120); do
-  [ "$(docker inspect -f '{{.State.Health.Status}}' "$(compose ps -q api)")" = healthy ] && break
+  if [ "$(docker inspect -f '{{.State.Health.Status}}' "$(compose ps -q api)" 2>/dev/null)" = healthy ]; then
+    steady=$((steady + 1))
+    [ "$steady" -ge 5 ] && break
+  else
+    steady=0
+  fi
   sleep 2
 done
-[ "$(docker inspect -f '{{.State.Health.Status}}' "$(compose ps -q api)")" = healthy ] || die "api did not come back healthy"
+[ "$steady" -ge 5 ] || die "api did not come back healthy"
 api_started_after="$(docker inspect -f '{{.State.StartedAt}}' "$(compose ps -q api)")"
 [ "$api_started_after" != "$api_started_before" ] || die "the api did not restart after the restore"
 compose logs api 2>/dev/null | grep -q "background work held: restored from $name" || die "the api did not report the hold"
