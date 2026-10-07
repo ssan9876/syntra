@@ -99,6 +99,47 @@ describe('SIEM stream routes', () => {
     expect(test.json().detail).toBe(`${url}: HTTP 403: {"text":"Invalid token","code":4}`);
   });
 
+  it('keeps a filter, shows the history, and resends from an event number', async () => {
+    ctx = await buildTestApp({ scheduler: () => createFakeScheduler(), env: { OUTBOUND_ALLOW_PRIVATE: 'true' } });
+    const admin = await cookieFor('admin', [PERMISSIONS.TENANT_MANAGE]);
+    const { url } = await listen();
+    for (const action of ['test.one', 'test.two', 'test.three']) {
+      await withTenant(ctx.tenantId, (tx) =>
+        recordEvent(tx, { actorUserId: null, action, targetType: 'Test', targetId: null, outcome: 'success', sourceIp: null, payload: {} }),
+      );
+    }
+    const created = await call('POST', '/api/admin/audit-streams', admin, {
+      name: 'Splunk', transport: 'https', format: 'json', url, actionPrefixes: ['test.', 'auth.*'], outcome: 'failure', startFrom: 'now',
+    });
+    const stream = created.json().stream;
+    expect(stream).toMatchObject({ actionPrefixes: ['test.', 'auth.'], outcome: 'failure' });
+
+    const badPrefix = await call('PUT', `/api/admin/audit-streams/${stream.id}`, admin, {
+      name: 'Splunk', transport: 'https', format: 'json', url, actionPrefixes: ['auth login'],
+    });
+    expect(badPrefix.statusCode).toBe(400);
+    expect(badPrefix.json().errors[0].path).toBe('actionPrefixes');
+
+    await call('POST', `/api/admin/audit-streams/${stream.id}/test`, admin, {});
+    const history = await call('GET', `/api/admin/audit-streams/${stream.id}/deliveries`, admin);
+    expect(history.statusCode).toBe(200);
+    expect(history.json().deliveries).toEqual([expect.objectContaining({ kind: 'test', ok: true, count: 1 })]);
+
+    const tooFar = await call('POST', `/api/admin/audit-streams/${stream.id}/replay`, admin, { from: 'sequence', sequence: 999 });
+    expect(tooFar.statusCode).toBe(400);
+    expect(tooFar.json().errors).toEqual([{ path: 'sequence', message: expect.stringMatching(/^The newest event is \d+\.$/) }]);
+
+    const replayed = await call('POST', `/api/admin/audit-streams/${stream.id}/replay`, admin, { from: 'sequence', sequence: 2 });
+    expect(replayed.statusCode).toBe(200);
+    expect(replayed.json().stream.cursor).toBe(1);
+    const recorded = await withTenant(ctx.tenantId, (tx) => tx.auditEvent.findFirstOrThrow({ where: { action: 'audit.stream_replayed' } }));
+    expect(recorded.payload).toMatchObject({ from: 'sequence', cursor: 1, actionPrefixes: ['test.', 'auth.'], outcome: 'failure' });
+
+    const missing = '00000000-0000-4000-8000-00000000dead';
+    expect((await call('GET', `/api/admin/audit-streams/${missing}/deliveries`, admin)).statusCode).toBe(404);
+    expect((await call('POST', `/api/admin/audit-streams/${missing}/replay`, admin, { from: 'now' })).statusCode).toBe(404);
+  });
+
   it('refuses plain http unless private addresses are allowed', async () => {
     ctx = await buildTestApp({ scheduler: () => createFakeScheduler(), env: { OUTBOUND_ALLOW_PRIVATE: 'false' } });
     const admin = await cookieFor('admin', [PERMISSIONS.TENANT_MANAGE]);

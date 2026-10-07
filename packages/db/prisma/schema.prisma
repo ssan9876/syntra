@@ -308,6 +308,7 @@ model Tenant {
   sodViolations             SodViolation[]
   sodExceptions             SodException[]
   auditStreams AuditStream[]
+  auditStreamDeliveries AuditStreamDelivery[]
 }
 
 /// One row per user with a recent failed sign-in. Absent is the ordinary
@@ -5596,9 +5597,40 @@ model AuditStream {
   nextAttemptAt   DateTime?
   /// Held by the process delivering it, so two replicas never send a batch twice.
   leaseUntil      DateTime?
+  /// Only events whose action starts with one of these. Empty: every event.
+  actionPrefixes  String[] @default([])
+  /// `success` or `failure` sends only events with that outcome; null, both.
+  outcome         String?
+  /// Bumped by every resend, so a batch already in flight cannot move the
+  /// cursor back over it, even to the same number.
+  generation      Int     @default(0)
+  deliveries      AuditStreamDelivery[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([tenantId, name])
   @@index([tenantId])
+}
+
+/// One batch sent to a stream, or one Test: what went and what came back.
+/// The newest 500 per stream are kept.
+model AuditStreamDelivery {
+  id       String      @id @default(uuid()) @db.Uuid
+  tenantId String      @db.Uuid
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  streamId String      @db.Uuid
+  stream   AuditStream @relation(fields: [streamId], references: [id], onDelete: Cascade)
+  at       DateTime    @default(now())
+  /// `batch` or `test`.
+  kind     String
+  /// The audit sequences sent; null for a test.
+  firstSequence Int?
+  lastSequence  Int?
+  count    Int
+  ok       Boolean
+  error    String?
+  durationMs Int
+
+  @@index([tenantId])
+  @@index([streamId, at])
 }

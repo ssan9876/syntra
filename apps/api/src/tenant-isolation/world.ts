@@ -347,6 +347,9 @@ async function seed(tx: TenantClient, tenantId: string, tag: string): Promise<Re
   const auditStream = await tx.auditStream.create({
     data: { tenantId, name: `${tag} siem`, transport: 'https', format: 'json', url: `https://${tag}.example.test/siem`, enabled: false },
   });
+  await tx.auditStreamDelivery.create({
+    data: { tenantId, streamId: auditStream.id, kind: 'batch', firstSequence: 1, lastSequence: 1, count: 1, ok: false, error: `${tag} siem refused`, durationMs: 5 },
+  });
   const webhookDelivery = await tx.webhookDelivery.create({
     data: {
       tenantId,

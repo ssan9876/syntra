@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { TenantClient } from '@syntra/db';
+import type { Prisma, TenantClient } from '@syntra/db';
 import { currentTenant } from '../tenant-context.js';
 import { assertOutboundUrl } from '../net/outbound.js';
 import type { MasterKeyProvider } from '../vault/master-key.js';
@@ -31,7 +31,13 @@ export interface AuditStreamInput {
   credential?: string | null | undefined;
   /** New streams: only events from now on, or the whole log first. */
   startFrom?: 'now' | 'beginning' | undefined;
+  /** Only events whose action starts with one of these. Empty or omitted: every event. */
+  actionPrefixes?: string[] | undefined;
+  /** Only events with this outcome. Null or omitted: both. */
+  outcome?: StreamOutcome | null | undefined;
 }
+
+export type StreamOutcome = 'success' | 'failure';
 
 export type AuditStreamStatus = 'delivering' | 'behind' | 'failing' | 'paused';
 
@@ -48,8 +54,10 @@ export interface AuditStreamView {
   tls: boolean;
   authHeader: string | null;
   hasCredential: boolean;
+  actionPrefixes: string[];
+  outcome: StreamOutcome | null;
   cursor: number;
-  /** Events written but not yet delivered. */
+  /** Events the stream sends, written but not yet delivered. */
   behind: number;
   status: AuditStreamStatus;
   lastDeliveredAt: string | null;
@@ -82,6 +90,8 @@ type Row = {
   port: number | null;
   tls: boolean;
   authHeader: string | null;
+  actionPrefixes: string[];
+  outcome: string | null;
   cursor: number;
   lastDeliveredAt: Date | null;
   lastError: string | null;
@@ -96,8 +106,7 @@ function statusOf(row: Row, behind: number): AuditStreamStatus {
   return behind > BEHIND_AFTER ? 'behind' : 'delivering';
 }
 
-function view(row: Row, latest: number, hasCredential: boolean): AuditStreamView {
-  const behind = Math.max(0, latest - row.cursor);
+function view(row: Row, behind: number, hasCredential: boolean): AuditStreamView {
   return {
     id: row.id,
     name: row.name,
@@ -110,6 +119,8 @@ function view(row: Row, latest: number, hasCredential: boolean): AuditStreamView
     tls: row.tls,
     authHeader: row.authHeader,
     hasCredential,
+    actionPrefixes: row.actionPrefixes,
+    outcome: row.outcome as StreamOutcome | null,
     cursor: row.cursor,
     behind,
     status: statusOf(row, behind),
@@ -121,9 +132,38 @@ function view(row: Row, latest: number, hasCredential: boolean): AuditStreamView
   };
 }
 
-async function latestSequence(tx: TenantClient): Promise<number> {
+export async function latestSequence(tx: TenantClient): Promise<number> {
   const top = await tx.auditEvent.findFirst({ orderBy: { sequence: 'desc' }, select: { sequence: true } });
   return top?.sequence ?? 0;
+}
+
+/** The audit events a stream sends, as a query condition. */
+export function streamFilter(stream: { actionPrefixes: string[]; outcome: string | null }): Prisma.AuditEventWhereInput {
+  return {
+    ...(stream.actionPrefixes.length > 0
+      ? { OR: stream.actionPrefixes.map((prefix) => ({ action: { startsWith: prefix } })) }
+      : {}),
+    ...(stream.outcome ? { outcome: stream.outcome } : {}),
+  };
+}
+
+/** Events after the cursor that the stream sends. Unfiltered, a subtraction. */
+async function behindOf(tx: TenantClient, row: Row, latest: number): Promise<number> {
+  if (row.actionPrefixes.length === 0 && !row.outcome) return Math.max(0, latest - row.cursor);
+  return tx.auditEvent.count({ where: { sequence: { gt: row.cursor }, ...streamFilter(row) } });
+}
+
+const PREFIX = /^[a-z0-9_.-]{1,100}$/;
+
+/** `auth.*` and `auth.` mean the same; blanks and repeats are dropped. */
+export function normalizePrefixes(prefixes: string[] | undefined): string[] {
+  const out: string[] = [];
+  for (const raw of prefixes ?? []) {
+    let prefix = raw.trim().toLowerCase();
+    while (prefix.endsWith('*')) prefix = prefix.slice(0, -1);
+    if (prefix && !out.includes(prefix)) out.push(prefix);
+  }
+  return out;
 }
 
 /**
@@ -134,6 +174,12 @@ async function latestSequence(tx: TenantClient): Promise<number> {
  * lab receiver on plain http works where OUTBOUND_ALLOW_PRIVATE is set.
  */
 async function validate(input: AuditStreamInput, allowPrivateAddresses: boolean): Promise<void> {
+  const prefixes = normalizePrefixes(input.actionPrefixes);
+  if (prefixes.length > 50) throw new AuditStreamInvalidError('actionPrefixes', 'At most 50 action prefixes.');
+  const bad = prefixes.find((prefix) => !PREFIX.test(prefix));
+  if (bad !== undefined) {
+    throw new AuditStreamInvalidError('actionPrefixes', `"${bad}" is not an action prefix. Use letters, digits, ".", "_" and "-".`);
+  }
   if (!FORMATS_FOR[input.transport].includes(input.format)) {
     throw new AuditStreamInvalidError('format', `${input.format} is not a format for ${input.transport}.`);
   }
@@ -172,6 +218,8 @@ function fields(input: AuditStreamInput) {
     port: https ? null : (input.port ?? null),
     tls: https ? true : (input.tls ?? true),
     authHeader: https ? (input.authHeader || null) : null,
+    actionPrefixes: normalizePrefixes(input.actionPrefixes),
+    outcome: input.outcome ?? null,
   };
 }
 
@@ -182,7 +230,7 @@ export async function listAuditStreams(tx: TenantClient): Promise<AuditStreamVie
     tx.secret.findMany({ where: { name: { startsWith: 'audit-stream:' } }, select: { name: true } }),
   ]);
   const sealed = new Set(secrets.map((secret) => secret.name));
-  return rows.map((row) => view(row, latest, sealed.has(streamSecretName(row.id))));
+  return Promise.all(rows.map(async (row) => view(row, await behindOf(tx, row, latest), sealed.has(streamSecretName(row.id)))));
 }
 
 export async function createAuditStream(
@@ -203,7 +251,7 @@ export async function createAuditStream(
     },
   });
   if (input.credential) await putSecret(tx, provider, streamSecretName(row.id), input.credential);
-  return view(row, latest, Boolean(input.credential));
+  return view(row, await behindOf(tx, row, latest), Boolean(input.credential));
 }
 
 export async function updateAuditStream(
@@ -225,11 +273,96 @@ export async function updateAuditStream(
   if (input.credential === null) await deleteSecret(tx, streamSecretName(id));
   else if (input.credential) await putSecret(tx, provider, streamSecretName(id), input.credential);
   const hasCredential = (await getSecret(tx, provider, streamSecretName(id))) !== null;
-  return view(row, await latestSequence(tx), hasCredential);
+  return view(row, await behindOf(tx, row, await latestSequence(tx)), hasCredential);
 }
 
 export async function deleteAuditStream(tx: TenantClient, id: string): Promise<boolean> {
   const { count } = await tx.auditStream.deleteMany({ where: { id } });
   await deleteSecret(tx, streamSecretName(id));
   return count > 0;
+}
+
+/** Where a resend starts. */
+export type ReplayFrom =
+  | { from: 'beginning' }
+  | { from: 'now' }
+  | { from: 'sequence'; sequence: number }
+  | { from: 'time'; at: Date };
+
+/**
+ * Moves a stream's cursor so delivery continues from another point: back, to
+ * send events again, or to now, to skip a backlog. Clears the failures and
+ * the backoff so the next run starts at once. Null for no such stream.
+ */
+export async function replayAuditStream(
+  tx: TenantClient,
+  id: string,
+  replay: ReplayFrom,
+): Promise<{ stream: AuditStreamView; previousCursor: number } | null> {
+  const existing = await tx.auditStream.findFirst({ where: { id } });
+  if (!existing) return null;
+  const latest = await latestSequence(tx);
+  let cursor: number;
+  switch (replay.from) {
+    case 'beginning':
+      cursor = 0;
+      break;
+    case 'now':
+      cursor = latest;
+      break;
+    case 'sequence':
+      if (replay.sequence < 1) throw new AuditStreamInvalidError('sequence', 'Event number must be 1 or more.');
+      if (replay.sequence > latest + 1) throw new AuditStreamInvalidError('sequence', `The newest event is ${latest}.`);
+      cursor = replay.sequence - 1;
+      break;
+    case 'time': {
+      const first = await tx.auditEvent.findFirst({
+        where: { occurredAt: { gte: replay.at } },
+        orderBy: { sequence: 'asc' },
+        select: { sequence: true },
+      });
+      cursor = first ? first.sequence - 1 : latest;
+      break;
+    }
+  }
+  const row = await tx.auditStream.update({
+    where: { id },
+    data: { cursor, generation: { increment: 1 }, consecutiveFailures: 0, nextAttemptAt: null, lastError: null, lastErrorAt: null },
+  });
+  const sealed = await tx.secret.findFirst({ where: { name: streamSecretName(id) }, select: { name: true } });
+  return { stream: view(row, await behindOf(tx, row, latest), sealed !== null), previousCursor: existing.cursor };
+}
+
+export interface AuditStreamDeliveryView {
+  id: string;
+  at: string;
+  kind: 'batch' | 'test';
+  firstSequence: number | null;
+  lastSequence: number | null;
+  count: number;
+  ok: boolean;
+  error: string | null;
+  durationMs: number;
+}
+
+/** A stream's deliveries, newest first. Null for no such stream. */
+export async function listAuditStreamDeliveries(
+  tx: TenantClient,
+  id: string,
+  limit = 100,
+): Promise<AuditStreamDeliveryView[] | null> {
+  const stream = await tx.auditStream.findFirst({ where: { id }, select: { id: true } });
+  if (!stream) return null;
+  const rows = await tx.auditStreamDelivery.findMany({ where: { streamId: id }, orderBy: { at: 'desc' }, take: limit });
+  return rows.map((row) => ({
+    id: row.id,
+    at: row.at.toISOString(),
+    kind: row.kind as 'batch' | 'test',
+    firstSequence: row.firstSequence,
+    lastSequence: row.lastSequence,
+    count: row.count,
+    ok: row.ok,
+    error: row.error,
+    durationMs: row.durationMs,
+  }));
 }

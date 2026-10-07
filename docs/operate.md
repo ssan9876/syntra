@@ -2083,6 +2083,17 @@ receiver that is down gets the same events when it is back, never a gap.
   again. **Test** sends one `audit_stream.test` event that is not in the log.
 - **New streams** start with events from now on, or with the whole log first
   (`Start with: The whole audit log`).
+- **Which events**: `Actions starting with` takes prefixes such as
+  `auth., user.` (`auth.*` means the same), and `Outcome` sends failures or
+  successes only. Empty, a stream sends every event. Events left out are
+  skipped, not held: the cursor moves past them.
+- **History** lists the newest 500 batches and tests of a stream: the event
+  numbers sent, whether the receiver accepted them, its answer when it did
+  not, and how long it took.
+- **Resend…** (in History) moves where delivery continues from: a date and
+  time, an event number, the whole audit log, or now, which skips everything
+  not yet sent. Failures and backoff are cleared, and the next run sends from
+  there. Recorded as `audit.stream_replayed`.
 - **HTTPS only**, unless `OUTBOUND_ALLOW_PRIVATE` is set: then plain `http://`
   works for a receiver on a private network. Destinations pass the same
   outbound-address checks as webhooks.
@@ -2090,8 +2101,8 @@ receiver that is down gets the same events when it is back, never a gap.
   status says why. Three failures in a row raise **SIEM export failing**
   under Activity → Attention.
 - Creating, changing and deleting a stream are audited
-  (`audit.stream_created`, `_updated`, `_deleted`) and can be sent to a
-  webhook.
+  (`audit.stream_created`, `_updated`, `_deleted`, `_replayed`) and can be
+  sent to a webhook.
 
 **To poll instead**, use an API token with `audit.read`:
 `GET /api/admin/audit/stream?after=<sequence>&limit=500` returns events oldest

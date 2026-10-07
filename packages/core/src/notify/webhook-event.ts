@@ -199,6 +199,7 @@ export const WEBHOOK_EVENT_GROUPS = {
       'audit.stream_created',
       'audit.stream_updated',
       'audit.stream_deleted',
+      'audit.stream_replayed',
       'deployment.update_requested',
       'deployment.rollback_requested',
       'deployment.restore_resumed',

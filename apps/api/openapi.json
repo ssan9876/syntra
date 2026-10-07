@@ -2655,7 +2655,7 @@
           "Audit"
         ],
         "summary": "Stream the audit log to a SIEM",
-        "description": "HTTPS (`json`: an array per batch; `splunk-hec`: Splunk HTTP Event Collector) or syslog over TCP (`json` or `cef` in RFC 5424, TLS by default). `credential` is sent in the `authHeader` header (e.g. `Authorization: Splunk <token>`) and sealed in the vault. `startFrom: beginning` sends the whole log first; the default is events from now on.\n\nRequires `tenant.manage`.",
+        "description": "HTTPS (`json`: an array per batch; `splunk-hec`: Splunk HTTP Event Collector) or syslog over TCP (`json` or `cef` in RFC 5424, TLS by default). `credential` is sent in the `authHeader` header (e.g. `Authorization: Splunk <token>`) and sealed in the vault. `startFrom: beginning` sends the whole log first; the default is events from now on. `actionPrefixes` (e.g. `[\"auth.\", \"user.\"]`) and `outcome` limit which events are sent; omitted, every event is.\n\nRequires `tenant.manage`.",
         "x-syntra-permission": [
           "tenant.manage"
         ],
@@ -2763,6 +2763,28 @@
                     "enum": [
                       "now",
                       "beginning"
+                    ]
+                  },
+                  "actionPrefixes": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "outcome": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "success",
+                          "failure"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   }
                 },
@@ -2930,6 +2952,28 @@
                       "now",
                       "beginning"
                     ]
+                  },
+                  "actionPrefixes": {
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  },
+                  "outcome": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "success",
+                          "failure"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
@@ -3004,6 +3048,212 @@
         "responses": {
           "204": {
             "description": "Success; no content."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit-streams/{id}/deliveries": {
+      "get": {
+        "operationId": "getAuditStreamsByIdDeliveries",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "A SIEM stream's delivery history",
+        "description": "Newest first: each batch (`kind: batch`, the audit sequences it carried) and each test (`kind: test`), whether the destination accepted it, its answer when it did not, and how long it took. The newest 500 per stream are kept.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/admin/audit-streams/{id}/replay": {
+      "post": {
+        "operationId": "postAuditStreamsByIdReplay",
+        "tags": [
+          "Audit"
+        ],
+        "summary": "Resend from a point in the audit log",
+        "description": "Moves the stream to `beginning`, an event `sequence`, the first event at or after a `time`, or `now` (skipping everything not yet sent). Delivery continues from there on the next run, with failures and backoff cleared. Recorded as `audit.stream_replayed`.\n\nRequires `tenant.manage`.",
+        "x-syntra-permission": [
+          "tenant.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "const": "beginning"
+                      }
+                    },
+                    "required": [
+                      "from"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "const": "now"
+                      }
+                    },
+                    "required": [
+                      "from"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "const": "sequence"
+                      },
+                      "sequence": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "sequence"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "const": "time"
+                      },
+                      "at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "at"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

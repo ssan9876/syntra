@@ -5,6 +5,7 @@ import { useApiResource } from './hooks.js';
 
 type Transport = 'https' | 'syslog';
 type Format = 'json' | 'splunk-hec' | 'cef';
+type Outcome = 'success' | 'failure';
 
 export interface AuditStream {
   id: string;
@@ -18,6 +19,9 @@ export interface AuditStream {
   tls: boolean;
   authHeader: string | null;
   hasCredential: boolean;
+  actionPrefixes: string[];
+  outcome: Outcome | null;
+  cursor: number;
   behind: number;
   status: 'delivering' | 'behind' | 'failing' | 'paused';
   lastDeliveredAt: string | null;
@@ -29,9 +33,14 @@ export interface AuditStream {
 const FORMAT_LABEL: Record<Format, string> = { json: 'JSON', 'splunk-hec': 'Splunk HEC', cef: 'CEF' };
 const FORMATS: Record<Transport, Format[]> = { https: ['json', 'splunk-hec'], syslog: ['json', 'cef'] };
 
+const OUTCOME_LABEL: Record<Outcome, string> = { success: 'Successes only', failure: 'Failures only' };
+
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'Never');
 const destination = (s: AuditStream) =>
   s.transport === 'https' ? (s.url ?? '') : `${s.host}:${s.port}${s.tls ? ' (TLS)' : ''}`;
+/** "auth., user. · Failures only"; empty for a stream that sends everything. */
+const filterText = (s: AuditStream) =>
+  [s.actionPrefixes.join(', '), s.outcome ? OUTCOME_LABEL[s.outcome] : ''].filter(Boolean).join(' · ');
 
 function problemText(cause: unknown, fallback: string): string {
   return cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : fallback;
@@ -46,6 +55,7 @@ export function SiemTab() {
   const { data, error, loading, reload } = useApiResource<{ streams: AuditStream[] }>('/api/admin/audit-streams');
   const [editing, setEditing] = useState<AuditStream | 'new' | null>(null);
   const [deleting, setDeleting] = useState<AuditStream | null>(null);
+  const [history, setHistory] = useState<AuditStream | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; title: string; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -103,7 +113,7 @@ export function SiemTab() {
         ) : streams.length === 0 ? (
           <Empty title="No streams yet" />
         ) : (
-          <Table label="SIEM streams">
+          <Table stackOnPhone label="SIEM streams">
             <thead>
               <tr>
                 <th scope="col">Name</th>
@@ -121,6 +131,7 @@ export function SiemTab() {
                 <tr key={stream.id}>
                   <th scope="row" className="font-medium">
                     {stream.name}
+                    {filterText(stream) ? <p className="text-sm font-normal text-muted">{filterText(stream)}</p> : null}
                   </th>
                   <td className="max-w-xs break-all font-mono text-sm">{destination(stream)}</td>
                   <td>{FORMAT_LABEL[stream.format]}</td>
@@ -132,6 +143,9 @@ export function SiemTab() {
                     <div className="row-actions">
                       <Button size="sm" variant="secondary" loading={busy === stream.id} onClick={() => void test(stream)}>
                         Test
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setHistory(stream)}>
+                        History
                       </Button>
                       <Button size="sm" variant="secondary" onClick={() => setEditing(stream)}>
                         Edit
@@ -159,6 +173,16 @@ export function SiemTab() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
+            void reload();
+          }}
+        />
+      ) : null}
+      {history ? (
+        <HistoryDialog
+          stream={history}
+          onClose={() => setHistory(null)}
+          onMoved={(moved) => {
+            setHistory(moved);
             void reload();
           }}
         />
@@ -226,6 +250,8 @@ interface Draft {
   credential: string;
   startFrom: 'now' | 'beginning';
   enabled: boolean;
+  actionPrefixes: string;
+  outcome: Outcome | '';
 }
 
 function bodyOf(stream: AuditStream) {
@@ -239,6 +265,8 @@ function bodyOf(stream: AuditStream) {
     port: stream.port,
     tls: stream.tls,
     authHeader: stream.authHeader,
+    actionPrefixes: stream.actionPrefixes,
+    outcome: stream.outcome,
   };
 }
 
@@ -255,6 +283,8 @@ function StreamDialog({ stream, onClose, onSaved }: { stream: AuditStream | null
     credential: '',
     startFrom: 'now',
     enabled: stream?.enabled ?? true,
+    actionPrefixes: stream?.actionPrefixes.join(', ') ?? '',
+    outcome: stream?.outcome ?? '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
@@ -279,6 +309,8 @@ function StreamDialog({ stream, onClose, onSaved }: { stream: AuditStream | null
       port: draft.transport === 'syslog' ? Number(draft.port) || null : null,
       tls: draft.tls,
       authHeader: draft.transport === 'https' ? draft.authHeader || null : null,
+      actionPrefixes: draft.actionPrefixes.split(',').map((prefix) => prefix.trim()).filter(Boolean),
+      outcome: draft.outcome || null,
       // Blank on an existing stream keeps the stored credential.
       ...(draft.credential ? { credential: draft.credential } : stream ? {} : { credential: null }),
       ...(stream ? {} : { startFrom: draft.startFrom }),
@@ -361,6 +393,23 @@ function StreamDialog({ stream, onClose, onSaved }: { stream: AuditStream | null
             <Check label="TLS" checked={draft.tls} onChange={(v) => set('tls', v)} />
           </>
         )}
+        <Field
+          label="Actions starting with"
+          value={draft.actionPrefixes}
+          onChange={(v) => set('actionPrefixes', v)}
+          placeholder="All actions, or e.g. auth., user."
+          error={errors['actionPrefixes']}
+        />
+        <Select
+          label="Outcome"
+          value={draft.outcome}
+          onChange={(v) => set('outcome', v as Draft['outcome'])}
+          options={[
+            { value: '', label: 'Any' },
+            { value: 'failure', label: OUTCOME_LABEL.failure },
+            { value: 'success', label: OUTCOME_LABEL.success },
+          ]}
+        />
         {stream ? null : (
           <Select
             label="Start with"
@@ -373,6 +422,162 @@ function StreamDialog({ stream, onClose, onSaved }: { stream: AuditStream | null
           />
         )}
         {problem ? <Alert tone="danger">{problem}</Alert> : null}
+      </div>
+    </Dialog>
+  );
+}
+
+interface Delivery {
+  id: string;
+  at: string;
+  kind: 'batch' | 'test';
+  firstSequence: number | null;
+  lastSequence: number | null;
+  count: number;
+  ok: boolean;
+  error: string | null;
+  durationMs: number;
+}
+
+type ResendFrom = 'time' | 'sequence' | 'beginning' | 'now';
+
+/** `datetime-local` is wall-clock time in the browser's zone; the server takes an instant. */
+const toInstant = (local: string) => new Date(local).toISOString();
+
+const sent = (d: Delivery) =>
+  d.kind === 'test'
+    ? 'Test event'
+    : d.firstSequence === d.lastSequence
+      ? `#${d.firstSequence}`
+      : `#${d.firstSequence?.toLocaleString()}–${d.lastSequence?.toLocaleString()} (${d.count.toLocaleString()})`;
+
+/** A stream's deliveries, newest first, and Resend: move where delivery continues from. */
+function HistoryDialog({ stream, onClose, onMoved }: { stream: AuditStream; onClose(): void; onMoved(stream: AuditStream): void }) {
+  const { data, error, loading, reload } = useApiResource<{ deliveries: Delivery[] }>(
+    `/api/admin/audit-streams/${stream.id}/deliveries`,
+  );
+  const [resending, setResending] = useState(false);
+  const [from, setFrom] = useState<ResendFrom>('time');
+  const [at, setAt] = useState('');
+  const [sequence, setSequence] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const deliveries = data?.deliveries ?? [];
+
+  async function resend() {
+    setBusy(true);
+    setProblem(null);
+    const body =
+      from === 'time'
+        ? { from, at: toInstant(at) }
+        : from === 'sequence'
+          ? { from, sequence: Number(sequence) }
+          : { from };
+    try {
+      const result = await api<{ stream: AuditStream }>(`/api/admin/audit-streams/${stream.id}/replay`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setResending(false);
+      onMoved(result.stream);
+      reload();
+    } catch (cause) {
+      setProblem(problemText(cause, 'Not moved.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ready = from === 'time' ? at !== '' : from === 'sequence' ? Number(sequence) >= 1 : true;
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={resending ? `Resend to ${stream.name}` : `${stream.name} history`}
+      actions={
+        resending ? (
+          <>
+            <Button variant="secondary" disabled={busy} onClick={() => setResending(false)}>
+              Back
+            </Button>
+            <Button variant="primary" loading={busy} disabled={busy || !ready} onClick={() => void resend()}>
+              {from === 'now' ? 'Skip to now' : 'Resend'}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={() => setResending(true)}>
+              Resend…
+            </Button>
+            <Button variant="primary" onClick={onClose}>
+              Close
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-sm text-muted">
+          {`Sent up to event #${stream.cursor.toLocaleString()}. ${stream.behind.toLocaleString()} waiting.`}
+        </p>
+        {resending ? (
+          <>
+            <Select
+              label="Resend from"
+              value={from}
+              onChange={(v) => setFrom(v as ResendFrom)}
+              options={[
+                { value: 'time', label: 'A date and time' },
+                { value: 'sequence', label: 'An event number' },
+                { value: 'beginning', label: 'The whole audit log' },
+                { value: 'now', label: 'Now (skip events not yet sent)' },
+              ]}
+            />
+            {from === 'time' ? <Field label="From" type="datetime-local" value={at} onChange={setAt} /> : null}
+            {from === 'sequence' ? (
+              <Field label="Event number" inputMode="numeric" value={sequence} onChange={setSequence} />
+            ) : null}
+            {problem ? <Alert tone="danger">{problem}</Alert> : null}
+          </>
+        ) : loading && !data ? (
+          <SkeletonRows rows={4} />
+        ) : error ? (
+          <Alert tone="danger">{error}</Alert>
+        ) : deliveries.length === 0 ? (
+          <Empty title="No deliveries yet" />
+        ) : (
+          <Table stackOnPhone label="Deliveries" tight>
+            <thead>
+              <tr>
+                <th scope="col">At</th>
+                <th scope="col">Events</th>
+                <th scope="col">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deliveries.map((delivery) => (
+                <tr key={delivery.id}>
+                  <td className="whitespace-nowrap">{when(delivery.at)}</td>
+                  <td className="whitespace-nowrap">{sent(delivery)}</td>
+                  <td>
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {delivery.ok ? (
+                          <Status tone="active" glyph="check">Accepted</Status>
+                        ) : (
+                          <Status tone="danger" glyph="blocked">Refused</Status>
+                        )}
+                        <span className="whitespace-nowrap text-sm text-muted">{`${delivery.durationMs.toLocaleString()} ms`}</span>
+                      </div>
+                      {delivery.error ? <p className="break-words text-sm text-danger">{delivery.error}</p> : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
       </div>
     </Dialog>
   );

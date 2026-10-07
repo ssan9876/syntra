@@ -8,6 +8,10 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+### Added
+- Settings → SIEM: **Actions starting with** and **Outcome** choose which audit events a stream sends.
+- Settings → SIEM → **History**: the newest 500 batches and tests per stream, with what the receiver answered. **Resend…** sends again from a date and time, an event number or the whole log, or skips to now (`audit.stream_replayed`).
+
 ### Fixed
 - Release layout: `systemctl enable --now syntra-backup-agent.service` failed with "no installation config", so the backup agent could not be set to start at boot.
 
