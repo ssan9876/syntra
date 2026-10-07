@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, Panel, SkeletonRows, StateBadge } from '@syntra/ui';
+import { Link } from 'react-router-dom';
+import { Alert, Button, Panel, SkeletonRows, StateBadge, Status } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageHeader } from './PageHeader.js';
 
@@ -23,6 +24,31 @@ interface Availability {
   } | null;
   progress: Progress | null;
 }
+
+type CheckStatus = 'pass' | 'info' | 'warn' | 'fail';
+
+interface PreflightCheck {
+  id: string;
+  status: CheckStatus;
+  title: string;
+  detail: string;
+  items?: string[];
+  href?: string;
+}
+
+interface Preflight {
+  target: string | null;
+  ready: boolean;
+  releases: { version: string; released: string | null; notes: string }[];
+  checks: PreflightCheck[];
+}
+
+const CHECK_STATUS: Record<CheckStatus, { tone: 'active' | 'info' | 'warning' | 'danger'; glyph: 'check' | 'dot' | 'alert' | 'blocked'; label: string }> = {
+  pass: { tone: 'active', glyph: 'check', label: 'Ready' },
+  info: { tone: 'info', glyph: 'dot', label: 'Note' },
+  warn: { tone: 'warning', glyph: 'alert', label: 'Check' },
+  fail: { tone: 'danger', glyph: 'blocked', label: 'Blocked' },
+};
 
 /** Steps after which the updater is not coming back. */
 const TERMINAL = new Set(['succeeded', 'rolled_back', 'failed']);
@@ -71,6 +97,9 @@ export function UpdatesPage() {
    * nothing was happening and stopped looking.
    */
   const [launched, setLaunched] = useState(false);
+  const [preflight, setPreflight] = useState<Preflight | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
 
   const load = useCallback(async (quiet = false) => {
     try {
@@ -134,6 +163,27 @@ export function UpdatesPage() {
     const timer = setInterval(() => void load(true), 3000);
     return () => clearInterval(timer);
   }, [running, restarting, launched, load]);
+
+  const offered = data?.updateAvailable ? (data.latest?.version ?? null) : null;
+
+  const check = useCallback(async () => {
+    setChecking(true);
+    setPreflightError(null);
+    try {
+      setPreflight(await api<Preflight>('/api/admin/update/preflight'));
+    } catch (cause) {
+      setPreflightError(
+        cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Checks did not run.',
+      );
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  // Once per release offered: the checks are about that release.
+  useEffect(() => {
+    if (offered) void check();
+  }, [offered, check]);
 
   async function start(version: string) {
     setBusy(true);
@@ -281,11 +331,55 @@ export function UpdatesPage() {
                     )}
                   </p>
 
-                  {latest.notes && (
-                    <div className="whitespace-pre-wrap rounded-panel border border-border-subtle bg-surface-2 p-3 text-ink">
-                      {latest.notes}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-semibold text-ink">Before you update</h3>
+                      <Button size="sm" variant="secondary" loading={checking} disabled={checking} onClick={() => void check()}>
+                        Check again
+                      </Button>
                     </div>
-                  )}
+                    {preflightError && <Alert tone="warning">{preflightError}</Alert>}
+                    {!preflight && checking && <SkeletonRows rows={3} cols={2} />}
+                    {preflight && preflight.checks.length > 0 && (
+                      <ul aria-label="Update checks" className="divide-y divide-border-subtle rounded-panel border border-border-subtle">
+                        {preflight.checks.map((item) => (
+                          <li key={item.id} className="flex flex-col gap-1 p-3 sm:flex-row sm:gap-4">
+                            <div className="w-28 shrink-0">
+                              <Status tone={CHECK_STATUS[item.status].tone} glyph={CHECK_STATUS[item.status].glyph}>
+                                {CHECK_STATUS[item.status].label}
+                              </Status>
+                            </div>
+                            <div className="min-w-0 space-y-1">
+                              <p className="font-medium text-ink">{item.title}</p>
+                              <p className="text-sm text-muted">{item.detail}</p>
+                              {item.items && item.items.length > 0 && (
+                                <ul className="ml-4 list-disc space-y-0.5 break-words text-sm text-muted">
+                                  {item.items.map((line) => (
+                                    <li key={line}>{line}</li>
+                                  ))}
+                                </ul>
+                              )}
+                              {item.href && item.status !== 'pass' && (
+                                <Link className="text-sm text-primary underline" to={item.href}>
+                                  Go to Backups
+                                </Link>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  {(preflight && preflight.releases.length > 1 ? preflight.releases : [{ version: latest.version, released: latest.released, notes: latest.notes }])
+                    .filter((item) => item.notes)
+                    .reverse()
+                    .map((item, index) => (
+                      <details key={item.version} open={index === 0} className="rounded-panel border border-border-subtle bg-surface-2">
+                        <summary className="cursor-pointer p-3 font-medium text-ink">{`${item.version} release notes`}</summary>
+                        <div className="whitespace-pre-wrap break-words px-3 pb-3 text-ink">{item.notes}</div>
+                      </details>
+                    ))}
 
                   {/* Not merely `disabled`: `disabled` still leaves an
                       element for `getByRole` to find, so a page that had
@@ -294,9 +388,12 @@ export function UpdatesPage() {
                       launched something and has not yet seen it stop, there
                       is nothing to offer. */}
                   {!confirming && !launched && (
-                    <div className="flex justify-end">
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                      {preflight && !preflight.ready && preflight.checks.length > 0 && (
+                        <p className="text-sm text-danger">Fix the blocked check first.</p>
+                      )}
                       <Button
-                        disabled={busy || (progress?.running ?? false)}
+                        disabled={busy || (progress?.running ?? false) || (preflight !== null && !preflight.ready && preflight.checks.length > 0)}
                         onClick={() => setConfirming(true)}
                       >
                         Update to {latest.version}

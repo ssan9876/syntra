@@ -576,6 +576,7 @@ export async function buildApp(
     releaseToken: config.releaseToken,
     releaseRoot: config.releaseRoot,
     readyUrl: `http://127.0.0.1:${config.port}/health/ready`,
+    ...(config.backupAgent ? { backupStatus: backupStatusReader(config.backupAgent) } : {}),
   });
   await app.register(registerAdminSourceRoutes, {
     prefix: '/api/admin',

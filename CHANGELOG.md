@@ -8,6 +8,9 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+### Added
+- Administration → Updates: **Before you update** lists the releases an update installs with each one's notes, the database changes they make, disk space and the age of the last backup. **Update** stays off while the release files are not published or the disk has under 1 GB free. API: `GET /api/admin/update/preflight`.
+
 ## [1.23.0] - 2026-10-07
 
 ### Added
