@@ -1319,7 +1319,7 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     });
 
   const patchBody = (fetchMock: ReturnType<typeof mockTarget>) => {
-    const patch = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!;
+    const patch = fetchMock.mock.calls.findLast(([, init]) => init?.method === 'PATCH')!;
     return JSON.parse(String(patch[1]!.body)) as { ladder: Record<string, unknown> };
   };
 
@@ -1327,9 +1327,14 @@ describe('TargetDetailPage: Delete accounts after N days inactive', () => {
     const fetchMock = mockTarget({ type: 'activeDirectory', deleteAfterDays: 30 });
     renderExisting();
     const field = await screen.findByLabelText('Delete accounts after N days inactive');
-    expect(field).toHaveValue('30');
+    // Waited for, not read once: see 'saves an empty box as never' below.
+    await waitFor(() => expect(field).toHaveValue('30'));
     await userEvent.clear(field);
     await userEvent.type(field, '45');
+    // The box the Save button will read, re-found: on a slow runner CI once
+    // saved something other than 45, and this says whether the typing or the
+    // save is what lost it.
+    await waitFor(() => expect(screen.getByLabelText('Delete accounts after N days inactive')).toHaveValue('45'));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true),
