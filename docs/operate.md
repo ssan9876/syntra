@@ -252,6 +252,11 @@ What an update does, in order:
 7. Once ready: prunes old releases, dumps and downloads, then installs the
    new release's `syntra-update` and `syntra-backup` into `/opt/syntra/bin`
    and refreshes the backup units (below).
+8. Restarts `syntra-backup-agent` on the new release, if it is running. A
+   backup or restore in progress is waited for, up to 10 minutes
+   (`SYNTRA_BACKUP_AGENT_WAIT`); if it is still running then, the restart is
+   skipped and the log says to run `systemctl restart syntra-backup-agent`.
+   `--rollback` does the same.
 
 Signing in stops working for about a minute. Sessions already open survive.
 
