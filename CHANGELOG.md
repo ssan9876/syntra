@@ -8,6 +8,14 @@ message, shown on the GitHub release and in Administration → Updates.
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-10-10
+
+### Added
+- Administration → Backups: **Change** next to *Restore points* sets the interval: every 1, 2, 3, 4, 6, 8 or 12 hours, once a day at 00:00 UTC, or off. It is kept beside the backups, survives a restore, and replaces `BACKUP_INTERVAL_HOURS` once set. API: `PUT /api/admin/backups/schedule` (`deployment.backup_schedule_changed`).
+
+### Fixed
+- Release layout: `syntra-backup-agent` kept running the release it started on after an update or rollback, so every backup recorded the old version. `syntra-update` now restarts it once the new release is ready, after any backup or restore in progress.
+
 ## [1.24.0] - 2026-10-07
 
 ### Added
@@ -504,7 +512,8 @@ Not published. The changes below first install with 1.0.4.
 ### Added
 - First release: SCIM 2.0 target connector, compound AND/OR/NOT business rules, and the self-updater (`syntra-update`) with rollback.
 
-[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.24.0...HEAD
+[Unreleased]: https://github.com/ssan9876/syntra/compare/v1.25.0...HEAD
+[1.25.0]: https://github.com/ssan9876/syntra/compare/v1.24.0...v1.25.0
 [1.24.0]: https://github.com/ssan9876/syntra/compare/v1.23.0...v1.24.0
 [1.23.0]: https://github.com/ssan9876/syntra/compare/v1.22.0...v1.23.0
 [1.22.0]: https://github.com/ssan9876/syntra/compare/v1.21.0...v1.22.0
