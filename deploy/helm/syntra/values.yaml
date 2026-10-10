@@ -417,7 +417,7 @@ metrics:
 backup:
   enabled: false
   # Hours between restore points; 0 turns the schedule off (Back up now still
-  # works).
+  # works). Ignored once the interval is set under Administration -> Backups.
   intervalHours: 1
   retention:
     hourly: 48

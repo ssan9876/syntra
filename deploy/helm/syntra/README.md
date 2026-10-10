@@ -250,7 +250,7 @@ With `backup.enabled=true` the chart runs the backup agent: a one-replica
 Deployment from the api image, a ClusterIP Service on 3100 that only the API
 pods may reach (with `networkPolicy.enabled`), and a PersistentVolumeClaim.
 It provides **Administration → Backups**: restore points every
-`backup.intervalHours` (default 1), kept 48 hourly, 14 daily and 8 weekly
+`backup.intervalHours` (default 1, or as set on the page), kept 48 hourly, 14 daily and 8 weekly
 (`backup.retention`), Back up now, download and upload as a
 passphrase-encrypted file, and restore. See
 [Backups from the console](../../../docs/operate.md#backups-from-the-console).

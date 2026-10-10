@@ -14,6 +14,7 @@ import { BackupRefusedError, type BackupStore } from './store.js';
  * token as a bearer; there is no anonymous route.
  *
  *   GET    /v1/status
+ *   PUT    /v1/schedule                 { intervalHours, requestedBy }
  *   GET    /v1/backups
  *   POST   /v1/backups                  { requestedBy }        -> 202 job
  *   DELETE /v1/backups/:name
@@ -63,6 +64,13 @@ export function agentServer(agent: Agent, store: BackupStore, token: string): Se
     if (version !== 'v1') return send(response, 404, { error: 'not-found' });
 
     if (collection === 'status' && method === 'GET' && !id) return send(response, 200, agent.status());
+
+    if (collection === 'schedule' && method === 'PUT' && !id) {
+      const body = await readJson(request);
+      const hours = body['intervalHours'];
+      if (typeof hours !== 'number') return send(response, 400, { error: 'invalid', message: 'intervalHours missing.' });
+      return send(response, 200, { intervalHours: await agent.setIntervalHours(hours, text(body['requestedBy'])) });
+    }
 
     if (collection === 'backups') {
       if (!id && method === 'GET') return send(response, 200, { backups: await store.list() });

@@ -1,4 +1,4 @@
-import { downloadRequest, restoreRequest } from './backups.js';
+import { downloadRequest, restoreRequest, scheduleRequest } from './backups.js';
 import { describeAdminRoutes } from '../../openapi/describe.js';
 
 /**
@@ -10,6 +10,12 @@ export const backupsOpenApi = describeAdminRoutes('Backups', {
     summary: 'List restore points and the backup service status',
     description:
       '`configured` is false when BACKUP_AGENT_URL is not set. Each backup carries `key` (`match`, `mismatch`, `unknown`) against the running master key and `versionCheck` (`ok`, `newer`, `unknown`).',
+  },
+  'PUT /backups/schedule': {
+    summary: 'Set how often restore points are taken',
+    description:
+      'Hours between restore points, taken on the hour in UTC: 0 (off), 1, 2, 3, 4, 6, 8, 12 or 24. Replaces BACKUP_INTERVAL_HOURS from then on. Recorded as `deployment.backup_schedule_changed`.',
+    body: scheduleRequest,
   },
   'POST /backups': {
     summary: 'Take a backup now',

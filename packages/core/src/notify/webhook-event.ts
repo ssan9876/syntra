@@ -208,6 +208,7 @@ export const WEBHOOK_EVENT_GROUPS = {
       'deployment.backup_verify_requested',
       'deployment.backup_downloaded',
       'deployment.backup_uploaded',
+      'deployment.backup_schedule_changed',
       'deployment.restore_requested',
       // An identity provider that starts creating accounts is a configuration
       // change somebody should be able to watch, and the first sign of a

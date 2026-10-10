@@ -120,6 +120,38 @@ describe('backup agent: job history', () => {
   });
 });
 
+describe('backup agent: schedule', () => {
+  it('starts from BACKUP_INTERVAL_HOURS and is due on the hours it divides', async () => {
+    const agent = agentIn(mkdtempSync(join(tmpdir(), 'syntra-agent-')), { config: { intervalHours: 6 } });
+    await agent.ready;
+    expect(agent.status()).toMatchObject({ intervalHours: 6, intervalSetAt: null });
+    expect(agent.due(new Date(Date.UTC(2026, 9, 6, 12)))).toBe(true);
+    expect(agent.due(new Date(Date.UTC(2026, 9, 6, 13)))).toBe(false);
+  });
+
+  it('keeps an interval set in the console across a restart, over the environment', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'syntra-agent-'));
+    const first = agentIn(dir, { config: { intervalHours: 1 } });
+    await first.ready;
+    expect(await first.setIntervalHours(12, 'admin')).toBe(12);
+    expect(first.due(new Date(Date.UTC(2026, 9, 6, 3)))).toBe(false);
+
+    const restarted = agentIn(dir, { config: { intervalHours: 1 } });
+    await restarted.ready;
+    expect(restarted.status().intervalHours).toBe(12);
+    expect(restarted.status().intervalSetAt).toEqual(expect.any(String));
+  });
+
+  it('turns restore points off at 0, and refuses an interval the console does not offer', async () => {
+    const agent = agentIn(mkdtempSync(join(tmpdir(), 'syntra-agent-')));
+    await agent.ready;
+    await agent.setIntervalHours(0, 'admin');
+    expect(agent.due(new Date(Date.UTC(2026, 9, 6, 0)))).toBe(false);
+    await expect(agent.setIntervalHours(5, 'admin')).rejects.toThrow('Interval must be one of 0, 1, 2, 3, 4, 6, 8, 12, 24 hours, not 5.');
+    expect(agent.status().intervalHours).toBe(0);
+  });
+});
+
 describe('backup agent: off-site copies', () => {
   it('copies each backup and removes only what local retention pruned', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'syntra-agent-'));

@@ -109,7 +109,7 @@ async function cookieFor(login: string, permissions: Permission[]): Promise<stri
   });
 }
 
-const call = (method: 'GET' | 'POST' | 'DELETE', url: string, cookie: string, payload?: unknown) =>
+const call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, cookie: string, payload?: unknown) =>
   ctx.app.inject({
     method,
     url,
@@ -235,6 +235,30 @@ describe('backup routes', () => {
       'deployment.restore_requested',
       'deployment.backup_deleted',
     ]);
+  });
+
+  it('set the restore point schedule, only to an offered interval, and record it', async () => {
+    const url = await startAgent();
+    ctx = await buildTestApp({
+      scheduler: () => createFakeScheduler(),
+      env: { BACKUP_AGENT_URL: url, BACKUP_AGENT_TOKEN: TOKEN },
+    });
+    const operator = await cookieFor('operator', [PERMISSIONS.DEPLOYMENT_MANAGE]);
+    const tenantAdmin = await cookieFor('tenant-admin', [PERMISSIONS.TENANT_MANAGE]);
+
+    expect((await call('PUT', '/api/admin/backups/schedule', tenantAdmin, { intervalHours: 6 })).statusCode).toBe(403);
+    expect((await call('PUT', '/api/admin/backups/schedule', operator, { intervalHours: 5 })).statusCode).toBe(400);
+
+    const set = await call('PUT', '/api/admin/backups/schedule', operator, { intervalHours: 6 });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toEqual({ intervalHours: 6 });
+    const { status } = (await call('GET', '/api/admin/backups', operator)).json();
+    expect(status.intervalHours).toBe(6);
+    expect(status.intervalSetAt).toEqual(expect.any(String));
+
+    const events = await withTenant(ctx.tenantId, (tx) =>
+      tx.auditEvent.findMany({ where: { action: 'deployment.backup_schedule_changed' } }));
+    expect(events.map((event) => event.payload)).toEqual([{ from: 0, to: 6 }]);
   });
 
   it('lists failing backups as an incident to deployment.manage, and tests the bucket', async () => {

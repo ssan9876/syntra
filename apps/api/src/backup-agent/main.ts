@@ -81,17 +81,17 @@ await agent.ready;
 const server = agentServer(agent, store, config.token);
 server.listen(config.port, config.host, () => {
   log.info(
-    { host: config.host, port: config.port, dir: config.dir, intervalHours: config.intervalHours },
+    { host: config.host, port: config.port, dir: config.dir, intervalHours: agent.status().intervalHours },
     'backup agent listening',
   );
 });
 
-// On the hour: a restore point every `intervalHours` hours, then a restore
-// test when one is due. The test waits for the next hour if the backup is
-// still running.
+// On the hour: a restore point when the schedule, set in the console or by
+// BACKUP_INTERVAL_HOURS, says one is due, then a restore test when one is
+// due. The test waits for the next hour if the backup is still running.
 const tick = () => {
   const at = new Date();
-  if (config.intervalHours > 0 && at.getUTCHours() % config.intervalHours === 0) agent.scheduled();
+  if (agent.due(at)) agent.scheduled();
   agent.verifyIfDue();
 };
 const msToNextHour = 3_600_000 - (Date.now() % 3_600_000);

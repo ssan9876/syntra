@@ -10,7 +10,8 @@ import { backupAgentToken, DEFAULT_RETENTION, keyFingerprint, type RetentionPoli
  *   BACKUP_AGENT_PORT       default 3100
  *   BACKUP_AGENT_HOST       default 0.0.0.0; 127.0.0.1 on a host install
  *   BACKUP_AGENT_TOKEN      optional; derived from SESSION_SECRET otherwise
- *   BACKUP_INTERVAL_HOURS   hours between restore points (default 1; 0 is off)
+ *   BACKUP_INTERVAL_HOURS   hours between restore points (default 1; 0 is off),
+ *                           until the console sets them; see agent.ts
  *   BACKUP_KEEP_HOURLY / _DAILY / _WEEKLY / _MANUAL   retention (48/14/8/10)
  *   BACKUP_PG_CONTAINER     run the client tools in this container (or PG_CONTAINER)
  *   BACKUP_COPY_COMMAND     shell command run after each backup, its directory as $1
