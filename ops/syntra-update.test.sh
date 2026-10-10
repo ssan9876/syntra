@@ -717,6 +717,53 @@ RB_OUT="$(ROOT="$RB_ROOT"; refresh_backup_tool "$RB_ROOT/release/ops/syntra-back
 ok "an unchanged tool is left alone, silently" "$RB_OUT" ""
 rm -rf "$RB_ROOT"
 
+# --- restart_backup_agent ---------------------------------------------------
+#
+# The agent kept running the release it started on after every update, and
+# stamped that release's version on every backup it took.
+
+BA_DIR="$(mktemp -d)"
+ok "no jobs.json is not busy" "$(yes_no agent_busy "$BA_DIR")" no
+printf '[\n  {\n    "id": "a",\n    "state": "running"\n  },\n  {\n    "id": "b",\n    "state": "succeeded"\n  }\n]\n' > "$BA_DIR/jobs.json"
+ok "a running newest job is busy" "$(yes_no agent_busy "$BA_DIR")" yes
+printf '[\n  {\n    "id": "b",\n    "state": "succeeded"\n  },\n  {\n    "id": "a",\n    "state": "running"\n  }\n]\n' > "$BA_DIR/jobs.json"
+ok "only the newest job counts" "$(yes_no agent_busy "$BA_DIR")" no
+
+# systemctl, stubbed: $BA_ACTIVE says whether the agent runs, and every call
+# is appended to $BA_DIR/calls.
+systemctl() {
+  echo "$*" >> "$BA_DIR/calls"
+  case "$1" in
+    is-active) [ "${BA_ACTIVE:-yes}" = yes ] ;;
+    show) echo "BACKUP_DIR=$BA_DIR BACKUP_AGENT_HOST=127.0.0.1" ;;
+    restart) return 0 ;;
+  esac
+}
+sleep() { :; }
+current_version() { echo 1.5.0; }
+
+ok "BACKUP_DIR is read from the agent's unit" "$(agent_dir)" "$BA_DIR"
+
+: > "$BA_DIR/calls"
+BA_OUT="$(BA_ACTIVE=no restart_backup_agent 2>&1)"
+ok "a stopped agent is left stopped" "$(grep -c '^restart' "$BA_DIR/calls")" 0
+ok "and nothing is logged" "$BA_OUT" ""
+
+: > "$BA_DIR/calls"
+BA_OUT="$(restart_backup_agent 2>&1)"
+ok "an idle agent is restarted" "$(grep -c '^restart syntra-backup-agent$' "$BA_DIR/calls")" 1
+ok "and the log names the release" "$BA_OUT" "[syntra-update] backup agent restarted on 1.5.0"
+
+printf '[\n  {\n    "id": "a",\n    "state": "running"\n  }\n]\n' > "$BA_DIR/jobs.json"
+: > "$BA_DIR/calls"
+BA_OUT="$(AGENT_WAIT=30 restart_backup_agent 2>&1)"
+ok "an agent still busy after AGENT_WAIT is not restarted" "$(grep -c '^restart' "$BA_DIR/calls")" 0
+ok "and the log says what to run" "$BA_OUT" \
+  "[syntra-update] backup agent restart skipped: a job is still running after 30s. Run: systemctl restart syntra-backup-agent"
+
+unset -f systemctl sleep current_version
+rm -rf "$BA_DIR"
+
 # --- report -----------------------------------------------------------------
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

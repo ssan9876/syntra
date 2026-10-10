@@ -88,6 +88,9 @@ export function createAgent(deps: AgentDeps) {
           ? { ...job, state: 'failed', message: `Interrupted at "${job.step}".`, finishedAt: job.finishedAt ?? job.startedAt }
           : job,
       );
+      // Written back now, not at the next job: syntra-update reads the newest
+      // job's state to tell whether a restart would cut one short.
+      if (jobs.some((job) => job.state === 'running')) return persist();
     })
     .catch(() => undefined)
     .then(() => readFile(healthFile, 'utf8'))

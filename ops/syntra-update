@@ -38,6 +38,12 @@ LOCK="$VAR/update.lock"
 PREVIOUS_FILE="$VAR/previous-version"
 BACKUPS="$SHARED/backups"
 SERVICE="${SYNTRA_SERVICE:-syntra}"
+# The backup agent runs the release that was `current` when it started, and
+# stamps that release's version on every backup it takes. See
+# restart_backup_agent().
+AGENT_SERVICE="${SYNTRA_BACKUP_AGENT_SERVICE:-syntra-backup-agent}"
+# Seconds to wait for the agent's running job before leaving it alone.
+AGENT_WAIT="${SYNTRA_BACKUP_AGENT_WAIT:-600}"
 # Resolved in resolve_environment() from shared/.env, or overridden by the
 # environment the transient unit was launched with. Empty here, deliberately:
 # a default assigned at the top of the file is a default nobody sees until it
@@ -713,6 +719,50 @@ stop_service() {
   systemctl stop "$SERVICE" 2>/dev/null || true
 }
 
+# Where the agent keeps its backups and jobs.json: BACKUP_DIR from its unit,
+# drop-ins included, or the unit's default.
+agent_dir() {
+  local dir
+  dir=$(systemctl show -p Environment --value "$AGENT_SERVICE" 2>/dev/null \
+    | tr ' ' '\n' | sed -n 's/^BACKUP_DIR=//p' | tail -1)
+  printf %s "${dir:-$ROOT/restore-points}"
+}
+
+# Whether the agent's newest job, as it last wrote jobs.json, is running.
+# The agent writes the running job first, and rewrites the file on start, so
+# a job left "running" by a process that died does not count.
+agent_busy() {
+  local file="$1/jobs.json" state
+  [ -f "$file" ] || return 1
+  state=$(sed -n 's/^[[:space:]]*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1)
+  [ "$state" = running ]
+}
+
+# Restarts the backup agent onto the release now `current`, when it is
+# running. Without this it kept the release it started on: every backup
+# recorded the old version, and the console's backup routes met an agent that
+# did not know them. A backup or restore in progress is waited for, up to
+# AGENT_WAIT seconds, and never cut short. Cannot fail the caller: the
+# release is already running.
+restart_backup_agent() {
+  systemctl is-active --quiet "$AGENT_SERVICE" 2>/dev/null || return 0
+  local dir waited=0
+  dir=$(agent_dir)
+  while agent_busy "$dir"; do
+    if [ "$waited" -ge "$AGENT_WAIT" ]; then
+      log "backup agent restart skipped: a job is still running after ${AGENT_WAIT}s. Run: systemctl restart $AGENT_SERVICE"
+      return 0
+    fi
+    sleep 10
+    waited=$(( waited + 10 ))
+  done
+  if systemctl restart "$AGENT_SERVICE" 2>/dev/null; then
+    log "backup agent restarted on $(current_version)"
+  else
+    log "backup agent restart failed. Run: systemctl restart $AGENT_SERVICE"
+  fi
+}
+
 # What this deployment's database actually is, read from the configuration the
 # SERVICE is started with rather than assumed.
 #
@@ -913,6 +963,9 @@ do_update() {
   record_previous "$from"
   status "succeeded" "now running v$target"
   log "updated $from -> $target"
+  # After `succeeded`: the console is back, and a backup still running is
+  # waited for here, not in front of it.
+  restart_backup_agent
 }
 
 # The whole reason this design exists. Nobody is asked; nobody could be asked,
@@ -966,6 +1019,7 @@ do_rollback() {
   systemctl restart "$SERVICE" || true
   wait_ready || die "v$back_to did not become ready"
   status "rolled_back" "returned to v$back_to"
+  restart_backup_agent
 }
 
 prune() {

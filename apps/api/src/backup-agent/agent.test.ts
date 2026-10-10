@@ -102,6 +102,24 @@ async function finished(agent: ReturnType<typeof createAgent>, job: Job): Promis
   throw new Error('job did not finish');
 }
 
+describe('backup agent: job history', () => {
+  it('marks a job left running by a process that died as failed, on disk as well', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'syntra-agent-'));
+    await writeFile(
+      join(dir, 'jobs.json'),
+      JSON.stringify([
+        { id: 'j1', kind: 'backup', state: 'running', step: 'Dumping the database', message: null, backupName: null,
+          requestedBy: null, startedAt: '2026-10-06T11:00:00Z', finishedAt: null },
+      ]),
+    );
+    const agent = agentIn(dir);
+    await agent.ready;
+    expect(agent.job('j1')).toMatchObject({ state: 'failed', message: 'Interrupted at "Dumping the database".' });
+    const onDisk = JSON.parse(await readFile(join(dir, 'jobs.json'), 'utf8')) as Job[];
+    expect(onDisk[0]).toMatchObject({ id: 'j1', state: 'failed' });
+  });
+});
+
 describe('backup agent: off-site copies', () => {
   it('copies each backup and removes only what local retention pruned', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'syntra-agent-'));
