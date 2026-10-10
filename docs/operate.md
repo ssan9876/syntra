@@ -468,7 +468,7 @@ no `BACKUP_AGENT_URL`.
 
 | Action | What happens |
 |---|---|
-| Restore points | One every `BACKUP_INTERVAL_HOURS` (default 1), on the hour. Kept: every one from the last 48 hours, then one a day for 14 days, then one a week for 8 weeks. |
+| Restore points | One every hour by default, on the hour (UTC). **Change** next to *Restore points* sets the interval: every 1, 2, 3, 4, 6, 8 or 12 hours, once a day at 00:00 UTC, or off. The setting is kept in the backup directory, so a restore does not change it, and it replaces `BACKUP_INTERVAL_HOURS` from then on. Recorded as `deployment.backup_schedule_changed`. Kept: the 48 newest, then one a day for 14 days, then one a week for 8 weeks. |
 | Back up now | A manual backup. The 10 newest manual, uploaded and pre-restore backups are kept apart from the schedule (`BACKUP_KEEP_MANUAL`). |
 | Download | A `.syntra-backup` file: the manifest and the `pg_dump` archive, encrypted with AES-256-GCM under a key derived from your passphrase (scrypt, at least 12 characters). Recorded as `deployment.backup_downloaded`. |
 | Upload | The same file and passphrase. A wrong passphrase, a cut-short file and a damaged one are each refused by name. |
@@ -525,7 +525,7 @@ and a failed off-site copy each show on the Backups page and as the
 
 | Variable | Default | |
 |---|---|---|
-| `BACKUP_INTERVAL_HOURS` | `1` | `0` turns restore points off |
+| `BACKUP_INTERVAL_HOURS` | `1` | `0` turns restore points off. Ignored once the interval is set in the console |
 | `BACKUP_KEEP_HOURLY` / `_DAILY` / `_WEEKLY` | `48` / `14` / `8` | |
 | `BACKUP_KEEP_MANUAL` | `10` | Back up now, uploads, pre-restore |
 | `BACKUP_COPY_COMMAND` | unset | Shell command after each backup |

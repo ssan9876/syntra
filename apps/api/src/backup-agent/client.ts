@@ -11,6 +11,8 @@ export interface AgentStatus {
   verifyEveryDays: number;
   offsite: { bucket: string; endpoint: string | null; prefix: string } | null;
   intervalHours: number;
+  /** When the console last set the schedule; null while BACKUP_INTERVAL_HOURS applies. */
+  intervalSetAt: string | null;
   retention: RetentionPolicy;
   fingerprint: string | null;
   copyConfigured: boolean;
@@ -71,6 +73,14 @@ export function backupAgentClient(agent: { url: string; token: string }) {
   return {
     /** Three seconds at most: an incident list or a scrape must not wait on a dead agent. */
     status: () => json<AgentStatus>('/v1/status', { signal: AbortSignal.timeout(3_000) }),
+    setSchedule: async (intervalHours: number, requestedBy: string) =>
+      (
+        await json<{ intervalHours: number }>('/v1/schedule', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ intervalHours, requestedBy }),
+        })
+      ).intervalHours,
     list: async () => (await json<{ backups: StoredBackup[] }>('/v1/backups')).backups,
     backupNow: async (requestedBy: string) => (await json<{ job: Job }>('/v1/backups', post({ requestedBy }))).job,
     restore: async (name: string, requestedBy: string) =>

@@ -24,6 +24,7 @@ const configured = (backups: BackupRow[]): BackupsResponse => ({
   backups,
   status: {
     intervalHours: 1,
+    intervalSetAt: null,
     retention: { hourly: 48, daily: 14, weekly: 8, manual: 10 },
     copyConfigured: false,
     current: null,
@@ -83,6 +84,32 @@ describe('BackupsPage', () => {
     expect(cards).toHaveLength(2);
     expect(cards[1]).toHaveTextContent('Uploaded · 1.20.0 · 5.0 MB');
     expect(within(cards[1]!).getByRole('button', { name: 'Restore' })).toBeDisabled();
+  });
+
+  it('changes the restore point schedule', async () => {
+    let interval = 1;
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/schedule') && init?.method === 'PUT') {
+        interval = (JSON.parse(String(init.body)) as { intervalHours: number }).intervalHours;
+        return Promise.resolve(json({ intervalHours: interval }));
+      }
+      const body = configured([row()]);
+      return Promise.resolve(json({ ...body, status: { ...body.status!, intervalHours: interval } }));
+    });
+    renderPage();
+    await screen.findByRole('table', { name: 'Backups' });
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Restore point schedule' });
+    const save = within(dialog).getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    await userEvent.selectOptions(within(dialog).getByLabelText('Take a restore point'), 'Every 6 hours');
+    await userEvent.click(save);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/admin/backups/schedule',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ intervalHours: 6 }) }),
+    );
+    expect(await screen.findByText('Every 6 hours')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('starts a restore only once the backup name is typed', async () => {

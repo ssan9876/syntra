@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { EMPTY_BACKUP_HEALTH, type BackupEvent, type BackupHealth, type BackupKind, type BackupManifest } from '@syntra/core';
+import { BACKUP_INTERVALS, EMPTY_BACKUP_HEALTH, type BackupEvent, type BackupHealth, type BackupKind, type BackupManifest } from '@syntra/core';
 import type { AgentConfig } from './config.js';
 import type { PgTools } from './postgres.js';
 import type { Offsite } from './offsite.js';
@@ -72,12 +72,18 @@ export function createAgent(deps: AgentDeps) {
   const now = deps.now ?? (() => new Date());
   const historyFile = join(deps.config.dir, 'jobs.json');
   const healthFile = join(deps.config.dir, 'health.json');
+  // Beside the backups, not in the database: a restore must not bring back
+  // the schedule the backup was taken under.
+  const scheduleFile = join(deps.config.dir, 'schedule.json');
   const startedAt = now().toISOString();
   let health: BackupHealth = { ...EMPTY_BACKUP_HEALTH };
   let current: Job | null = null;
   let history: Job[] = [];
   let busy = false;
   let lastScheduledAt: Date | null = null;
+  // BACKUP_INTERVAL_HOURS until somebody sets one in the console.
+  let intervalHours = deps.config.intervalHours;
+  let intervalSetAt: string | null = null;
 
   const loaded = readFile(historyFile, 'utf8')
     .then((raw) => {
@@ -96,6 +102,15 @@ export function createAgent(deps: AgentDeps) {
     .then(() => readFile(healthFile, 'utf8'))
     .then((raw) => {
       if (raw) health = { ...EMPTY_BACKUP_HEALTH, ...(JSON.parse(raw) as Partial<BackupHealth>) };
+    })
+    .catch(() => undefined)
+    .then(() => readFile(scheduleFile, 'utf8'))
+    .then((raw) => {
+      const saved = JSON.parse(raw) as { intervalHours?: unknown; setAt?: unknown };
+      if (Number.isInteger(saved.intervalHours) && (saved.intervalHours as number) >= 0) {
+        intervalHours = saved.intervalHours as number;
+        intervalSetAt = typeof saved.setAt === 'string' ? saved.setAt : null;
+      }
     })
     .catch(() => undefined);
 
@@ -263,7 +278,9 @@ export function createAgent(deps: AgentDeps) {
         health,
         verifyEveryDays: deps.config.verifyEveryDays,
         offsite: deps.offsite?.describe() ?? null,
-        intervalHours: deps.config.intervalHours,
+        intervalHours,
+        /** When the console last set the schedule; null while BACKUP_INTERVAL_HOURS applies. */
+        intervalSetAt,
         retention: deps.config.retention,
         fingerprint: deps.config.fingerprint,
         copyConfigured: deps.config.copyCommand !== null,
@@ -280,6 +297,26 @@ export function createAgent(deps: AgentDeps) {
 
     backupNow(requestedBy: string | null): Job {
       return start('backup', requestedBy, null, (job) => takeBackup('manual', job));
+    },
+
+    /** Whether a restore point is due in the hour starting at `at`. */
+    due(at: Date): boolean {
+      return intervalHours > 0 && at.getUTCHours() % intervalHours === 0;
+    },
+
+    /** Sets the hours between restore points, kept across restarts. */
+    async setIntervalHours(hours: number, requestedBy: string | null): Promise<number> {
+      if (!(BACKUP_INTERVALS as readonly number[]).includes(hours)) {
+        throw new BackupRefusedError(`Interval must be one of ${BACKUP_INTERVALS.join(', ')} hours, not ${hours}.`);
+      }
+      const setAt = now().toISOString();
+      await writeFile(scheduleFile, JSON.stringify({ intervalHours: hours, setAt, setBy: requestedBy }, null, 2), {
+        mode: 0o600,
+      });
+      deps.log.info({ from: intervalHours, to: hours, requestedBy }, 'backup schedule changed');
+      intervalHours = hours;
+      intervalSetAt = setAt;
+      return hours;
     },
 
     /** Called on the schedule. Busy is a skip, logged, not an error. */

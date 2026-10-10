@@ -7074,6 +7074,73 @@
         }
       }
     },
+    "/api/admin/backups/schedule": {
+      "put": {
+        "operationId": "putBackupsSchedule",
+        "tags": [
+          "Backups"
+        ],
+        "summary": "Set how often restore points are taken",
+        "description": "Hours between restore points, taken on the hour in UTC: 0 (off), 1, 2, 3, 4, 6, 8, 12 or 24. Replaces BACKUP_INTERVAL_HOURS from then on. Recorded as `deployment.backup_schedule_changed`.\n\nRequires `deployment.manage`.",
+        "x-syntra-permission": [
+          "deployment.manage"
+        ],
+        "x-syntra-token-allowed": true,
+        "security": [
+          {
+            "bearerToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intervalHours": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "intervalHours"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
     "/api/admin/backups/upload": {
       "post": {
         "operationId": "postBackupsUpload",

@@ -66,3 +66,10 @@ export function pointsToPrune(points: PointForRetention[], policy: RetentionPoli
   ]);
   return newestFirst.filter((point) => !keep.has(point.name)).map((point) => point.name);
 }
+
+/**
+ * The restore point schedules the console offers: hours between points, 0 is
+ * off. Divisors of 24, so points land on the same UTC hours every day.
+ * BACKUP_INTERVAL_HOURS may still set any whole number.
+ */
+export const BACKUP_INTERVALS = [0, 1, 2, 3, 4, 6, 8, 12, 24] as const;

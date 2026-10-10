@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Dialog, Empty, Field, Panel, SkeletonRows, Status, Table } from '@syntra/ui';
+import { Alert, Button, Dialog, Empty, Field, Panel, Select, SkeletonRows, Status, Table } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
 import { PageFacts, PageHeader } from './PageHeader.js';
 
@@ -41,6 +41,7 @@ export interface BackupsResponse {
   backups: BackupRow[];
   status: {
     intervalHours: number;
+    intervalSetAt: string | null;
     retention: { hourly: number; daily: number; weekly: number; manual: number };
     copyConfigured: boolean;
     current: BackupJob | null;
@@ -66,6 +67,16 @@ const KIND_LABEL: Record<Kind, string> = {
 };
 
 const MIN_PASSPHRASE = 12;
+
+/** The intervals `PUT /api/admin/backups/schedule` accepts. */
+const INTERVALS = [1, 2, 3, 4, 6, 8, 12, 24, 0];
+
+function every(hours: number): string {
+  if (hours === 0) return 'Off';
+  if (hours === 1) return 'Every hour';
+  if (hours === 24) return 'Once a day';
+  return `Every ${hours} hours`;
+}
 
 const JOB_TITLE: Record<BackupJob['kind'], (name: string | null) => string> = {
   backup: () => 'Backing up',
@@ -112,6 +123,7 @@ export function BackupsPage() {
   const [deleting, setDeleting] = useState<BackupRow | null>(null);
   const [uploading, setUploading] = useState(false);
   const [restoreJob, setRestoreJob] = useState<{ id: string; name: string } | null>(null);
+  const [scheduling, setScheduling] = useState(false);
   const [testingBucket, setTestingBucket] = useState(false);
   const [bucketResult, setBucketResult] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -233,7 +245,14 @@ export function BackupsPage() {
         facts={[
           {
             label: 'Restore points',
-            value: status.intervalHours === 0 ? 'Off' : status.intervalHours === 1 ? 'Every hour' : `Every ${status.intervalHours} hours`,
+            value: (
+              <span className="inline-flex flex-wrap items-center gap-2">
+                {every(status.intervalHours)}
+                <Button size="sm" variant="ghost" onClick={() => setScheduling(true)}>
+                  Change
+                </Button>
+              </span>
+            ),
           },
           {
             label: 'Kept',
@@ -372,6 +391,16 @@ export function BackupsPage() {
         )}
       </Panel>
 
+      {scheduling ? (
+        <ScheduleDialog
+          intervalHours={status.intervalHours}
+          onClose={() => setScheduling(false)}
+          onSaved={() => {
+            setScheduling(false);
+            void load();
+          }}
+        />
+      ) : null}
       {downloading ? <DownloadDialog backup={downloading} onClose={() => setDownloading(null)} /> : null}
       {uploading ? (
         <UploadDialog
@@ -596,6 +625,71 @@ function UploadDialog({ onClose, onUploaded }: { onClose(): void; onUploaded(): 
           />
         </div>
         <Field label="Passphrase" type="password" autoComplete="off" value={passphrase} onChange={setPassphrase} />
+        {error ? <Alert tone="danger">{error}</Alert> : null}
+      </div>
+    </Dialog>
+  );
+}
+
+function ScheduleDialog({
+  intervalHours,
+  onClose,
+  onSaved,
+}: {
+  intervalHours: number;
+  onClose(): void;
+  onSaved(): void;
+}) {
+  const [value, setValue] = useState(String(intervalHours));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // An interval set by BACKUP_INTERVAL_HOURS outside the offered ones stays
+  // selectable, so opening and saving does not change it.
+  const options = (INTERVALS.includes(intervalHours) ? INTERVALS : [intervalHours, ...INTERVALS]).map((hours) => ({
+    value: String(hours),
+    label: every(hours),
+  }));
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api('/api/admin/backups/schedule', {
+        method: 'PUT',
+        body: JSON.stringify({ intervalHours: Number(value) }),
+      });
+      onSaved();
+    } catch (cause) {
+      setError(problemText(cause, 'Schedule was not saved.'));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Restore point schedule"
+      actions={
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={busy} disabled={busy || value === String(intervalHours)} onClick={() => void save()}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Select
+          label="Take a restore point"
+          value={value}
+          onChange={setValue}
+          options={options}
+          warning={value === '0' ? 'No scheduled backups. Back up now still works.' : undefined}
+        />
+        {value !== '0' ? <p className="text-sm text-muted">{value === '24' ? 'At 00:00 UTC.' : 'On the hour, UTC.'}</p> : null}
         {error ? <Alert tone="danger">{error}</Alert> : null}
       </div>
     </Dialog>

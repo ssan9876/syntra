@@ -3,6 +3,7 @@ import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import {
+  BACKUP_INTERVALS,
   BACKUP_NAME,
   BackupArchiveError,
   MIN_PASSPHRASE_LENGTH,
@@ -34,6 +35,15 @@ export interface BackupRouteOptions {
 
 export const nameParam = z.object({ name: z.string().regex(BACKUP_NAME) });
 export const downloadRequest = z.object({ passphrase: z.string().min(MIN_PASSPHRASE_LENGTH).max(1024) });
+export const scheduleRequest = z.object({
+  /** Hours between restore points; 0 turns them off. */
+  intervalHours: z
+    .number()
+    .int()
+    .refine((hours) => (BACKUP_INTERVALS as readonly number[]).includes(hours), {
+      message: `Must be one of ${BACKUP_INTERVALS.join(', ')}.`,
+    }),
+});
 export const restoreRequest = z.object({
   /** The backup's name, typed again. A restore replaces every tenant's data. */
   confirm: z.string(),
@@ -118,6 +128,14 @@ export async function registerAdminBackupRoutes(
     if (!client) return { configured: false, status: null, backups: [], version: running };
     const [status, backups] = await relay(() => Promise.all([client.status(), client.list()]));
     return { configured: true, status, backups: backups.map(present), version: running };
+  });
+
+  app.put('/backups/schedule', guard, async (request) => {
+    const { intervalHours } = scheduleRequest.parse(request.body);
+    const from = (await relay(() => agent().status())).intervalHours;
+    const saved = await relay(() => agent().setSchedule(intervalHours, request.session.userId));
+    await audit(request, 'deployment.backup_schedule_changed', { from, to: saved });
+    return { intervalHours: saved };
   });
 
   app.post('/backups', guard, async (request, reply) => {
