@@ -149,6 +149,23 @@ function sanitise(value: string, charset: CorrelationKeyCharset): string {
 }
 
 /**
+ * `value` with every character in `chars` removed from both ends.
+ *
+ * A loop, not `/^[.-]+|[.-]+$/`: the second alternative is retried at every
+ * position of a separator run that does not reach the end, so a rendered key
+ * with a long run of `-` in the middle costs quadratic time to trim (CodeQL
+ * js/polynomial-redos). The input comes from person attributes, which are not
+ * short by construction.
+ */
+function trimChars(value: string, chars: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && chars.includes(value.charAt(start))) start += 1;
+  while (end > start && chars.includes(value.charAt(end - 1))) end -= 1;
+  return value.slice(start, end);
+}
+
+/**
  * The rendered key split into the part a suffix and a truncation may touch and
  * the part neither may: `{ local: 'anna.novak', domain: '@contoso.com' }`.
  * Under `sam`, and for an email-rule key with no `@`, the domain is empty.
@@ -157,7 +174,7 @@ type SplitKey = { ok: true; local: string; domain: string } | { ok: false; messa
 
 function splitKey(sanitised: string, charset: CorrelationKeyCharset): SplitKey {
   if (charset === 'sam') {
-    return { ok: true, local: sanitised.replace(/^[.-]+|[.-]+$/g, ''), domain: '' };
+    return { ok: true, local: trimChars(sanitised, '.-'), domain: '' };
   }
   const parts = sanitised.split('@');
   if (parts.length > 2) {
@@ -169,11 +186,11 @@ function splitKey(sanitised: string, charset: CorrelationKeyCharset): SplitKey {
   // Separators are trimmed from the ends of the local part as `sam` trims
   // them from the whole key -- `_` and `+` included, so `_anna` and `anna_`
   // render `anna` exactly as they always did.
-  const local = (parts[0] ?? '').replace(/^[._+-]+|[._+-]+$/g, '');
+  const local = trimChars(parts[0] ?? '', '._+-');
   if (parts.length === 1) return { ok: true, local, domain: '' };
 
   // A domain holds no `_` or `+`, and never starts or ends on a separator.
-  const domain = (parts[1] ?? '').replace(/[_+]/g, '').replace(/^[.-]+|[.-]+$/g, '');
+  const domain = trimChars((parts[1] ?? '').replace(/[_+]/g, ''), '.-');
   if (local === '' || domain === '') {
     return {
       ok: false,
@@ -317,9 +334,8 @@ export function generateCorrelationKey(
     // Only the local part is truncated and only the local part is suffixed:
     // `anna.novak2@contoso.com`, never `anna.novak@contoso.com2` (a different
     // domain) nor an address cut off half way through its domain.
-    const truncated = base
-      .slice(0, room)
-      .replace(input.charset === 'email' ? /[._+-]+$/ : /[.-]+$/, '');
+    // trimChars trims the front too, which never applies: see `base` above.
+    const truncated = trimChars(base.slice(0, room), input.charset === 'email' ? '._+-' : '.-');
     const candidate = `${truncated}${suffix}${domain}`;
     if (!reserved.has(candidate)) return { ok: true, correlationKey: candidate };
   }
