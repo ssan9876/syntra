@@ -1,4 +1,5 @@
 import { StateBadge, type State } from '@syntra/ui';
+import { consoleEn, useConsoleT, type ConsoleKey, type ConsoleT } from '../../i18n/console/index.js';
 
 /**
  * One reading of a run's status, for every kind of run the console lists.
@@ -43,25 +44,6 @@ export const RUN_STATE: Record<string, State> = {
   superseded: 'inactive',
 };
 
-export const RUN_LABEL: Record<string, string> = {
-  queued: 'Queued',
-  running: 'Running',
-  applying: 'Applying',
-  building: 'Building',
-  computing: 'Computing',
-  previewed: 'Previewed',
-  awaiting_approval: 'Awaiting approval',
-  blocked: 'Blocked',
-  failed: 'Failed',
-  partially_applied: 'Partially applied',
-  applied: 'Applied',
-  complete: 'Complete',
-  completed: 'Completed',
-  succeeded: 'Succeeded',
-  cancelled: 'Cancelled',
-  superseded: 'Superseded',
-};
-
 /**
  * One action or change inside a run — a proposed write, not the run itself.
  * `proposed` is the plan waiting on its reviewer; `in_flight`,
@@ -83,37 +65,31 @@ export const ACTION_STATE: Record<string, State> = {
   superseded: 'inactive',
 };
 
-export const ACTION_LABEL: Record<string, string> = {
-  proposed: 'Proposed',
-  dispatched: 'Dispatched',
-  confirmed: 'Confirmed',
-  in_flight: 'In flight',
-  pending_retry: 'Awaiting retry',
-  applied: 'Applied',
-  conflict: 'Conflict',
-  failed: 'Failed',
-  refused: 'Refused',
-  skipped: 'Skipped',
-  superseded: 'Superseded',
-};
-
 /** An unknown status is shown as itself, readable, and never dressed as healthy. */
 const humanise = (status: string) => {
   const words = status.replace(/_/g, ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
+/** The label for a status, from the catalog under `prefix`, or the status itself. */
+function label(t: ConsoleT, prefix: 'runState' | 'actionState', status: string): string {
+  const key = `${prefix}.${status}`;
+  return key in consoleEn ? t(key as ConsoleKey) : humanise(status);
+}
+
 export const runState = (status: string): State => RUN_STATE[status] ?? 'setup';
-export const runLabel = (status: string): string => RUN_LABEL[status] ?? humanise(status);
+export const runLabel = (t: ConsoleT, status: string): string => label(t, 'runState', status);
 
 export function RunState({ status }: { status: string }) {
-  return <StateBadge state={runState(status)}>{runLabel(status)}</StateBadge>;
+  const t = useConsoleT();
+  return <StateBadge state={runState(status)}>{runLabel(t, status)}</StateBadge>;
 }
 
 export function ActionState({ status }: { status: string }) {
+  const t = useConsoleT();
   return (
     <StateBadge state={ACTION_STATE[status] ?? 'setup'}>
-      {ACTION_LABEL[status] ?? humanise(status)}
+      {label(t, 'actionState', status)}
     </StateBadge>
   );
 }

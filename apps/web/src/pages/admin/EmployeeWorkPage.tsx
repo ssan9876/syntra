@@ -529,7 +529,11 @@ export function EmployeeWorkPage() {
         {lifecycleIds.length > 0 && (
           <BulkActionBar
             count={selected.size}
-            noun="lifecycle operation"
+            selected={
+              selected.size === 0
+                ? 'No lifecycle operations selected'
+                : `${selected.size.toLocaleString()} lifecycle operation${selected.size === 1 ? '' : 's'} selected`
+            }
             onClear={() => setSelected(new Set())}
             result={bulkOutcome}
           >

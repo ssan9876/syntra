@@ -3,10 +3,13 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { useCan } from '../../session/SessionProvider.js';
 import { api } from '../../session/api.js';
 import { Icon, type IconName } from '../../components/icons.js';
+import { useConsoleT, type ConsoleKey } from '../../i18n/console/index.js';
+import { LanguagePicker, useLocale } from '../../i18n/LocaleProvider.js';
 
 export interface NavItem {
   to: string;
-  label: string;
+  /** A catalog key; the rail renders it in the reader's language. */
+  label: ConsoleKey;
   permission: string;
   icon: IconName;
   /**
@@ -19,8 +22,8 @@ export interface NavItem {
 }
 
 export interface NavGroup {
-  /** Shown above the group. Omitted for the first, which needs no label. */
-  label: string;
+  /** Shown above the group, as a catalog key. Also what a folded group is remembered by. */
+  label: ConsoleKey;
   items: NavItem[];
 }
 
@@ -49,34 +52,34 @@ export interface NavGroup {
  */
 export const GROUPS: NavGroup[] = [
   {
-    label: 'Directory',
+    label: 'console.nav.directory',
     items: [
       // People, accounts and import are one destination. They were three
       // links in this group, and every one of them carried a paragraph
       // pointing at the other two.
-      { to: '/admin/users', label: 'Users', permission: 'directory.read', icon: 'users' },
-      { to: '/admin/groups', label: 'Groups', permission: 'directory.read', icon: 'groups' },
-      { to: '/admin/org-units', label: 'Org units', permission: 'directory.read', icon: 'orgUnits' },
+      { to: '/admin/users', label: 'console.nav.users', permission: 'directory.read', icon: 'users' },
+      { to: '/admin/groups', label: 'console.nav.groups', permission: 'directory.read', icon: 'groups' },
+      { to: '/admin/org-units', label: 'console.nav.org_units', permission: 'directory.read', icon: 'orgUnits' },
       // Data-subject requests: about people, so beside them. Its own
       // permission, because a privacy officer is routinely not a directory
       // administrator.
-      { to: '/admin/privacy', label: 'Privacy requests', permission: 'privacy.manage', icon: 'privacy' },
+      { to: '/admin/privacy', label: 'console.nav.privacy', permission: 'privacy.manage', icon: 'privacy' },
     ],
   },
   {
-    label: 'Access',
+    label: 'console.nav.access',
     items: [
-      { to: '/admin/applications', label: 'Applications', permission: 'access.read', icon: 'applications' },
-      { to: '/admin/policy', label: 'Authentication policy', permission: 'policy.read', icon: 'policy' },
+      { to: '/admin/applications', label: 'console.nav.applications', permission: 'access.read', icon: 'applications' },
+      { to: '/admin/policy', label: 'console.nav.policy', permission: 'policy.read', icon: 'policy' },
       // The five stages of one request pipeline, and the seven objects of one
       // governance module. Both sit under Access because that is what they are
       // about: asking for it, and checking who has it.
-      { to: '/admin/requests', label: 'Requests', permission: 'automate.read', icon: 'requests' },
-      { to: '/admin/govern', label: 'Governance', permission: 'govern.read', icon: 'governance' },
+      { to: '/admin/requests', label: 'console.nav.requests', permission: 'automate.read', icon: 'requests' },
+      { to: '/admin/govern', label: 'console.nav.governance', permission: 'govern.read', icon: 'governance' },
     ],
   },
   {
-    label: 'Connected systems',
+    label: 'console.nav.connected',
     items: [
       // Runs are a tab of Sources: a run is a source's history, not its peer.
       //
@@ -85,32 +88,32 @@ export const GROUPS: NavGroup[] = [
       // beside "People sources" would be two labels existing only to
       // distinguish themselves from each other, which is the failure this
       // file's header records sixteen links being removed for.
-      { to: '/admin/sources', label: 'Sources', permission: 'sync.read', icon: 'sources' },
-      { to: '/admin/targets', label: 'Target systems', permission: 'provision.read', icon: 'targets' },
-      { to: '/admin/provisioning-setup', label: 'Provisioning setup', permission: 'provision.read', icon: 'setup' },
-      { to: '/admin/employee-work', label: 'Employee work', permission: 'provision.read', icon: 'work', signal: 'employeeWork' },
-      { to: '/admin/lifecycle-policy', label: 'Lifecycle policy', permission: 'provision.read', icon: 'lifecycle' },
+      { to: '/admin/sources', label: 'console.nav.sources', permission: 'sync.read', icon: 'sources' },
+      { to: '/admin/targets', label: 'console.nav.targets', permission: 'provision.read', icon: 'targets' },
+      { to: '/admin/provisioning-setup', label: 'console.nav.provisioning_setup', permission: 'provision.read', icon: 'setup' },
+      { to: '/admin/employee-work', label: 'console.nav.employee_work', permission: 'provision.read', icon: 'work', signal: 'employeeWork' },
+      { to: '/admin/lifecycle-policy', label: 'console.nav.lifecycle_policy', permission: 'provision.read', icon: 'lifecycle' },
     ],
   },
   {
-    label: 'System',
+    label: 'console.nav.system',
     items: [
       // `rbac.manage`, which until the role API existed gated nothing at all.
-      { to: '/admin/roles', label: 'Roles', permission: 'rbac.manage', icon: 'roles' },
+      { to: '/admin/roles', label: 'console.nav.roles', permission: 'rbac.manage', icon: 'roles' },
       // Its label used to be a sentence — "What needs attention" — because
       // "Incidents" would not have explained itself. As a pair of tabs,
       // Attention beside All events, the filter shows what it is.
-      { to: '/admin/activity', label: 'Activity', permission: 'audit.read', icon: 'activity' },
+      { to: '/admin/activity', label: 'console.nav.activity', permission: 'audit.read', icon: 'activity' },
       // Service status, stuck background work and the support bundle. The
       // same permission as Activity: it gathers what is visible elsewhere.
-      { to: '/admin/operations', label: 'Operations', permission: 'audit.read', icon: 'operations' },
+      { to: '/admin/operations', label: 'console.nav.operations', permission: 'audit.read', icon: 'operations' },
       // Sign-in, branding and webhooks: three links all gated on
       // `tenant.manage`, all configuring the same tenant.
-      { to: '/admin/settings', label: 'Settings', permission: 'tenant.manage', icon: 'settings' },
+      { to: '/admin/settings', label: 'console.nav.settings', permission: 'tenant.manage', icon: 'settings' },
       // `deployment.manage`, not `tenant.manage`: this updates the
       // installation every tenant shares, not one tenant's configuration.
-      { to: '/admin/updates', label: 'Updates', permission: 'deployment.manage', icon: 'updates' },
-      { to: '/admin/backups', label: 'Backups', permission: 'deployment.manage', icon: 'backups' },
+      { to: '/admin/updates', label: 'console.nav.updates', permission: 'deployment.manage', icon: 'updates' },
+      { to: '/admin/backups', label: 'console.nav.backups', permission: 'deployment.manage', icon: 'backups' },
     ],
   },
 ];
@@ -122,7 +125,7 @@ export const GROUPS: NavGroup[] = [
  */
 export const OVERVIEW: NavItem = {
   to: '/admin',
-  label: 'Overview',
+  label: 'console.nav.overview',
   permission: '',
   icon: 'overview',
 };
@@ -220,6 +223,7 @@ export function AdminNav() {
   // where there is no provider instead of throwing, so a rail rendered out of
   // context hides links rather than taking the page down with it.
   const can = useCan();
+  const t = useConsoleT();
 
   // Hiding a link the caller cannot use is courtesy, not enforcement: the
   // server refuses the request either way. A group whose every item is hidden
@@ -254,7 +258,7 @@ export function AdminNav() {
 
   return (
     <nav
-      aria-label="Administration"
+      aria-label={t('shell.administration')}
       className="shrink-0 border-border-subtle bg-surface-2 lg:sticky lg:top-14 lg:h-[calc(100dvh-3.5rem)] lg:w-60 lg:overflow-y-auto lg:border-r max-lg:border-b"
     >
       <button
@@ -265,9 +269,9 @@ export function AdminNav() {
         className="flex w-full items-center gap-2.5 px-6 py-3 text-sm font-semibold text-ink max-sm:px-4 lg:hidden"
       >
         {current ? <Icon name={current.icon} className="size-4 text-primary" /> : null}
-        <span className="flex-1 text-left">{current?.label ?? 'Menu'}</span>
+        <span className="flex-1 text-left">{current ? t(current.label) : t('console.nav.menu')}</span>
         {lanes && !menuOpen && <WorkBadge lanes={lanes} />}
-        <span className="text-muted">{menuOpen ? 'Close' : 'Menu'}</span>
+        <span className="text-muted">{menuOpen ? t('console.nav.close') : t('console.nav.menu')}</span>
         <svg viewBox="0 0 12 12" className={`size-3 text-muted transition-transform duration-150 ${menuOpen ? 'rotate-180' : ''}`} aria-hidden="true">
           <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
@@ -284,7 +288,7 @@ export function AdminNav() {
                   name={OVERVIEW.icon}
                   className={`size-4 ${isActive ? 'text-primary' : 'text-muted group-hover:text-ink'}`}
                 />
-                <span className="min-w-0 flex-1 truncate">{OVERVIEW.label}</span>
+                <span className="min-w-0 flex-1 truncate">{t(OVERVIEW.label)}</span>
               </>
             )}
           </NavLink>
@@ -294,7 +298,7 @@ export function AdminNav() {
           // where you are has stopped answering the one question it is for.
           const holdsCurrent = group.items.some((item) => item === current);
           const open = holdsCurrent || !collapsed.has(group.label);
-          const id = `nav-group-${group.label.toLowerCase().replace(/\s+/g, '-')}`;
+          const id = `nav-group-${group.label.replace(/^console\.nav\./, '').replace(/_/g, '-')}`;
           return (
           <div key={group.label} className="mt-5">
             {/* Sentence case, muted, small. A section label is a signpost and
@@ -308,7 +312,7 @@ export function AdminNav() {
                 onClick={() => toggle(group.label)}
                 className="group/heading flex w-full items-center gap-1.5 rounded-control px-3 pb-1.5 pt-1 text-left text-xs font-semibold tracking-wide text-muted transition-colors duration-150 ease-out-quart enabled:hover:text-ink disabled:cursor-default"
               >
-                <span className="flex-1">{group.label}</span>
+                <span className="flex-1">{t(group.label)}</span>
                 {!open && group.items.some((item) => item.signal === 'employeeWork') && lanes && (
                   <WorkBadge lanes={lanes} />
                 )}
@@ -334,7 +338,7 @@ export function AdminNav() {
                           name={item.icon}
                           className={`size-4 ${isActive ? 'text-primary' : 'text-muted group-hover:text-ink'}`}
                         />
-                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                        <span className="min-w-0 flex-1 truncate">{t(item.label)}</span>
                         {item.signal === 'employeeWork' && lanes && <WorkBadge lanes={lanes} />}
                       </>
                     )}
@@ -345,6 +349,9 @@ export function AdminNav() {
           </div>
           );
         })}
+        {/* The header hides its picker on a phone, where the header row has
+            no room; the menu is where a phone reader finds it instead. */}
+        <LanguagePicker className="mt-5 flex px-3 sm:hidden" />
       </div>
     </nav>
   );
@@ -373,6 +380,8 @@ function linkClass(isActive: boolean) {
  * badge that counts it is a badge that is never zero.
  */
 function WorkBadge({ lanes }: { lanes: WorkLanes }) {
+  const t = useConsoleT();
+  const { format } = useLocale();
   const urgent = lanes.overdue + lanes.blocked;
   const count = urgent + lanes.action;
   if (count === 0) return null;
@@ -383,8 +392,8 @@ function WorkBadge({ lanes }: { lanes: WorkLanes }) {
         urgent > 0 ? 'bg-danger-soft text-danger' : 'bg-warning-soft text-warning',
       ].join(' ')}
     >
-      <span aria-hidden="true">{count.toLocaleString()}</span>
-      <span className="sr-only">, {count.toLocaleString()} need action</span>
+      <span aria-hidden="true">{format.number(count)}</span>
+      <span className="sr-only">, {t.plural('console.nav.need_action', count)}</span>
     </span>
   );
 }

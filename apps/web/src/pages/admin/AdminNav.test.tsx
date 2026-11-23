@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AdminNav } from './AdminNav.js';
+import { consoleEn, type ConsoleKey } from '../../i18n/console/en.js';
 
 const granted = new Set<string>();
 
@@ -34,16 +35,17 @@ const source = readFileSync('src/pages/admin/AdminNav.tsx', 'utf8');
 
 const groups = () => {
   // Read the labels straight out of the table rather than rendering, so the
-  // assertion holds regardless of what the current reader may see.
+  // assertion holds regardless of what the current reader may see. They are
+  // catalog keys; the English is what is measured.
   const blocks = source.split("label: '").slice(1);
-  return blocks.map((b) => b.slice(0, b.indexOf("'")));
+  return blocks.map((b) => consoleEn[b.slice(0, b.indexOf("'")) as ConsoleKey]);
 };
 
 describe('the console navigation', () => {
   it('has no group that repeats its only child', () => {
     // "Requests" inside a group labelled "Requests" is a heading that says
     // nothing — the same failure as a paragraph explaining a control.
-    const groupLabels = ['Directory', 'Access', 'Connected systems', 'System'];
+    const groupLabels = ['console.nav.directory', 'console.nav.access', 'console.nav.connected', 'console.nav.system'];
     for (const label of groupLabels) {
       const after = source.slice(source.indexOf(`label: '${label}'`));
       const items = after.slice(0, after.indexOf(']')).match(/to: '/g) ?? [];
@@ -137,7 +139,7 @@ describe('the console navigation', () => {
 
   it('opens a folded group when you navigate into it', () => {
     granted.add('directory.read');
-    window.localStorage.setItem('syntra.nav.collapsed', JSON.stringify(['Directory']));
+    window.localStorage.setItem('syntra.nav.collapsed', JSON.stringify(['console.nav.directory']));
     render(
       <MemoryRouter initialEntries={['/admin/groups']}>
         <AdminNav />

@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Alert, Button, Field, Panel, StateBadge, Status } from '@syntra/ui';
 import { api, ApiError } from '../../session/api.js';
+import { useConsoleT, type ConsoleT } from '../../i18n/console/index.js';
+import { useLocale } from '../../i18n/LocaleProvider.js';
 
-function problem(error: unknown) {
-  return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : 'External writes could not be stopped or resumed.';
+function problem(error: unknown, t: ConsoleT) {
+  return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : error instanceof Error ? error.message : t('writeStop.failed');
 }
 
 export interface WriteStopState {
@@ -45,6 +47,8 @@ export function ExternalWriteStopPanel({
   basePath: string;
   onChanged(): void;
 }) {
+  const t = useConsoleT();
+  const { format } = useLocale();
   const [reason, setReason] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [busy, setBusy] = useState(false);
@@ -58,22 +62,30 @@ export function ExternalWriteStopPanel({
     try {
       await api(`${basePath}/${path}`, { method: 'POST', body: JSON.stringify(body) });
       setReason(''); setExpiresAt(''); setStopping(false); onChanged();
-    } catch (error) { setNotice(problem(error)); }
+    } catch (error) { setNotice(problem(error, t)); }
     finally { setBusy(false); }
   };
-  return <Panel title={title} actions={active ? <StateBadge state="blocked">Paused</StateBadge> : <StateBadge state="healthy">Allowed</StateBadge>}>
+  return <Panel title={title} actions={active ? <StateBadge state="blocked">{t('writeStop.paused')}</StateBadge> : <StateBadge state="healthy">{t('writeStop.allowed')}</StateBadge>}>
     <div className="space-y-4 p-4">
       {active ? <Alert tone="danger" title={stoppedTitle}>
-        {state.pauseReason ?? 'Emergency stop'} · paused {new Date(state.pausedAt!).toLocaleString()}
-        {state.pauseExpiresAt ? ` · expires ${new Date(state.pauseExpiresAt).toLocaleString()}` : ' · no automatic expiry'}
+        {state.pauseExpiresAt
+          ? t('writeStop.summary_expires', {
+              reason: state.pauseReason ?? t('writeStop.default_reason'),
+              paused: format.dateTime(state.pausedAt!),
+              expires: format.dateTime(state.pauseExpiresAt),
+            })
+          : t('writeStop.summary_no_expiry', {
+              reason: state.pauseReason ?? t('writeStop.default_reason'),
+              paused: format.dateTime(state.pausedAt!),
+            })}
       </Alert> : null}
       <div aria-live="polite">{notice ? <Alert tone="warning">{notice}</Alert> : null}</div>
       {active
         ? <div className="max-w-xl space-y-3">
-          <Field name="reason" label="Reason for resuming" value={reason} onChange={setReason} />
+          <Field name="reason" label={t('writeStop.resume_reason')} value={reason} onChange={setReason} />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>Request reviewed resume</Button>
-            <Status tone="neutral">Needs another administrator</Status>
+            <Button loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-resume', { reason })}>{t('writeStop.request_resume')}</Button>
+            <Status tone="neutral">{t('writeStop.needs_other_admin')}</Status>
           </div>
         </div>
         // One press, deliberately, where every other destructive control in
@@ -82,14 +94,14 @@ export function ExternalWriteStopPanel({
         // boundary of its own in the danger colour, so it never reads as one
         // more field in a settings panel.
         : !stopping
-        ? <Button variant="danger-quiet" onClick={() => setStopping(true)}>Stop writes</Button>
-        : <div role="group" aria-label="Stop external writes" className="max-w-xl space-y-3 rounded-panel border border-danger/40 p-3">
-          <Field name="reason" label="Reason for stopping writes" value={reason} onChange={setReason} />
-          <Field name="expiresAt" label="Automatic expiry (optional, maximum 30 days)" type="datetime-local" value={expiresAt} onChange={setExpiresAt} />
+        ? <Button variant="danger-quiet" onClick={() => setStopping(true)}>{t('writeStop.stop')}</Button>
+        : <div role="group" aria-label={t('writeStop.stop_group')} className="max-w-xl space-y-3 rounded-panel border border-danger/40 p-3">
+          <Field name="reason" label={t('writeStop.stop_reason')} value={reason} onChange={setReason} />
+          <Field name="expiresAt" label={t('writeStop.expiry')} type="datetime-local" value={expiresAt} onChange={setExpiresAt} />
           <div className="border-t border-border-subtle pt-3">
             <div className="flex flex-wrap gap-2">
-              <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>Stop external writes</Button>
-              <Button variant="secondary" disabled={busy} onClick={() => { setStopping(false); setReason(''); setExpiresAt(''); }}>Cancel</Button>
+              <Button variant="danger" loading={busy} disabled={!reason.trim()} onClick={() => void submit('external-write-stop', { reason, expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null })}>{t('writeStop.stop_confirm')}</Button>
+              <Button variant="secondary" disabled={busy} onClick={() => { setStopping(false); setReason(''); setExpiresAt(''); }}>{t('common.cancel')}</Button>
             </div>
           </div>
         </div>}

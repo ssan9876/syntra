@@ -11,6 +11,8 @@ import {
 } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { RunState } from './run-states.js';
+import { useConsoleT, type ConsoleKey } from '../../i18n/console/index.js';
+import { useLocale } from '../../i18n/LocaleProvider.js';
 
 interface RunRow {
   id: string;
@@ -26,20 +28,18 @@ interface SourceRow {
   name: string;
 }
 
-const when = (iso: string) => new Date(iso).toLocaleString();
-
 /** Which family a run came from, and therefore where its detail page is. */
 interface Family {
-  label: string;
+  label: ConsoleKey;
   detail: (id: string) => string;
 }
 
 const DIRECTORY: Family = {
-  label: 'Directory',
+  label: 'runs.family_directory',
   detail: (id) => `/admin/sync-runs/${id}`,
 };
 const PEOPLE: Family = {
-  label: 'People',
+  label: 'runs.family_people',
   detail: (id) => `/admin/person-import-runs/${id}`,
 };
 
@@ -56,6 +56,8 @@ const PEOPLE: Family = {
  * is unreadable the moment a tenant has two.
  */
 export function RunsTab() {
+  const t = useConsoleT();
+  const { format } = useLocale();
   const syncRuns = useApiResource<{ runs: RunRow[] }>('/api/admin/sync-runs');
   const importRuns = useApiResource<{ runs: RunRow[] }>('/api/admin/person-import-runs');
   const sources = useApiResource<{ sources: SourceRow[] }>('/api/admin/sources');
@@ -106,10 +108,10 @@ export function RunsTab() {
           {loaded && rows.length === 0 && (
             <div className="p-6">
               <Empty
-                title="No runs yet"
+                title={t('runs.empty')}
                 action={
                   <Link to="/admin/sources?tab=sources" className={buttonClasses('secondary')}>
-                    Go to sources
+                    {t('runs.go_to_sources')}
                   </Link>
                 }
               />
@@ -117,16 +119,16 @@ export function RunsTab() {
           )}
 
           {loaded && rows.length > 0 && (
-            <Table stackOnPhone stickyHeader label="Runs">
+            <Table stackOnPhone stickyHeader label={t('runs.table')}>
               <thead>
                 <tr>
-                  <th scope="col">Started</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Reads</th>
+                  <th scope="col">{t('runs.col_started')}</th>
+                  <th scope="col">{t('runs.col_source')}</th>
+                  <th scope="col">{t('runs.col_reads')}</th>
                   <th scope="col" className="max-sm:hidden">
-                    Records read
+                    {t('runs.col_records')}
                   </th>
-                  <th scope="col">Status</th>
+                  <th scope="col">{t('runs.col_status')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -137,7 +139,7 @@ export function RunsTab() {
                         to={family.detail(run.id)}
                         className="font-medium text-ink underline-offset-2 hover:text-primary hover:underline"
                       >
-                        {when(run.startedAt)}
+                        {format.dateTime(run.startedAt)}
                       </Link>
                     </td>
                     <td>
@@ -145,8 +147,8 @@ export function RunsTab() {
                           behind; showing the id is better than a blank cell. */}
                       {names.get(run.sourceId) ?? run.sourceId}
                     </td>
-                    <td>{family.label}</td>
-                    <td className="tabular-nums max-sm:hidden">{run.recordsRead}</td>
+                    <td>{t(family.label)}</td>
+                    <td className="tabular-nums max-sm:hidden">{format.number(run.recordsRead)}</td>
                     <td>
                       <RunState status={run.status} />
                     </td>

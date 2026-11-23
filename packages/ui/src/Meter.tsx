@@ -1,3 +1,5 @@
+import { useUiLocale } from './i18n.js';
+
 type Tone = 'primary' | 'success' | 'warning' | 'danger';
 
 const FILLS: Record<Tone, string> = {
@@ -32,11 +34,12 @@ export interface MeterProps {
  * that may be finished, and screen readers announce the two differently.
  */
 export function Meter({ percent, label, tone = 'primary' }: MeterProps) {
+  const { t } = useUiLocale();
   const clamped = Math.max(0, Math.min(100, percent));
   return (
     <div
       role="img"
-      aria-label={`${Math.round(clamped)}% ${label}`}
+      aria-label={t('ui.meter.label', { percent: Math.round(clamped), label })}
       className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2"
     >
       <div

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useUiLocale } from './i18n.js';
 
 export type Density = 'comfortable' | 'compact';
 
@@ -58,6 +59,7 @@ export function Table({
    */
   stackOnPhone?: boolean;
 }) {
+  const { t } = useUiLocale();
   const compact = tight || density === 'compact';
   const ref = useRef<HTMLDivElement>(null);
   // After every render, not once: rows come and go with paging and filters.
@@ -74,7 +76,7 @@ export function Table({
         stackOnPhone ? 'data-table-stack-scope' : '',
         stickyHeader ? 'data-table-scroll max-h-[min(70vh,48rem)] overflow-y-auto' : '',
       ].join(' ')}
-      {...(stickyHeader ? { tabIndex: 0, role: 'region', 'aria-label': label ?? 'Table' } : {})}
+      {...(stickyHeader ? { tabIndex: 0, role: 'region', 'aria-label': label ?? t('ui.table.label') } : {})}
     >
       <table
         aria-label={stickyHeader ? undefined : label}
@@ -150,8 +152,9 @@ export function DensityToggle({
   value: Density;
   onChange(value: Density): void;
 }) {
+  const { t } = useUiLocale();
   return (
-    <div role="group" aria-label="Row density" className="inline-flex rounded-control border border-border-control">
+    <div role="group" aria-label={t('ui.table.density')} className="inline-flex rounded-control border border-border-control">
       {(['comfortable', 'compact'] as const).map((option) => (
         <button
           key={option}
@@ -164,7 +167,7 @@ export function DensityToggle({
             value === option ? 'bg-surface-2 text-ink' : 'text-muted hover:text-ink',
           ].join(' ')}
         >
-          {option === 'comfortable' ? 'Comfortable' : 'Compact'}
+          {option === 'comfortable' ? t('ui.table.comfortable') : t('ui.table.compact')}
         </button>
       ))}
     </div>
@@ -230,12 +233,13 @@ export function ColumnPicker({
   hidden: ReadonlySet<string>;
   onChange(hidden: Set<string>): void;
 }) {
+  const { t } = useUiLocale();
   const optional = columns.filter((column) => !column.required);
   if (optional.length === 0) return null;
   return (
     <details className="relative">
       <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-control border border-border-control px-2 py-1 text-sm font-medium text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
-        Columns
+        {t('ui.table.columns')}
         {hidden.size > 0 && (
           <span className="rounded-full bg-surface-2 px-1.5 text-xs font-semibold tabular-nums">
             {columns.length - hidden.size}/{columns.length}
@@ -243,7 +247,7 @@ export function ColumnPicker({
         )}
       </summary>
       <fieldset className="absolute right-0 z-[var(--z-dropdown)] mt-1 w-56 rounded-control border border-border-control bg-bg p-2 shadow-overlay">
-        <legend className="sr-only">Visible columns</legend>
+        <legend className="sr-only">{t('ui.table.visible_columns')}</legend>
         {optional.map((column) => (
           <label key={column.id} className="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm hover:bg-surface">
             <input

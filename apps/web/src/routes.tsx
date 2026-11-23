@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactElement } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './session/SessionProvider.js';
+import { useT } from './i18n/LocaleProvider.js';
 import { Login } from './pages/Login.js';
 import { Portal } from './pages/Portal.js';
 import { Elevate } from './pages/Elevate.js';
@@ -54,9 +55,10 @@ function RequireSession({
 
 /** Shown only while the session probe is in flight, so it stays quiet. */
 function BootScreen() {
+  const t = useT();
   return (
     <div className="flex min-h-dvh items-center justify-center bg-bg">
-      <span className="sr-only">Loading</span>
+      <span className="sr-only">{t('common.loading')}</span>
       <div className="skeleton h-2 w-32 rounded-full" />
     </div>
   );

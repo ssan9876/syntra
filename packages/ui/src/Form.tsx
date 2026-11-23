@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useUiLocale } from './i18n.js';
 
 export interface SummaryError {
   /**
@@ -24,11 +25,12 @@ export interface SummaryError {
  */
 export function ErrorSummary({
   errors,
-  title = 'Fix these before saving',
+  title,
 }: {
   errors: SummaryError[];
   title?: string;
 }) {
+  const { t } = useUiLocale();
   const ref = useRef<HTMLDivElement>(null);
   const signature = errors.map((e) => `${e.field ?? ''}:${e.message}`).join('|');
 
@@ -52,7 +54,7 @@ export function ErrorSummary({
       role="alert"
       className="rounded-panel border border-danger/35 bg-danger-soft px-4 py-3 focus-visible:outline-danger"
     >
-      <p className="font-semibold text-danger">{title}</p>
+      <p className="font-semibold text-danger">{title ?? t('ui.form.fix_before_saving')}</p>
       <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-ink">
         {errors.map((error) => (
           <li key={`${error.field ?? ''}:${error.message}`}>

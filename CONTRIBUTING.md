@@ -92,6 +92,40 @@ follows [CLAUDE.md → Writing messages](CLAUDE.md#writing-messages). In short:
 `Skipped: run from 15:57 is waiting for review. Apply or cancel it.` Not a
 paragraph explaining why.
 
+## Translations
+
+The web app speaks English, Dutch, German, French, Spanish and Portuguese
+(Brazilian). Strings live in `apps/web/src/i18n/`; there is no i18n library.
+
+- `base/<locale>.ts`: sign-in screens, the portal, the shared header, and the
+  `@syntra/ui` components (their English is `uiMessages` in
+  `packages/ui/src/i18n.tsx`). Ships with the sign-in page, so keep it small.
+- `console/<locale>.ts`: console-only strings. English is bundled with the
+  console; each translation is a separate chunk loaded on demand.
+
+English is the source and defines the key type. Translations are `Partial`
+and fall back to English key by key.
+
+To convert a console page:
+
+1. Add its keys to `console/en.ts` as `<area>.<name>`, e.g. `targets.col_name`.
+   Use `console.*` only for shared chrome. Give each page its own keys, even
+   when the English matches another page's.
+2. In the component: `const t = useConsoleT();`, then `t('targets.title')`,
+   `t('targets.ran_ago', { duration })`, and `t.plural('targets.skipped', n)`
+   for keys with `_one`/`_other` forms. Write whole sentences with `{name}`
+   placeholders; never build them from fragments. Use `fill()` from
+   `i18n/rich.tsx` to put a link or `<code>` inside a sentence.
+3. Format dates and numbers with `useLocale().format` (`dateTime`, `date`,
+   `number`), not `toLocaleString()`.
+4. Add the key to all five translations, then add the file to `CONVERTED` in
+   `i18n/converted.test.ts`. From then on, hard-coded JSX text in that file
+   fails the test.
+
+`i18n/catalog.test.ts` fails on a translated key English does not have, or on
+a placeholder that differs from English. Translations not written by a native
+speaker say so in their file header.
+
 ## Connectors
 
 A new REST system is usually a **connector document**, not new code: JSON that

@@ -6,6 +6,7 @@ import { LocaleProvider } from '../i18n/LocaleProvider.js';
 import { SessionProvider } from '../session/SessionProvider.js';
 import { AppShell } from '../components/AppShell.js';
 import { AdminNav, GROUPS } from '../pages/admin/AdminNav.js';
+import { consoleEn } from '../i18n/console/en.js';
 import { DashboardPage } from '../pages/admin/DashboardPage.js';
 import { Icon, type IconName } from '../components/icons.js';
 import { CONSOLE_ICONS } from '../branding/interlock.js';
@@ -21,7 +22,7 @@ function IconGallery() {
   const current = GROUPS.flatMap((g) => g.items).find((item) => item.to === pathname);
   return (
     <>
-      <h1 className="mb-2 text-2xl font-semibold text-ink">{current?.label ?? 'All icons'}</h1>
+      <h1 className="mb-2 text-2xl font-semibold text-ink">{current ? consoleEn[current.label] : 'All icons'}</h1>
       <p className="mb-6 text-sm text-muted">Interlock icons at console size and export size.</p>
       <div className="mb-8 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 xl:grid-cols-5">
         {(Object.keys(CONSOLE_ICONS) as IconName[]).map((name) => (

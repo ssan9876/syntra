@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
+import { englishUi, useUiLocale, type UiLocale } from './i18n.js';
 
 /** "just now", "4 min ago", "2 h ago", then a date. Coarse on purpose. */
-export function relativeTime(then: Date, now: Date = new Date()): string {
+export function relativeTime(
+  then: Date,
+  now: Date = new Date(),
+  { t, format }: Pick<UiLocale, 't' | 'format'> = englishUi,
+): string {
   const seconds = Math.round((now.getTime() - then.getTime()) / 1000);
-  if (seconds < 45) return 'just now';
+  if (seconds < 45) return t('ui.time.just_now');
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60) return t('ui.time.minutes_ago', { count: format.number(minutes) });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  if (hours < 24) return t('ui.time.hours_ago', { count: format.number(hours) });
+  return format.date(then, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 /**
@@ -30,6 +35,7 @@ export function RefreshStatus({
   onRefresh?: (() => void) | undefined;
   refreshing?: boolean;
 }) {
+  const ui = useUiLocale();
   const [, tick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => tick((n) => n + 1), 30_000);
@@ -39,8 +45,8 @@ export function RefreshStatus({
   return (
     <span className="inline-flex items-center gap-2 text-sm text-muted">
       {updatedAt && (
-        <time dateTime={updatedAt.toISOString()} title={updatedAt.toLocaleString()}>
-          Updated {relativeTime(updatedAt)}
+        <time dateTime={updatedAt.toISOString()} title={ui.format.dateTime(updatedAt)}>
+          {ui.t('ui.refresh.updated', { time: relativeTime(updatedAt, new Date(), ui) })}
         </time>
       )}
       {onRefresh && (
@@ -62,7 +68,7 @@ export function RefreshStatus({
           >
             <path d="M10 6a4 4 0 1 1-1.2-2.85M10 1.5v2.5H7.5" />
           </svg>
-          Refresh
+          {ui.t('ui.refresh.refresh')}
         </button>
       )}
     </span>
@@ -87,6 +93,7 @@ export function Identifier({
   truncate?: boolean;
   copy?: boolean;
 }) {
+  const { t } = useUiLocale();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -111,7 +118,7 @@ export function Identifier({
           onClick={() => {
             void globalThis.navigator?.clipboard?.writeText(value).then(() => setCopied(true), () => {});
           }}
-          aria-label={copied ? 'Copied' : `Copy ${value}`}
+          aria-label={copied ? t('ui.copy.copied') : t('ui.copy.copy', { value })}
           className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-surface-2 hover:text-ink"
         >
           <svg viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">

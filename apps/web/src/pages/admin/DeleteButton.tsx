@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Alert, Button, Field } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
+import { useConsoleT } from '../../i18n/console/index.js';
 
 /**
  * The one control in this console that destroys something.
@@ -38,6 +39,7 @@ export function DeleteButton({
   warning: string;
   onDeleted(): void;
 }) {
+  const t = useConsoleT();
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
@@ -90,7 +92,7 @@ export function DeleteButton({
       setProblem(
         cause instanceof ApiError
           ? (cause.problem.detail ?? cause.problem.title)
-          : `${confirmWord} was not deleted.`,
+          : t('console.delete.failed', { name: confirmWord }),
       );
     } finally {
       setBusy(false);
@@ -109,7 +111,7 @@ export function DeleteButton({
         aria-expanded={false}
         onClick={() => setOpen(true)}
       >
-        Delete
+        {t('console.delete.open')}
       </Button>
     );
   }
@@ -128,13 +130,13 @@ export function DeleteButton({
     >
       <div>
         <p id={headingId} className="font-semibold text-danger">
-          Delete {label} {confirmWord}?
+          {t('console.delete.title', { label, name: confirmWord })}
         </p>
         <p className="mt-0.5 text-ink">{warning}</p>
       </div>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <Field
-        label={`Type ${confirmWord} to confirm`}
+        label={t('console.delete.type_to_confirm', { name: confirmWord })}
         value={typed}
         onChange={setTyped}
         ref={confirmRef}
@@ -148,10 +150,10 @@ export function DeleteButton({
           loading={busy}
           onClick={() => void remove()}
         >
-          Delete {label}
+          {t('console.delete.confirm', { label })}
         </Button>
         <Button variant="secondary" disabled={busy} onClick={close}>
-          Cancel
+          {t('common.cancel')}
         </Button>
       </div>
     </div>

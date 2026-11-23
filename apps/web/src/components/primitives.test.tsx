@@ -28,14 +28,14 @@ describe('BulkActionBar', () => {
   it('names the selection in words and offers to clear it only when there is one', async () => {
     const onClear = vi.fn();
     const { rerender } = render(
-      <BulkActionBar count={0} noun="operation" onClear={onClear}>
+      <BulkActionBar count={0} onClear={onClear}>
         <button type="button">Retry</button>
       </BulkActionBar>,
     );
-    expect(screen.getByText('No operations selected')).toBeVisible();
+    expect(screen.getByText('Nothing selected')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Clear selection' })).not.toBeInTheDocument();
     rerender(
-      <BulkActionBar count={3} noun="operation" onClear={onClear} result="3 retried">
+      <BulkActionBar count={3} selected="3 operations selected" onClear={onClear} result="3 retried">
         <button type="button">Retry</button>
       </BulkActionBar>,
     );

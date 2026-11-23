@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { GROUPS } from './AdminNav.js';
+import { useConsoleT, type ConsoleKey, type ConsoleT } from '../../i18n/console/index.js';
 
 /**
  * Titles of the records this tab has shown, by path.
@@ -28,47 +29,47 @@ export function useRememberTitle(title: string) {
  * Paths that are not in the rail but belong to a section that is. A person
  * record lives under Users; a lifecycle operation is an item of Employee work.
  */
-const ALIASES: Record<string, { label: string; to: string }> = {
-  people: { label: 'Users', to: '/admin/users?tab=people' },
-  'person-sources': { label: 'Sources', to: '/admin/sources' },
-  'person-import-runs': { label: 'Sources', to: '/admin/sources' },
-  'sync-runs': { label: 'Sources', to: '/admin/sources?tab=runs' },
-  'lifecycle-operations': { label: 'Employee work', to: '/admin/employee-work' },
-  'lifecycle-simulation': { label: 'Employee work', to: '/admin/employee-work' },
-  automate: { label: 'Requests', to: '/admin/requests' },
+const ALIASES: Record<string, { label: ConsoleKey; to: string }> = {
+  people: { label: 'console.nav.users', to: '/admin/users?tab=people' },
+  'person-sources': { label: 'console.nav.sources', to: '/admin/sources' },
+  'person-import-runs': { label: 'console.nav.sources', to: '/admin/sources' },
+  'sync-runs': { label: 'console.nav.sources', to: '/admin/sources?tab=runs' },
+  'lifecycle-operations': { label: 'console.nav.employee_work', to: '/admin/employee-work' },
+  'lifecycle-simulation': { label: 'console.nav.employee_work', to: '/admin/employee-work' },
+  automate: { label: 'console.nav.requests', to: '/admin/requests' },
 };
 
 /** The noun for a record under a given collection, when its name is unknown. */
-const NOUNS: Record<string, string> = {
-  users: 'Account',
-  people: 'Person',
-  groups: 'Group',
-  'org-units': 'Org unit',
-  applications: 'Application',
-  sources: 'Source',
-  'person-sources': 'HR source',
-  'person-import-runs': 'Import run',
-  'sync-runs': 'Sync run',
-  targets: 'Target',
-  runs: 'Run',
-  'lifecycle-operations': 'Operation',
-  requests: 'Request',
-  products: 'Product',
-  sweeps: 'Sweep',
-  snapshots: 'Snapshot',
-  campaigns: 'Review',
-  batches: 'Batch',
+const NOUNS: Record<string, ConsoleKey> = {
+  users: 'console.noun.account',
+  people: 'console.noun.person',
+  groups: 'console.noun.group',
+  'org-units': 'console.noun.org_unit',
+  applications: 'console.noun.application',
+  sources: 'console.noun.source',
+  'person-sources': 'console.noun.hr_source',
+  'person-import-runs': 'console.noun.import_run',
+  'sync-runs': 'console.noun.sync_run',
+  targets: 'console.noun.target',
+  runs: 'console.noun.run',
+  'lifecycle-operations': 'console.noun.operation',
+  requests: 'console.noun.request',
+  products: 'console.noun.product',
+  sweeps: 'console.noun.sweep',
+  snapshots: 'console.noun.snapshot',
+  campaigns: 'console.noun.review',
+  batches: 'console.noun.batch',
 };
 
 /** Named sub-pages of a record: `/targets/:id/rules` is the target's rules. */
-const SUBPAGES: Record<string, string> = {
-  access: 'Access',
-  profile: 'Account profile',
-  rules: 'Business rules',
-  runs: 'Runs',
-  new: 'New',
-  manual: 'Manual',
-  unlinked: 'Unlinked accounts',
+const SUBPAGES: Record<string, ConsoleKey> = {
+  access: 'console.sub.access',
+  profile: 'console.sub.profile',
+  rules: 'console.sub.rules',
+  runs: 'console.sub.runs',
+  new: 'console.sub.new',
+  manual: 'console.sub.manual',
+  unlinked: 'console.sub.unlinked',
 };
 
 interface Crumb {
@@ -76,7 +77,7 @@ interface Crumb {
   to: string;
 }
 
-function trail(pathname: string): Crumb[] {
+function trail(pathname: string, t: ConsoleT): Crumb[] {
   const segments = pathname.replace(/^\/admin\/?/, '').split('/').filter(Boolean);
   if (segments.length < 2) return [];
 
@@ -84,17 +85,17 @@ function trail(pathname: string): Crumb[] {
   const navItem = GROUPS.flatMap((group) => group.items).find(
     (item) => item.to === `/admin/${head}`,
   );
-  const section = navItem ? { label: navItem.label, to: navItem.to } : ALIASES[head];
+  const section = navItem ?? ALIASES[head];
   if (!section) return [];
 
-  const crumbs: Crumb[] = [section];
+  const crumbs: Crumb[] = [{ label: t(section.label), to: section.to }];
   // Every ancestor between the section and the page itself. The page's own
   // segment is left off: its title is the heading directly underneath.
   for (let i = 1; i < segments.length - 1; i += 1) {
     const segment = segments[i]!;
     const path = `/admin/${segments.slice(0, i + 1).join('/')}`;
-    const label =
-      titles.get(path) ?? SUBPAGES[segment] ?? NOUNS[segments[i - 1]!] ?? segment;
+    const key = SUBPAGES[segment] ?? NOUNS[segments[i - 1]!];
+    const label = titles.get(path) ?? (key ? t(key) : segment);
     // `automate/products` is a redirect to a tab; linking to it would bounce.
     // The section crumb already goes there.
     if (head === 'automate' && i === 1) continue;
@@ -112,10 +113,11 @@ function trail(pathname: string): Crumb[] {
  */
 export function Breadcrumbs() {
   const { pathname } = useLocation();
-  const crumbs = trail(pathname);
+  const t = useConsoleT();
+  const crumbs = trail(pathname, t);
   if (crumbs.length === 0) return null;
   return (
-    <nav aria-label="Breadcrumb" className="mb-1.5">
+    <nav aria-label={t('console.breadcrumb')} className="mb-1.5">
       <ol className="flex flex-wrap items-center gap-x-1.5 text-sm text-muted">
         {crumbs.map((crumb, index) => (
           <li key={crumb.to} className="flex items-center gap-1.5">

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button, Field } from '@syntra/ui';
 import { onChangeApprovalRequired, type Problem } from '../../session/api.js';
+import { useConsoleT } from '../../i18n/console/index.js';
 
 const REASON_MIN = 10;
 
@@ -20,6 +21,7 @@ interface Pending {
  * which of its changes are held.
  */
 export function HeldChangePrompt() {
+  const t = useConsoleT();
   const [pending, setPending] = useState<Pending | null>(null);
   const [reason, setReason] = useState('');
   const field = useRef<HTMLInputElement>(null);
@@ -60,14 +62,14 @@ export function HeldChangePrompt() {
         <p className="text-sm text-muted">{pending.problem.detail}</p>
         <Field
           ref={field}
-          label="Reason for the approver"
+          label={t('console.held.reason')}
           value={reason}
           onChange={setReason}
-          warning={reason.trim().length > 0 && reason.trim().length < REASON_MIN ? `At least ${REASON_MIN} characters` : undefined}
+          warning={reason.trim().length > 0 && reason.trim().length < REASON_MIN ? t('console.held.too_short', { count: REASON_MIN }) : undefined}
         />
         <div className="flex flex-wrap justify-end gap-3">
-          <Button type="button" variant="secondary" onClick={() => finish(null)}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={reason.trim().length < REASON_MIN}>Send for approval</Button>
+          <Button type="button" variant="secondary" onClick={() => finish(null)}>{t('common.cancel')}</Button>
+          <Button type="submit" variant="primary" disabled={reason.trim().length < REASON_MIN}>{t('console.held.send')}</Button>
         </div>
       </form>
     </div>
