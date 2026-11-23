@@ -80,7 +80,8 @@ this step for you with a generated password, printed once.
   ([Where the variables go](configure.md#where-the-variables-go)).
 - [Backups](operate.md#backups) and [upgrades](operate.md#upgrades).
 - A public demo with sample data: [`deploy/demo`](../deploy/demo/README.md).
-  Unraid: [`deploy/unraid`](../deploy/unraid/README.md).
+  Unraid: [`deploy/unraid`](../deploy/unraid/README.md). Proxmox VE, as an
+  LXC container: [`deploy/proxmox`](../deploy/proxmox/README.md).
 
 To start again from nothing: `docker compose down -v`, delete `.env`, run the
 script again. `down -v` deletes the database.
