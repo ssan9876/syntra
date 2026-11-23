@@ -10,6 +10,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
+    "@syntra/connector-sdk": "workspace:*",
     "ipaddr.js": "^2.2.0",
     "ldapts": "^9.2.0",
     "ssh2": "^1.16.0",

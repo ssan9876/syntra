@@ -1,0 +1,60 @@
+{
+  "name": "@syntra/connector-sdk",
+  "version": "0.1.0",
+  "description": "Build a Syntra target connector as your own HTTPS service: protocol schemas, a request handler that verifies Syntra's signature, and a certification runner.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ssan9876/syntra.git",
+    "directory": "packages/connector-sdk"
+  },
+  "keywords": [
+    "syntra",
+    "provisioning",
+    "connector",
+    "identity"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./example": "./src/example/in-memory.ts",
+    "./protocol.schema.json": "./protocol.schema.json"
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./example": {
+        "types": "./dist/example/in-memory.d.ts",
+        "import": "./dist/example/in-memory.js"
+      },
+      "./protocol.schema.json": "./protocol.schema.json"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "protocol.schema.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build",
+    "schema:generate": "tsx src/generate-schema.ts",
+    "schema:check": "tsx src/generate-schema.ts --check"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

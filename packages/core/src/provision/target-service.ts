@@ -9,6 +9,7 @@ import {
   forgetEntraTokens,
   TARGET_CONNECTOR_TYPES,
   PASSWORD_SYNC_TARGET_TYPES,
+  MIN_SECRET_LENGTH,
   targetConnectorCapabilities,
   type ConnectionResult,
 } from '@syntra/connectors';
@@ -331,6 +332,21 @@ export class LadderConfigurationError extends Error {
 }
 
 /**
+ * A connector service's shared secret is a signing key, and both ends refuse
+ * one shorter than `MIN_SECRET_LENGTH`. Refused at save, beside the field,
+ * rather than on every write of the first run.
+ */
+export function assertCredentialShape(type: string, credential: string | undefined): void {
+  if (type === 'remote' && credential !== undefined && credential.length < MIN_SECRET_LENGTH) {
+    throw new LadderConfigurationError(
+      'short-shared-secret',
+      'bindPassword',
+      `Shared secret is shorter than ${MIN_SECRET_LENGTH} characters.`,
+    );
+  }
+}
+
+/**
  * Validates the ladder before it reaches the database.
  *
  * The CHECK constraint is the backstop; this is the message. An account whose
@@ -424,6 +440,7 @@ export async function createTarget(
   // against depends on `scalars.type`.
   const scalars = createScalarsSchema.parse(input);
   const config = targetConfigSchemaFor(scalars.type).parse(input.config) as Record<string, unknown>;
+  assertCredentialShape(scalars.type, scalars.bindPassword);
 
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
@@ -611,6 +628,7 @@ export async function updateTarget(
           : ladderInput.deleteAfterDays,
     };
     assertLadder({ ...ladder, type: scalars.type ?? before.type });
+    assertCredentialShape(scalars.type ?? before.type, scalars.bindPassword);
 
     // Mirroring is judged against the configuration the target will HAVE, so
     // a save that changes the base DN and the root together is checked as one.
@@ -1036,6 +1054,16 @@ export async function testTargetConfiguration(
         // there. Same origin rule as `sameHttpCredentialDestination`.
         const savedConfig = targetConfigSchemaFor(target.type).safeParse(target.config);
         if (!savedConfig.success || !sameOrigin((savedConfig.data as { baseUrl: string }).baseUrl, (config as { baseUrl: string }).baseUrl)) {
+          return 'mismatch' as const;
+        }
+      }
+      if (type === 'remote') {
+        // The shared secret never leaves this process, but a request signed
+        // with it is still a request somebody else could replay to the real
+        // service inside its window. Signed only for the service it belongs to.
+        const savedConfig = targetConfigSchemaFor(target.type).parse(target.config) as { baseUrl: string };
+        const requested = config as { baseUrl: string };
+        if (savedConfig.baseUrl.replace(/\/+$/, '') !== requested.baseUrl.replace(/\/+$/, '')) {
           return 'mismatch' as const;
         }
       }

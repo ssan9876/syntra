@@ -635,6 +635,41 @@ describe('TargetDetailPage', () => {
     expect(body.bindPassword).toBe('a-token');
   });
 
+  it('submits a connector service create with its URL and shared secret', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {
+        return Promise.resolve(json({ id: 't1' }));
+      }
+      if (init?.method === 'PATCH') return Promise.resolve(json(null));
+      return Promise.resolve(json(target({ type: 'remote' })));
+    });
+
+    renderNew();
+
+    await userEvent.type(await screen.findByLabelText(/^name$/i), 'HR system');
+    await userEvent.selectOptions(screen.getByLabelText(/^type$/i), 'remote');
+    await userEvent.clear(screen.getByLabelText(/service url/i));
+    await userEvent.type(screen.getByLabelText(/service url/i), 'https://hr.acme.test/syntra');
+    await userEvent.type(screen.getByLabelText(/shared secret/i), 'a'.repeat(40));
+    expect(screen.queryByLabelText(/user resource path/i)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() =>
+      expect(
+        (fetchMock.mock.calls as [unknown, RequestInit | undefined][]).some(
+          ([input, init]) => String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    const create = (fetchMock.mock.calls as [unknown, RequestInit | undefined][]).find(
+      ([input, init]) => String(input).endsWith('/api/admin/targets') && init?.method === 'POST',
+    );
+    const body = JSON.parse(String(create![1]!.body));
+    expect(body.type).toBe('remote');
+    expect(body.config).toEqual({ baseUrl: 'https://hr.acme.test/syntra' });
+    expect(body.bindPassword).toBe('a'.repeat(40));
+  });
+
   it('shows the native Entra field group and submits its config shape', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       if (init?.method === 'POST' && String(input).endsWith('/api/admin/targets')) {

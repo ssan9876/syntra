@@ -139,8 +139,38 @@ export const entraTargetConfigSchema = z
   })
   .strict();
 
+/**
+ * A connector service's target config, kept in parallel with
+ * `@syntra/connectors`' `remoteTargetConfigSchema`.
+ *
+ * No defaults here, unlike the parallel copies above, and that is load-bearing:
+ * it sits FIRST in `anyTargetConfigSchema`, and a SCIM config of only
+ * `baseUrl` matches it too. Without defaults the union hands such a config on
+ * unchanged, and core's own schema for the real type fills in that type's
+ * defaults. With them a SCIM target would be saved with this type's timeout.
+ */
+export const remoteTargetConfigSchema = z
+  .object({
+    baseUrl: directoryString.refine(
+      (v) => v.startsWith('http://') || v.startsWith('https://'),
+      { message: 'baseUrl must start with http:// or https://' },
+    ),
+    placesAccountsInContainers: z.boolean().optional(),
+    pageSize: z.number().int().positive().max(1000).optional(),
+    timeoutMs: z.number().int().min(1000).max(120_000).optional(),
+    allowPrivateAddresses: z.boolean().optional(),
+    naming: z
+      .object({
+        allow: z.enum(['sam', 'email']),
+        maxLength: z.number().int().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 /** Every `TargetSystem.type` the API accepts, kept in step with `@syntra/connectors`' `TARGET_CONNECTOR_TYPES`. */
-export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson', 'entraId']);
+export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson', 'entraId', 'remote']);
 
 /**
  * Either connector's config shape. Not a discriminated union on `type`
@@ -151,6 +181,7 @@ export const targetTypeSchema = z.enum(['activeDirectory', 'scim2', 'httpJson', 
  * this outer boundary rather than silently accepted as `unknown`.
  */
 const anyTargetConfigSchema = z.union([
+  remoteTargetConfigSchema,
   targetConfigSchema,
   scim2TargetConfigSchema,
   httpTargetConfigSchema,

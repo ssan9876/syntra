@@ -86,6 +86,13 @@ const LABELS: Record<string, string> = {
   ...Object.fromEntries(THRESHOLDS),
 };
 
+/** A connector service's two connection fields carry their own labels. */
+const REMOTE_LABELS: Record<string, string> = {
+  ...LABELS,
+  baseUrl: 'Service URL',
+  bindPassword: 'Shared secret',
+};
+
 const CONNECTION_FIELDS = new Set([
   'name', 'type', 'url', 'tlsMode', 'bindDn', 'bindPassword', 'baseDn',
   'entitlementSearchBase', 'archiveContainer', 'baseUrl', 'tenantId', 'clientId',
@@ -695,7 +702,7 @@ export function TargetDetailPage() {
           aria-label={isNew ? 'New target' : 'Target settings'}
           className="space-y-6 rounded-panel border border-border-subtle bg-bg px-4 pt-4"
         >
-          <ErrorSummary errors={summaryOf(invalid, LABELS)} />
+          <ErrorSummary errors={summaryOf(invalid, form.type === 'remote' ? REMOTE_LABELS : LABELS)} />
 
           <FormSection title="Connection" status={connectionState}>
             <Field
@@ -722,6 +729,7 @@ export function TargetDetailPage() {
                 { value: 'entraId', label: 'Microsoft Entra ID (native)' },
                 { value: 'scim2', label: 'SCIM 2.0' },
                 { value: 'httpJson', label: 'REST API' },
+                { value: 'remote', label: 'Connector service' },
               ]}
               className="sm:col-span-2"
             />
@@ -765,6 +773,28 @@ export function TargetDetailPage() {
                 onCorrelationFieldChange={(v) => set('entraCorrelationField', v)}
                 mark={mark}
               />
+            ) : form.type === 'remote' ? (
+              <>
+                <Field
+                  label="Service URL"
+                  name="baseUrl"
+                  value={form.baseUrl}
+                  onChange={(v) => set('baseUrl', v)}
+                  {...mark('baseUrl')}
+                  className="sm:col-span-2"
+                />
+                <Field
+                  label="Shared secret"
+                  name="bindPassword"
+                  type="password"
+                  autoComplete="new-password"
+                  value={form.bindPassword}
+                  onChange={(v) => set('bindPassword', v)}
+                  placeholder={isNew ? 'At least 32 characters' : 'Leave blank to keep the stored secret'}
+                  {...mark('bindPassword')}
+                  className="sm:col-span-2"
+                />
+              </>
             ) : form.type === 'activeDirectory' ? (
               <>
                 <Field

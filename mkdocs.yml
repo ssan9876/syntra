@@ -85,6 +85,7 @@ nav:
       - Back up and copy backups off the host: guides/backups-off-host.md
   - Reference:
       - Configure: configure.md
+      - Connector SDK: connector-sdk.md
       - Operate: operate.md
       - Compatibility: compatibility.md
       - Releases and support: releases.md

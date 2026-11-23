@@ -17,7 +17,7 @@ export const ORG_UNITS_ANCHOR = 'org-units';
 
 export type TlsMode = 'ldaps' | 'starttls';
 export type EnforcementMode = 'additive' | 'authoritative';
-export type TargetType = 'activeDirectory' | 'scim2' | 'httpJson' | 'entraId';
+export type TargetType = 'activeDirectory' | 'scim2' | 'httpJson' | 'entraId' | 'remote';
 
 export interface Target {
   id: string;
@@ -349,7 +349,9 @@ export function formFrom(target: Target): Form {
           ? 'httpJson'
           : target.type === 'entraId'
             ? 'entraId'
-            : 'activeDirectory',
+            : target.type === 'remote'
+              ? 'remote'
+              : 'activeDirectory',
     documentKey: '',
     documentJson:
       config.document === undefined ? '' : JSON.stringify(config.document, null, 2),
@@ -436,6 +438,12 @@ export function configFromForm(
     return {
       document: applyEntraOAuthValues(document, form.entraTenantId, form.entraClientId),
     };
+  }
+  if (form.type === 'remote') {
+    // The service URL and the shared secret are all the console asks for;
+    // `placesAccountsInContainers`, `naming` and the timeouts are carried
+    // through from `extraConfig` and set over the API.
+    return { ...extraConfig, baseUrl: form.baseUrl.trim() };
   }
   if (form.type === 'scim2') {
     return { ...extraConfig, baseUrl: form.baseUrl.trim(), userResourcePath: form.userResourcePath.trim(), groupResourcePath: form.groupResourcePath.trim() };

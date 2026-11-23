@@ -915,7 +915,7 @@ A **target system** is somewhere Provision creates, updates, disables and
 archives accounts and grants entitlements, for **people with contracts** —
 not for synced logins. Business rules say who gets an account; the account
 profile says what it looks like; every run previews a plan before it applies.
-Targets are created under **Target systems → New target**, and each has four
+Targets are created under **Target systems → New target**, and each has five
 connector types to choose from:
 
 | Type | Console label | Talks to | Places accounts in containers | Support |
@@ -924,11 +924,12 @@ connector types to choose from:
 | `entraId` | Microsoft Entra ID | Microsoft Graph v1.0 | no | preview, controlled rollout |
 | `scim2` | SCIM 2.0 | any SCIM 2.0 service provider | no | supported |
 | `httpJson` | REST API | whatever a connector document describes: shipped for Snipe-IT, Google Workspace and Entra ID | only if the document describes `container` | preview, controlled rollout |
+| `remote` | Connector service | a service you run, built with the [connector SDK](connector-sdk.md) | only if `placesAccountsInContainers` is set | preview, controlled rollout |
 
 What every target has in common:
 
 - **One credential**, typed once and sealed into the vault — the bind
-  password, SCIM bearer token, API key or client secret. It is never returned
+  password, SCIM bearer token, API key, client secret or shared secret. It is never returned
   to the browser; an edit that leaves it blank keeps it. A connection test
   after changing the address, transport or certificate setting needs it typed
   again, for the same reason as a source's. Rotating it without an outage is
@@ -1552,6 +1553,29 @@ The document is tested against an in-memory Mattermost that follows the API
 v4 reference. Run a lifecycle simulation and one real create, team grant and
 deactivate against a test server before enabling writes.
 
+### Connector service targets
+
+Type `remote`, for a system no built-in type or connector document can
+express. You run a small HTTPS service, built with
+[`@syntra/connector-sdk`](connector-sdk.md), that talks to the system; Syntra
+calls it. Its code runs in its own process, never in Syntra's. The credential
+is a **shared secret** of at least 32 characters that both ends sign requests
+with; it is never sent.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `baseUrl` | required | The service URL, `https://…`. Console label: Service URL. |
+| `placesAccountsInContainers` | `false` | Must match what the service declares. The connection test fails when it does not. |
+| `pageSize` | `200` | Accounts, entitlements and containers per page, at most 1000. |
+| `timeoutMs` | `30000` | Per request, 1000 to 120000. A write that times out is retried. |
+| `allowPrivateAddresses` | `false` | |
+| `naming` | `sam` | `{ "allow": "email" }` for logins that are email addresses, as for a REST document. |
+
+The console sets `baseUrl` and the secret; set the other keys with
+`PATCH /api/admin/targets/{id}`. **Test connection** checks the protocol
+version and the container setting before it asks the service to test itself.
+Deleting accounts is not certified for connector services in this release.
+
 ### Connector certification, capabilities and rollout
 
 Syntra writes to a target only what the exact adapter release running it was
@@ -1576,6 +1600,7 @@ the stable channel:
 | `scim2` | passed | every account and entitlement write; no containers |
 | `httpJson` | passed | every account and entitlement write; no containers |
 | `entraId` | partial | every account and entitlement write; no containers |
+| `remote` | passed | every account and entitlement write; no containers. Certifies Syntra's side of the protocol; certify your service with `certifyConnectorService` |
 
 **Enforcement.** Every action a run plans is checked twice — is the target's
 release certified for this write, and does its configuration advertise it (for

@@ -121,6 +121,7 @@ const TARGET_LABELS: Record<string, string> = {
   scim2: 'SCIM bearer token',
   httpJson: 'HTTP connector credential',
   entraId: 'Entra ID client secret',
+  remote: 'Connector service shared secret',
 };
 
 export function statusFor(

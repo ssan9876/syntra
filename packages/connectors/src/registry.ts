@@ -9,6 +9,8 @@ import { httpTargetConnector } from './http/connector.js';
 import { httpTargetConfigSchema } from './http/document.js';
 import { entraPasswordReset, entraTargetConnector } from './entra/connector.js';
 import { entraTargetConfigSchema } from './entra/config.js';
+import { remoteTargetConnector } from './remote/connector.js';
+import { remoteTargetConfigSchema } from './remote/config.js';
 
 /**
  * Every `TargetSystem.type` this package can read. A plain lookup, not
@@ -19,7 +21,7 @@ import { entraTargetConfigSchema } from './entra/config.js';
  * imported before this file existed. Adding a third connector is one more
  * entry in each of the two records below, not a new mechanism.
  */
-export const TARGET_CONNECTOR_TYPES = ['activeDirectory', 'scim2', 'httpJson', 'entraId'] as const;
+export const TARGET_CONNECTOR_TYPES = ['activeDirectory', 'scim2', 'httpJson', 'entraId', 'remote'] as const;
 export type TargetConnectorType = (typeof TARGET_CONNECTOR_TYPES)[number];
 
 export class UnknownTargetConnectorTypeError extends Error {
@@ -51,6 +53,10 @@ const CONNECTORS: Record<TargetConnectorType, TargetConnector<never>> = {
   // The native Microsoft Graph connector. The shipped `entra-id` document
   // above still works; this one is what the document could not express.
   entraId: entraTargetConnector as unknown as TargetConnector<never>,
+  // A connector service the operator runs (`@syntra/connector-sdk`). Still
+  // one entry: the service's code runs in its own process, never in this one,
+  // so this list stays exactly as closed as it was.
+  remote: remoteTargetConnector as unknown as TargetConnector<never>,
 };
 
 const CONFIG_SCHEMAS: Record<TargetConnectorType, z.ZodTypeAny> = {
@@ -58,6 +64,7 @@ const CONFIG_SCHEMAS: Record<TargetConnectorType, z.ZodTypeAny> = {
   scim2: scim2TargetConfigSchema,
   httpJson: httpTargetConfigSchema,
   entraId: entraTargetConfigSchema,
+  remote: remoteTargetConfigSchema,
 };
 
 /** The target types that can take a password set by Syntra (`syncPassword`). */
@@ -104,6 +111,7 @@ const IMPLEMENTATIONS: Record<TargetConnectorType, Record<string, TargetConnecto
   scim2: { '1.0.0': CONNECTORS.scim2 },
   httpJson: { '1.0.0': CONNECTORS.httpJson },
   entraId: { '1.0.0': CONNECTORS.entraId },
+  remote: { '1.0.0': CONNECTORS.remote },
 };
 
 export class AdapterVersionNotImplementedError extends Error {

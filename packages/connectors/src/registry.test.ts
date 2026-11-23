@@ -16,7 +16,7 @@ import { entraTargetConfigSchema } from './entra/config.js';
 
 describe('registry', () => {
   it('lists every connector type', () => {
-    expect(TARGET_CONNECTOR_TYPES).toEqual(['activeDirectory', 'scim2', 'httpJson', 'entraId']);
+    expect(TARGET_CONNECTOR_TYPES).toEqual(['activeDirectory', 'scim2', 'httpJson', 'entraId', 'remote']);
   });
 
   it('resolves activeDirectory to the AD connector and config schema', () => {
