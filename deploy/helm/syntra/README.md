@@ -147,14 +147,10 @@ Web probes deliberately avoid `/health`. On that server, `/health` is a proxy
 to the API, so the probe would restart healthy nginx pods whenever the API is
 down.
 
-`/health/ready` is rate-limited to 60 requests per minute per address. The
-counter is shared by every API replica, and the kubelet probes from its
-node's address, so all API pods on one node share one allowance. The
-default readiness period of 10 s uses 6 per pod per minute, which leaves
-room for 10 API pods on a node. Keep `periodSeconds` at least equal to the
-number of API pods one node can hold. If the limiter's store (Postgres) is
-unreachable, this route still answers, with 503 and the failing probe named,
-rather than failing inside the limiter.
+`/health/ready` is rate-limited to 60 requests per minute per address, for
+each API process. The default readiness period of 10 s uses 6 a minute. If
+the limiter's store (Postgres) is unreachable, this route still answers,
+with 503 and the failing probe named, rather than failing inside the limiter.
 
 ## Running more than one API replica
 
@@ -200,6 +196,8 @@ and how, and the little that stays per process.
   divide them by the replica count. Ended windows are swept every minute.
   `RATE_LIMIT_STORE=memory` (`api.rateLimitStore`) restores the old
   per-process counters. That is only correct with exactly one replica.
+  `/health/ready` and `/metrics` count per process in either store: what
+  they limit is one process's work.
 
 **Still per process, and harmless:**
 

@@ -8,6 +8,7 @@ import {
   Histogram,
 } from '@prometheus-io/client';
 import type { AgentStatus } from '../backup-agent/client.js';
+import { perProcessKey } from '../plugins/rate-limit.js';
 import {
   buildInfo,
   cachedMetrics,
@@ -372,8 +373,9 @@ export async function registerMetricsRoutes(
     '/metrics',
     {
       // The same limit `/health/ready` carries, for the same reason: this
-      // endpoint is not free and is reachable with one credential.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+      // endpoint is not free and is reachable with one credential. Per
+      // process, like that one: Prometheus scrapes every node from one address.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: perProcessKey() } },
     },
     async (request, reply) => {
       const header = request.headers.authorization;

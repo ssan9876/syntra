@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   FastifyInstance,
   FastifyRequest,
@@ -13,12 +14,28 @@ import { ProblemError } from './problem-json.js';
  * else out, and a tenant under attack takes the rest down with it. Tenant
  * first so the key reads the way the buckets nest.
  *
- * `/health/ready` is unauthenticated and rate-limited, and reaches this
- * fallback on every request -- the 'unscoped' bucket is shared by everyone
- * hitting it, which is fine for a single low-value endpoint.
+ * Unscoped paths reach the 'unscoped' fallback on every request. The probe
+ * endpoints among them use `perProcessKey` instead.
  */
 export function tenantAndIpKey(request: FastifyRequest): string {
   return `${request.tenantId || 'unscoped'}|${request.ip}`;
+}
+
+/**
+ * A per-address key that also names this process, for the limits that protect
+ * the process rather than an account: `/health/ready` and `/metrics`.
+ *
+ * The counters live in Postgres and are shared by every replica. Keyed on the
+ * address alone, a load balancer or Prometheus probing N nodes from one
+ * address spent one allowance between all of them, and so did every node's
+ * container healthcheck, which comes from 127.0.0.1 on each host. At a few
+ * nodes the probes themselves were refused with 429 and healthy nodes were
+ * taken out of rotation. What these limits bound is the work one process does
+ * per request, so each process gets its own allowance.
+ */
+export function perProcessKey(): (request: FastifyRequest) => string {
+  const instance = randomUUID();
+  return (request) => `${instance}|${request.ip}`;
 }
 
 /** Which perTenantRateLimit scopes each built app has handed out. */

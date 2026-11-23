@@ -270,6 +270,46 @@ describe('rate limits across replicas', () => {
     await replicas[1]!.close();
   });
 
+  /**
+   * A load balancer probes every node from one address, and each host's
+   * container healthcheck comes from 127.0.0.1. One shared allowance for all
+   * of them refused the probes with 429 once there were a few nodes.
+   */
+  it('gives each replica its own readiness allowance for one address', async () => {
+    await ctx.app.ready();
+    replicas = [ctx.app, await secondReplica()];
+    const probe = (app: FastifyInstance) =>
+      app.inject({ method: 'GET', url: '/health/ready', remoteAddress: '198.51.100.9' });
+
+    const codes: number[] = [];
+    for (let i = 0; i < 120; i++) codes.push((await probe(replicas[i % 2]!)).statusCode);
+    expect(codes.filter((code) => code === 429)).toEqual([]);
+
+    // Still bounded, per process.
+    expect((await probe(replicas[0]!)).statusCode).toBe(429);
+    expect((await probe(replicas[1]!)).statusCode).toBe(429);
+    await replicas[1]!.close();
+  });
+
+  it('gives each replica its own /metrics allowance for one address', async () => {
+    ctx = await buildTestApp({ env: { METRICS_TOKEN: 'm'.repeat(32) } });
+    await ctx.app.ready();
+    replicas = [ctx.app, await secondReplica()];
+    const scrape = (app: FastifyInstance) =>
+      app.inject({
+        method: 'GET',
+        url: '/metrics',
+        remoteAddress: '198.51.100.10',
+        headers: { authorization: `Bearer ${'m'.repeat(32)}` },
+      });
+
+    const codes: number[] = [];
+    for (let i = 0; i < 120; i++) codes.push((await scrape(replicas[i % 2]!)).statusCode);
+    expect(codes.filter((code) => code !== 200)).toEqual([]);
+    expect((await scrape(replicas[0]!)).statusCode).toBe(429);
+    await replicas[1]!.close();
+  });
+
   it('keeps separate routes on separate counters, as the in-memory store did', async () => {
     ctx = await buildTestApp({ env: { AUTH_RATE_LIMIT_MAX: '2', AUTH_RATE_LIMIT_TENANT_MAX: '100' } });
     await ctx.app.ready();
