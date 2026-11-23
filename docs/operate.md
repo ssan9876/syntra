@@ -7,7 +7,8 @@ something goes wrong — plus how the test suite and CI are put together.
 **Contents**
 
 1. **Running it** — [Upgrades](#upgrades), [Backups](#backups),
-   [Kubernetes and high availability](#kubernetes-and-high-availability)
+   [Kubernetes and high availability](#kubernetes-and-high-availability),
+   [Running on more than one host](#running-on-more-than-one-host)
 2. **Watching it** — [Metrics](#metrics), [Observability](#observability),
    [Status reporting](#status-reporting)
 3. **What it keeps and what it deletes** —
@@ -44,7 +45,8 @@ Three deployment shapes exist, and each upgrades differently:
   `/opt/syntra/releases/<version>`), `/opt/syntra/shared/.env`, a `syntra`
   systemd unit, Postgres in a Docker container named by `PG_CONTAINER`.
   `syntra-update` and `syntra-backup` are written for this layout and only
-  this layout.
+  this layout, on one host
+  ([The release layout is one host](#the-release-layout-is-one-host)).
 - **Compose path** (`docker-compose.yml`, optionally `docker-compose.tls.yml`)
   — `postgres`, `api` and `web` services; the `api` image migrates before it
   starts; data in the `syntra-data` volume.
@@ -744,11 +746,14 @@ has the details. In short:
   the default). `AUTH_RATE_LIMIT_MAX` and `AUTH_RATE_LIMIT_TENANT_MAX` are
   deployment-wide limits whatever the replica count.
   `RATE_LIMIT_STORE=memory` keeps per-process counters and is only correct
-  for a single process.
+  for a single process. `/health/ready` and `/metrics` are the exception:
+  60 requests a minute per address on each process, so probes of every
+  replica from one address do not share one allowance.
 
 Syntra has no state of its own outside Postgres, `MASTER_KEY` and
 `SESSION_SECRET`. Availability therefore depends almost entirely on the
-database.
+database. Several hosts without Kubernetes:
+[Running on more than one host](#running-on-more-than-one-host).
 
 ### Installing the Helm chart from the OCI registry
 
@@ -918,6 +923,239 @@ a restore into a scratch database.
 A backup is also the one place an erased tenant survives. How long, and what
 to do before restoring one older than a deletion, is in
 [Deleted tenants and backups](#deleted-tenants-and-backups).
+
+## Running on more than one host
+
+Several API hosts behind a load balancer, without Kubernetes. What the API
+processes share through Postgres is listed under
+[Kubernetes and high availability](#kubernetes-and-high-availability) and
+holds on any host. This section is what the hosts need around it.
+
+### Topology
+
+- **Two or more API hosts**, each running the `api` and `web` images from
+  `docker-compose.yml`.
+- **A load balancer** in front of every host's `web` port.
+- **One PostgreSQL primary with failover**, reached through one address that
+  follows the primary. See [Postgres for production](#postgres-for-production).
+- **One backup agent**, on one of the hosts.
+
+Use the container images. The release layout is one host only: see
+[The release layout is one host](#the-release-layout-is-one-host).
+
+### The same configuration on every host
+
+Keep the environment identical on every host, apart from the addresses a host
+binds. Background jobs run on whichever host claims them, with that host's
+settings.
+
+| Setting | If it differs between hosts |
+|---|---|
+| `SESSION_SECRET` | A session started on one host is refused on another, and the backup agent refuses hosts whose token does not match. |
+| `MASTER_KEY`, `MASTER_KEY_PREVIOUS`, or the Vault or KMS settings | A credential sealed on one host cannot be read on another. |
+| `PUBLIC_URL` | Cookies, WebAuthn and issuer URLs disagree. Set it to the load balancer's origin. |
+| `DATABASE_URL` | Set it to the failover address, never to one server or a read replica. |
+| `GOVERN_CHECKPOINT_KEY`, `GOVERN_CHECKPOINT_KEY_ID` | A checkpoint signed on one host does not verify on another. |
+| `SMTP_URL` and the `MAIL_*` settings | Mail sent by a background job goes out with the settings of the host that ran it. |
+| `RATE_LIMIT_STORE` | Must be `postgres`, the default. `memory` gives every host its own allowance. |
+| `BACKUP_AGENT_URL`, `BACKUP_AGENT_TOKEN` | Administration → Backups shows `No backup service configured` on hosts without them. |
+| `SYNTRA_VERSION` | Two releases at once. See [Rolling upgrades](#rolling-upgrades-across-hosts). |
+
+`GOVERN_ANCHOR_DIR` is written by whichever host runs the weekly anchor job.
+Mount the same write-once share there on every host, or use
+`GOVERN_ANCHOR_EMAIL` instead.
+
+### The load balancer
+
+- **Health check:** `GET /health/ready`, expecting `200`, every 5 to 10
+  seconds. It returns `503` when the host cannot reach the database, a
+  migration is missing, the master-key provider does not answer, or the
+  console is missing. Every host returns `503` while the database is
+  unreachable.
+- **`/health`** returns `200` whenever the process is listening. Use it for
+  external uptime monitoring, not for the pool.
+- `/health/ready` and `/metrics` each allow 60 requests a minute per address
+  on each API process. A load balancer probing every host from one address
+  uses one allowance per host.
+- **No sticky sessions.** Sessions, OIDC and SAML state, WebAuthn challenges,
+  lockout and rate limits are in Postgres, and cookies are signed with
+  `SESSION_SECRET`. The one exception is the
+  [first-run setup](configure.md#first-run-setup) link, which works only on
+  the host that printed it: set up with one host running, or use the
+  bootstrap script.
+- **Pass `Host` through unchanged** and send `X-Forwarded-For`. The `api`
+  service trusts the private ranges in `TRUST_PROXY`. If the load balancer
+  connects from a public address, add it to `TRUST_PROXY` in the override.
+- **Read timeout of at least 120 seconds.** Sync and provisioning previews
+  answer inside one request, and `web` waits 120 seconds for them.
+- **Drain a host before you stop it.** On `SIGTERM` the API stops accepting,
+  finishes the requests in flight, then waits up to 30 seconds for the jobs it
+  is running.
+
+### The compose path on each host
+
+`docker-compose.yml` runs everything on one host. On each API host, add a
+`docker-compose.override.yml` beside it, which Compose reads on its own:
+
+```yaml
+services:
+  api:
+    environment:
+      DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD}@db.example.internal:5432/syntra
+      BACKUP_AGENT_URL: http://10.0.0.11:3100     # the backup host
+    depends_on: !reset {}                         # no local postgres
+    stop_grace_period: 60s                        # Compose's default is 10s
+  web:
+    ports: !override ['10.0.0.12:8080:8080']      # this host's private address
+```
+
+Start only those two: `docker compose up -d api web`. The `postgres` service
+is not started. Compose still checks every service's variables, so set
+`POSTGRES_PASSWORD` to any value on hosts without the backup agent: only
+`postgres` and `backup` read it, and the database superuser's password does
+not belong on those hosts.
+
+On the backup host, add the agent, publish its port on the private address
+only, and allow only the API hosts to reach it. It speaks plain HTTP, and the
+token is its only protection.
+
+```yaml
+  backup:
+    environment:
+      SUPERUSER_DATABASE_URL: postgresql://syntra:${POSTGRES_PASSWORD}@db.example.internal:5432/syntra
+      DATABASE_URL: postgresql://syntra_app:${SYNTRA_APP_PASSWORD}@db.example.internal:5432/syntra
+    ports: ['10.0.0.11:3100:3100']
+    depends_on: !reset {}
+```
+
+Then `docker compose up -d api web backup`. On that host, `BACKUP_AGENT_URL`
+can stay `http://backup:3100`. `!reset` and `!override` need Compose v2.24 or
+later.
+
+### What runs on exactly one host
+
+| What | How |
+|---|---|
+| The backup agent | One `backup` service. Two agents each take restore points on their own schedule, keep their own directory and run their own restores. |
+| First-run setup | One host running, or the bootstrap script. |
+
+Background jobs need no arrangement. Every host runs the scheduler:
+
+- pg-boss claims each job with `SKIP LOCKED`, so a job runs on one host.
+- Cron schedules are rows in Postgres keyed on queue and key. Each host
+  re-applies them at startup, which updates the rows in place.
+- Each interval, one host claims the cron pass and turns due schedules into
+  jobs, so a schedule fires once whatever the host count.
+
+### Rolling upgrades across hosts
+
+1. **Back up now** in Administration → Backups.
+2. Read the release notes. Each migration is named, with whether it rewrites
+   data.
+3. On one host at a time:
+   1. Drain it in the load balancer.
+   2. Set `SYNTRA_VERSION`, then
+      `docker compose pull api web && docker compose up -d api web`.
+      On the backup host, include `backup` in both.
+   3. Wait for `docker compose ps` to show `api` healthy, then put the host
+      back.
+
+The first host to start the new release applies its migrations.
+`prisma migrate deploy` holds an advisory lock, so two hosts starting at once
+apply them once.
+
+Until the last host is updated, hosts on the old release run against the new
+schema. Their readiness passes and reports `N applied (M newer than this
+build)`. CI does not test a release against the next release's schema, so
+keep that window short:
+
+- **Migrations that only add tables or columns:** roll as above.
+- **A migration that rewrites data:** stop `api` on every host, update one
+  host, then update and start the rest. Sign-in is down until the first host
+  is ready.
+- **Built-in schedules** are re-applied by each host at startup, so the host
+  that started last decides them. Finish the rollout.
+
+To go back, set `SYNTRA_VERSION` back on every host, including the backup
+host, and `docker compose up -d`. Then restore the backup from step 1 in the
+console. Writes since that backup are lost.
+
+### Backups and restore across hosts
+
+- **One agent, every host pointing at it.** Restore points and **Back up now**
+  run on the backup host. The token is derived from `SESSION_SECRET` unless
+  `BACKUP_AGENT_TOKEN` is set, so it matches on every host.
+- **A restore pauses every host.** The agent writes a hold into the database
+  and waits 20 seconds (`BACKUP_RESTORE_SETTLE_SECONDS`). Each API process,
+  on any host, checks every 5 seconds, restarts, and comes back
+  [on hold](#after-a-restore-background-work-is-paused). Compose's
+  `restart: unless-stopped` starts it again.
+- The agent then locks out the application role, which ends every host's
+  connections, including those of a host that missed the hold.
+- **Resume** applies to every host within 15 seconds.
+
+### Clocks
+
+Run NTP (chrony or systemd-timesyncd) on every host and on the database
+server.
+
+- Cron schedules and rate-limit windows use the database's clock.
+- Sessions, TOTP and token lifetimes use the host's clock. TOTP accepts one
+  30-second step either side, so a host a minute off refuses valid codes.
+
+### Connections
+
+Each API process opens a Prisma pool (`connection_limit`, 10 by default) and a
+pg-boss pool of 10. See [Connection-pool sizing](#connection-pool-sizing).
+Size `max_connections` for:
+
+```
+hosts × (connection_limit + 10)
+  + 2 (migrations, on the host that applies them)
+  + 2 (backup agent) + monitoring/admin headroom
+```
+
+With 3 hosts and `connection_limit=10`, that is 3 × 20 + 4 = 64, plus
+headroom. PostgreSQL's default `max_connections` is 100.
+
+### When a host dies
+
+- Requests in flight on it fail. The load balancer sends the rest elsewhere
+  once its health check fails. Sessions carry on on the other hosts.
+- A job it was running stays active in pg-boss for 15 minutes, then expires
+  and is retried on another host, up to 3 times. The same happens to a job
+  still running 30 seconds after `SIGTERM`.
+- A run it had started stays `running`. Operations → Background work shows
+  it as `orphaned` once it has had no live job for 10 minutes, and a
+  provisioning apply once its heartbeat is 15 minutes old. The repairs are in
+  [Background work and job health](#background-work-and-job-health). No
+  repair re-runs a connector write.
+- Schedules keep firing: any remaining host takes the cron pass.
+
+### The release layout is one host
+
+`/opt/syntra`, `syntra-update` and `syntra-backup` assume one host with
+PostgreSQL in a Docker container on it:
+
+- `syntra-update` and `syntra-backup` run `pg_dump`, `pg_restore` and `psql`
+  through `docker exec` in `PG_CONTAINER`. On any other host the
+  pre-migration dump fails and the update stops with `failed`.
+- `syntra-update`'s rollback and `syntra-backup restore` stop only that
+  host's `syntra` service, then drop and restore the database under every
+  other host.
+- `var/update.status` is per host, so the console's **Updates** page shows
+  whichever host answered.
+
+On more than one host, use the container images. A single-process install
+from a checkout also runs on several hosts, as long as no host is converted
+to the release layout:
+
+- Update each host by hand, one at a time as above: the install steps from
+  [The single-process alternative](install.md#the-single-process-alternative-to-the-container-path)
+  for the new release, then `systemctl restart syntra`.
+- Run the backup agent as the `backup` service from `docker-compose.yml` on
+  one host, configured as above. The API image carries the PostgreSQL client
+  tools.
 
 ## Metrics
 

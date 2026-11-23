@@ -28,9 +28,9 @@ describe('GET /health/ready', () => {
   // for: `config: { rateLimit: { max: 60, timeWindow: '1 minute' } }` on the
   // route actually applies. `/health/ready` is an UNSCOPED path (see
   // tenant-context.ts), so every one of these requests -- with no Host header
-  // at all -- shares the one 'unscoped|127.0.0.1' bucket, and a fresh app per
-  // test means a fresh in-memory limiter with nothing left over from another
-  // test.
+  // at all -- shares this process's one bucket for 127.0.0.1 (`perProcessKey`),
+  // and a fresh app per test means a fresh key with nothing left over from
+  // another test.
   it('allows 60 requests a minute and 429s the 61st', async () => {
     ctx = await buildTestApp();
     await ctx.app.ready();

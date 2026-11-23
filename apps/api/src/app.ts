@@ -23,7 +23,7 @@ import {
 import { registerProblemJson } from './plugins/problem-json.js';
 import { registerWebApp } from './plugins/web-app.js';
 import { registerSecurityHeaders } from './plugins/security-headers.js';
-import { tenantAndIpKey } from './plugins/rate-limit.js';
+import { perProcessKey, tenantAndIpKey } from './plugins/rate-limit.js';
 import {
   postgresRateLimitCounter,
   sharedRateLimitStore,
@@ -310,12 +310,13 @@ export async function buildApp(
       // release and again for the rollback, which can land inside the same
       // one-minute window. Keyed per address, so the updater on loopback and
       // a container orchestrator's probe do not share a bucket with anybody.
+      // Per process as well: see `perProcessKey`.
       //
       // `skipOnError`: the limiter's counters live in Postgres, and this is
       // the route whose job is to REPORT that Postgres is unreachable -- with
       // a 503 and the failing probe named. Failing closed here would turn that
       // into a bare 500 from the limiter and hide the diagnosis.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute', skipOnError: true } },
+      config: { rateLimit: { max: 60, timeWindow: '1 minute', skipOnError: true, keyGenerator: perProcessKey() } },
     },
     async (request, reply) => {
       const report = await readiness({
