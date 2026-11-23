@@ -937,19 +937,22 @@ const testScalarsSchema = z.object({
  * authentication, including where an OAuth secret is posted. Paths and
  * mappings may differ; that is what a test of an edited document is for.
  */
+/** Scheme, host and port equal. An unparseable URL is never the same origin. */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 export function sameHttpCredentialDestination(saved: unknown, requested: unknown): boolean {
   const documentOf = (config: unknown) =>
     (config as { document?: { baseUrl?: unknown; auth?: Record<string, unknown> } } | null)?.document;
   const a = documentOf(saved);
   const b = documentOf(requested);
   if (typeof a?.baseUrl !== 'string' || typeof b?.baseUrl !== 'string') return false;
-  let origins: [string, string];
-  try {
-    origins = [new URL(a.baseUrl).origin, new URL(b.baseUrl).origin];
-  } catch {
-    return false;
-  }
-  if (origins[0] !== origins[1]) return false;
+  if (!sameOrigin(a.baseUrl, b.baseUrl)) return false;
   const keys = ['type', 'tokenUrl', 'clientId', 'clientAuth', 'username', 'header', 'prefix', 'param'];
   return keys.every((key) => (a.auth?.[key] ?? null) === (b.auth?.[key] ?? null));
 }
@@ -1024,6 +1027,15 @@ export async function testTargetConfiguration(
         // difference from a row saved before it existed.
         const savedConfig = targetConfigSchemaFor(target.type).safeParse(target.config);
         if (!savedConfig.success || !sameHttpCredentialDestination(savedConfig.data, config)) {
+          return 'mismatch' as const;
+        }
+      }
+      if (type === 'scim2') {
+        // The bearer token is sent to `baseUrl` on every request, so a test
+        // naming another origin would hand the saved token to whoever answers
+        // there. Same origin rule as `sameHttpCredentialDestination`.
+        const savedConfig = targetConfigSchemaFor(target.type).safeParse(target.config);
+        if (!savedConfig.success || !sameOrigin((savedConfig.data as { baseUrl: string }).baseUrl, (config as { baseUrl: string }).baseUrl)) {
           return 'mismatch' as const;
         }
       }

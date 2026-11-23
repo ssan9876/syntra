@@ -881,6 +881,45 @@ describe('testTargetConfiguration', () => {
     }
   });
 
+  it('refuses to borrow a SCIM token for another origin', async () => {
+    // The bearer token goes to `baseUrl` on every request.
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'scim2',
+      name: 'Acme SCIM',
+      config: { baseUrl: 'https://scim.acme.test/scim/v2' },
+      bindPassword: 'a-scim-token',
+    });
+    for (const baseUrl of [
+      'https://attacker.example/scim/v2',
+      'http://scim.acme.test/scim/v2',
+      'https://scim.acme.test:8443/scim/v2',
+    ]) {
+      const result = await testTargetConfiguration(tenantId, provider, {
+        type: 'scim2',
+        config: { baseUrl },
+        borrowFromTargetId: id,
+      });
+      expect(result.message).toMatch(/only be reused by a target of the same type/);
+    }
+  });
+
+  it('borrows a SCIM token when only the path changed', async () => {
+    // A closed loopback port: past the borrow, failing on the connection.
+    const { id } = await createTarget(tenantId, provider, null, {
+      type: 'scim2',
+      name: 'Acme SCIM',
+      config: { baseUrl: 'https://127.0.0.1:1/scim/v2', allowPrivateAddresses: true, timeoutMs: 2_000 },
+      bindPassword: 'a-scim-token',
+    });
+    const result = await testTargetConfiguration(tenantId, provider, {
+      type: 'scim2',
+      config: { baseUrl: 'https://127.0.0.1:1/other/v2', allowPrivateAddresses: true, timeoutMs: 2_000 },
+      borrowFromTargetId: id,
+    });
+    expect(result.message).not.toMatch(/only be reused/);
+    expect(result.message).not.toMatch(/no saved credential/);
+  });
+
   it('borrows a REST credential when only the paths changed', async () => {
     // A closed loopback port: past the borrow, failing on the connection.
     const document = {
