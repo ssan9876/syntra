@@ -331,6 +331,9 @@ backups. Back up the database as a `pg_dump`, not as a copy of the
 `syntra-data` volume: a copy taken while Postgres is running can be
 inconsistent. See [Operating Syntra](operate.md#backups) for the commands.
 
+More than one host behind a load balancer:
+[Running on more than one host](operate.md#running-on-more-than-one-host).
+
 ## Kubernetes
 
 The Helm chart in [`deploy/helm/syntra`](../deploy/helm/syntra/README.md)
@@ -357,6 +360,9 @@ proxy: build the web app, point `WEB_ROOT` at the built assets, and run the
 API alone as the entire deployment, from TypeScript source through `tsx`
 rather than either Docker image. Choose it over the container path when you
 would rather manage one process under systemd than a Compose stack.
+On more than one host, read
+[The release layout is one host](operate.md#the-release-layout-is-one-host)
+first.
 
 Start the database first: [The database](#the-database), below. Then:
 
