@@ -38,16 +38,19 @@ interface TargetRow {
  * A record rather than a chain of ternaries: the previous shape read
  * "anything that is not scim2 is Active Directory", which labelled a third
  * connector type as the wrong system rather than as an unknown one.
+ *
+ * Product and protocol names stay as they are in every language; `remote` is
+ * a description, so it comes from the catalog.
  */
 const TYPE_LABELS: Record<string, string> = {
   activeDirectory: 'Active Directory',
   scim2: 'SCIM 2.0',
   httpJson: 'REST API',
   entraId: 'Entra ID',
-  remote: 'Connector service',
 };
 
-const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
+const typeLabel = (t: ConsoleT, type: string) =>
+  type === 'remote' ? t('targets.type_remote') : (TYPE_LABELS[type] ?? type);
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -281,7 +284,7 @@ export function TargetsPage() {
                           {target.name}
                         </Link>
                         <span className="ml-2">
-                          <Status tone="neutral">{typeLabel(target.type)}</Status>
+                          <Status tone="neutral">{typeLabel(t, target.type)}</Status>
                         </span>
                       </td>
                       <td>

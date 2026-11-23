@@ -157,6 +157,7 @@ export const consoleEn = {
 
   // Target systems list.
   'targets.title': 'Target systems',
+  'targets.type_remote': 'Connector service',
   'targets.new': 'New target',
   'targets.stat_targets': 'Targets',
   'targets.stat_enabled': 'Enabled',

@@ -141,6 +141,7 @@ export const catalog: ConsoleCatalog = {
   'actionState.superseded': 'Substituída',
 
   'targets.title': 'Sistemas de destino',
+  'targets.type_remote': 'Serviço de conector',
   'targets.new': 'Novo sistema de destino',
   'targets.stat_targets': 'Sistemas de destino',
   'targets.stat_enabled': 'Ativados',
