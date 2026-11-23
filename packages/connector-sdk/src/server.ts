@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { trimTrailingSlashes } from './url.js';
 import {
   ERROR_CODES,
   HEADERS,
@@ -240,7 +241,7 @@ export function createConnectorRequestListener(
   const maxBodyBytes = options.maxBodyBytes ?? 1_048_576;
   const nonces = options.nonces ?? new MemoryNonceStore();
   const now = options.now ?? Date.now;
-  const basePath = (options.basePath ?? '').replace(/\/+$/, '');
+  const basePath = trimTrailingSlashes(options.basePath ?? '');
   const onError =
     options.onError ??
     ((error: unknown, context: { method: Method; requestId: string }) => {

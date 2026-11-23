@@ -16,6 +16,7 @@ import {
   type WriteResultBody,
 } from './protocol.js';
 import { MIN_SECRET_LENGTH, signRequest } from './signing.js';
+import { trimTrailingSlashes } from './url.js';
 
 /**
  * The calling side of the protocol: what Syntra uses to talk to a connector
@@ -129,7 +130,7 @@ export class ConnectorClient {
     if (options.secret.length < MIN_SECRET_LENGTH) {
       throw new Error(`Shared secret is shorter than ${MIN_SECRET_LENGTH} characters.`);
     }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.baseUrl = trimTrailingSlashes(options.baseUrl);
     this.secret = options.secret;
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.fetcher = options.fetch ?? ((url, init) => fetch(url, init));

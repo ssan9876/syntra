@@ -949,12 +949,6 @@ const testScalarsSchema = z.object({
   borrowFromTargetId: z.string().uuid().optional(),
 });
 
-/**
- * Whether a REST target's test would send the saved credential to the same
- * place the saved document does: the same `baseUrl` origin and the same
- * authentication, including where an OAuth secret is posted. Paths and
- * mappings may differ; that is what a test of an edited document is for.
- */
 /** Scheme, host and port equal. An unparseable URL is never the same origin. */
 function sameOrigin(a: string, b: string): boolean {
   try {
@@ -964,6 +958,19 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+/** A loop, not `/\/+$/`, which is quadratic on a long slash run (CodeQL js/polynomial-redos). */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end--;
+  return value.slice(0, end);
+}
+
+/**
+ * Whether a REST target's test would send the saved credential to the same
+ * place the saved document does: the same `baseUrl` origin and the same
+ * authentication, including where an OAuth secret is posted. Paths and
+ * mappings may differ; that is what a test of an edited document is for.
+ */
 export function sameHttpCredentialDestination(saved: unknown, requested: unknown): boolean {
   const documentOf = (config: unknown) =>
     (config as { document?: { baseUrl?: unknown; auth?: Record<string, unknown> } } | null)?.document;
@@ -1063,7 +1070,7 @@ export async function testTargetConfiguration(
         // service inside its window. Signed only for the service it belongs to.
         const savedConfig = targetConfigSchemaFor(target.type).parse(target.config) as { baseUrl: string };
         const requested = config as { baseUrl: string };
-        if (savedConfig.baseUrl.replace(/\/+$/, '') !== requested.baseUrl.replace(/\/+$/, '')) {
+        if (withoutTrailingSlashes(savedConfig.baseUrl) !== withoutTrailingSlashes(requested.baseUrl)) {
           return 'mismatch' as const;
         }
       }

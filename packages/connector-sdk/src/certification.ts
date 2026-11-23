@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ConnectorClient, ConnectorServiceError, type FetchLike, type ReadBack } from './client.js';
 import { HEADERS, PROTOCOL_VERSION, type WriteOperationOf, type WriteResultBody } from './protocol.js';
 import { signRequest } from './signing.js';
+import { trimTrailingSlashes } from './url.js';
 
 /**
  * The lifecycle contract every target obeys, written once.
@@ -210,7 +211,7 @@ export async function certifyConnectorService(options: ServiceCertificationOptio
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
   });
   const fetcher: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
-  const base = options.baseUrl.replace(/\/+$/, '');
+  const base = trimTrailingSlashes(options.baseUrl);
   const pageSize = options.pageSize ?? 100;
   const protocolChecks: string[] = [];
 
