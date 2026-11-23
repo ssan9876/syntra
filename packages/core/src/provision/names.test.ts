@@ -293,6 +293,17 @@ describe('generateCorrelationKey', () => {
       });
     });
 
+    // CodeQL js/polynomial-redos: `/^[.-]+|[.-]+$/` took quadratic time on a
+    // run of separators that does not reach the end. 100 000 of them took
+    // seconds; the bound is far above what a linear trim needs.
+    it('trims in linear time when a long run of separators is not at the end', () => {
+      const started = performance.now();
+      const result = generate(context('Anna', `${'-'.repeat(100_000)}x`));
+      expect(performance.now() - started).toBeLessThan(1000);
+      // Cut to the 20-character cap inside the run, then trimmed back to `anna`.
+      expect(result).toEqual({ ok: true, correlationKey: 'anna' });
+    });
+
     it('contains only the characters a login may contain', () => {
       const result = generate(context('Ånn a', "O'Br/ien\\Smit"));
       expect(key(result)).toBe('ann.obriensmit');
@@ -464,6 +475,18 @@ describe('generateCorrelationKey — the email rule', () => {
   it('does not end a truncated local part on a separator', () => {
     const result = email(withEmail('anna_.novak@contoso.com'), [], { maxLength: 17 });
     expect(key(result)).toBe('anna@contoso.com');
+  });
+
+  it('trims the local part and the domain in linear time on a long run of separators', () => {
+    const run = '-'.repeat(100_000);
+    const started = performance.now();
+    const local = email(withEmail(`anna${run}x@contoso.com`));
+    const domain = email(withEmail(`anna@${run}x.com`));
+    expect(performance.now() - started).toBeLessThan(1000);
+    // Cut to the 64-character local cap, which lands inside the run.
+    expect(key(local)).toBe('anna@contoso.com');
+    // The run leads the domain, so it is trimmed off it.
+    expect(key(domain)).toBe('anna@x.com');
   });
 
   it('refuses a domain that alone leaves no room, rather than cutting it', () => {
