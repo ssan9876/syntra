@@ -190,6 +190,29 @@ const catalog = {
       },
     ],
   },
+  remote: {
+    type: 'remote',
+    displayName: 'Connector service',
+    releases: [
+      {
+        adapterVersion: '1.0.0',
+        connectorApiVersion: 1,
+        channel: 'stable',
+        supportState: 'preview',
+        rollout: 'controlled',
+        deprecationDate: null,
+        certification: {
+          contractVersion: CONTRACT_VERSION,
+          status: 'passed',
+          verifiedAt: '2026-11-22',
+          // Certifies Syntra's side of the protocol. A service is certified
+          // by its author with `certifyConnectorService` from the SDK.
+          evidence: 'Shared contract against the SDK example service, protocol 1',
+          capabilities: ACCOUNT_AND_ENTITLEMENT_WRITES,
+        },
+      },
+    ],
+  },
 } as const satisfies Record<TargetConnectorType, TypeRecord>;
 
 /** Numeric `major.minor.patch` comparison; the catalog holds only that shape. */

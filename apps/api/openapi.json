@@ -26976,11 +26976,62 @@
                       "activeDirectory",
                       "scim2",
                       "httpJson",
-                      "entraId"
+                      "entraId",
+                      "remote"
                     ]
                   },
                   "config": {
                     "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "baseUrl": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "placesAccountsInContainers": {
+                            "type": "boolean"
+                          },
+                          "pageSize": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000
+                          },
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 120000
+                          },
+                          "allowPrivateAddresses": {
+                            "type": "boolean"
+                          },
+                          "naming": {
+                            "type": "object",
+                            "properties": {
+                              "allow": {
+                                "type": "string",
+                                "enum": [
+                                  "sam",
+                                  "email"
+                                ]
+                              },
+                              "maxLength": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "allow"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "baseUrl"
+                        ],
+                        "additionalProperties": false
+                      },
                       {
                         "type": "object",
                         "properties": {
@@ -27393,11 +27444,62 @@
                       "activeDirectory",
                       "scim2",
                       "httpJson",
-                      "entraId"
+                      "entraId",
+                      "remote"
                     ]
                   },
                   "config": {
                     "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "baseUrl": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "placesAccountsInContainers": {
+                            "type": "boolean"
+                          },
+                          "pageSize": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000
+                          },
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 120000
+                          },
+                          "allowPrivateAddresses": {
+                            "type": "boolean"
+                          },
+                          "naming": {
+                            "type": "object",
+                            "properties": {
+                              "allow": {
+                                "type": "string",
+                                "enum": [
+                                  "sam",
+                                  "email"
+                                ]
+                              },
+                              "maxLength": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "allow"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "baseUrl"
+                        ],
+                        "additionalProperties": false
+                      },
                       {
                         "type": "object",
                         "properties": {
@@ -32218,11 +32320,62 @@
                       "activeDirectory",
                       "scim2",
                       "httpJson",
-                      "entraId"
+                      "entraId",
+                      "remote"
                     ]
                   },
                   "config": {
                     "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "baseUrl": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "placesAccountsInContainers": {
+                            "type": "boolean"
+                          },
+                          "pageSize": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000
+                          },
+                          "timeoutMs": {
+                            "type": "integer",
+                            "minimum": 1000,
+                            "maximum": 120000
+                          },
+                          "allowPrivateAddresses": {
+                            "type": "boolean"
+                          },
+                          "naming": {
+                            "type": "object",
+                            "properties": {
+                              "allow": {
+                                "type": "string",
+                                "enum": [
+                                  "sam",
+                                  "email"
+                                ]
+                              },
+                              "maxLength": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "allow"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "baseUrl"
+                        ],
+                        "additionalProperties": false
+                      },
                       {
                         "type": "object",
                         "properties": {

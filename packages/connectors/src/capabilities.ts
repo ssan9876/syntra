@@ -65,6 +65,20 @@ const capabilities: Record<string, ConnectorCapabilities> = {
     manageEntitlements: true,
     deleteAccount: true,
   },
+  /**
+   * A connector service. The ceiling, like `httpJson`'s: a service answers a
+   * write it has no handler for with `rejected`. Delete is not certified for
+   * the protocol's first release.
+   */
+  remote: {
+    available: true,
+    readBack: true,
+    createAccount: true,
+    updateAccount: true,
+    disableAccount: true,
+    manageEntitlements: true,
+    deleteAccount: false,
+  },
   microsoft365: unavailable,
 };
 

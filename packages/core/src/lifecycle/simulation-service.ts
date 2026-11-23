@@ -53,6 +53,7 @@ function capabilityFor(type: string): { readBack: boolean; create: boolean; disa
     case 'activeDirectory':
     case 'entraId':
     case 'httpJson':
+    case 'remote':
       return { readBack: true, create: true, disable: true, entitlements: true };
     case 'scim2':
       return { readBack: true, create: true, disable: true, entitlements: false };

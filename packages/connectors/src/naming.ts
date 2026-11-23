@@ -95,13 +95,19 @@ export type HttpNamingPolicy = z.input<typeof httpNamingPolicy>;
  *   address a SAML or OIDC login asserts.
  * - **HTTP documents** -- whatever the document's `naming` block declares,
  *   `sam` when it declares none (see `httpNamingPolicy` for why).
+ * - **Connector services** -- the same block, as `naming` on the target's
+ *   own config.
  *
  * A document's `maxLength` can only tighten the charset's cap.
  */
 export function correlationKeyPolicyFor(targetType: string, config: unknown): CorrelationKeyPolicy {
   if (targetType === 'scim2') return EMAIL_KEY_POLICY;
-  if (targetType === 'httpJson') {
-    const naming = (config as { document?: { naming?: unknown } } | null)?.document?.naming;
+  if (targetType === 'httpJson' || targetType === 'remote') {
+    // A connector service declares it on the target, a document inside itself.
+    const naming =
+      targetType === 'remote'
+        ? (config as { naming?: unknown } | null)?.naming
+        : (config as { document?: { naming?: unknown } } | null)?.document?.naming;
     const parsed = httpNamingPolicy.safeParse(naming);
     if (!parsed.success) return SAM_KEY_POLICY;
     const base = parsed.data.allow === 'email' ? EMAIL_KEY_POLICY : SAM_KEY_POLICY;

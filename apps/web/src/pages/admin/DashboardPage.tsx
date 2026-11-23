@@ -93,6 +93,7 @@ const TYPE_LABEL: Record<string, string> = {
   entraId: 'Entra ID',
   scim2: 'SCIM 2.0',
   httpJson: 'REST API',
+  remote: 'Connector service',
   ldap: 'Directory',
 };
 

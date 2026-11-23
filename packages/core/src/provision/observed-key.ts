@@ -14,6 +14,9 @@ export function correlationAttributeFor(targetType: string, config: unknown): st
   if (targetType === 'activeDirectory') return 'sAMAccountName';
   // The native Graph connector reports the login under Graph's own name.
   if (targetType === 'entraId') return 'userPrincipalName';
+  // A connector service sends the login as a typed field; `remoteAccountRecord`
+  // reports it under this name, which the protocol reserves.
+  if (targetType === 'remote') return 'correlationKey';
   if (targetType === 'httpJson') {
     // Whatever Syntra attribute the document maps its `correlationAt` field
     // to. `toRecord` in the connector reads the correlation value from that

@@ -5,6 +5,7 @@
     { "path": "packages/core" },
     { "path": "packages/protocols" },
     { "path": "packages/contracts" },
+    { "path": "packages/connector-sdk" },
     { "path": "packages/connectors" },
     { "path": "packages/ui" },
     { "path": "apps/api" },

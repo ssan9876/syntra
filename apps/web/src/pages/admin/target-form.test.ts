@@ -47,6 +47,15 @@ describe('bounded connector retries', () => {
     expect(older.userResourcePath).toBe('/Users');
     expect(older.groupResourcePath).toBe('/Groups');
   });
+  it('round-trips a connector service target, keeping the settings set over the API', () => {
+    const saved = target({ type: 'remote', config: { baseUrl: 'https://hr.acme.test/syntra', placesAccountsInContainers: true } });
+    const form = formFrom(saved);
+    expect(form.type).toBe('remote');
+    expect(configFromForm(form, { placesAccountsInContainers: true })).toEqual({
+      baseUrl: 'https://hr.acme.test/syntra',
+      placesAccountsInContainers: true,
+    });
+  });
   it('round-trips the saved attempt limit and refuses values outside 1–10', () => {
     expect(formFrom(target({ maxAttempts: 6 })).maxAttempts).toBe('6');
     expect(validateNumbers({ ...BLANK, maxAttempts: '0' })).toMatchObject({ bad: { maxAttempts: expect.any(String) } });

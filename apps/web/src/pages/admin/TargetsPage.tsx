@@ -45,6 +45,7 @@ const TYPE_LABELS: Record<string, string> = {
   scim2: 'SCIM 2.0',
   httpJson: 'REST API',
   entraId: 'Entra ID',
+  remote: 'Connector service',
 };
 
 const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;

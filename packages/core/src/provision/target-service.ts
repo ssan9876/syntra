@@ -9,6 +9,7 @@ import {
   forgetEntraTokens,
   TARGET_CONNECTOR_TYPES,
   PASSWORD_SYNC_TARGET_TYPES,
+  MIN_SECRET_LENGTH,
   targetConnectorCapabilities,
   type ConnectionResult,
 } from '@syntra/connectors';
@@ -331,6 +332,21 @@ export class LadderConfigurationError extends Error {
 }
 
 /**
+ * A connector service's shared secret is a signing key, and both ends refuse
+ * one shorter than `MIN_SECRET_LENGTH`. Refused at save, beside the field,
+ * rather than on every write of the first run.
+ */
+export function assertCredentialShape(type: string, credential: string | undefined): void {
+  if (type === 'remote' && credential !== undefined && credential.length < MIN_SECRET_LENGTH) {
+    throw new LadderConfigurationError(
+      'short-shared-secret',
+      'bindPassword',
+      `Shared secret is shorter than ${MIN_SECRET_LENGTH} characters.`,
+    );
+  }
+}
+
+/**
  * Validates the ladder before it reaches the database.
  *
  * The CHECK constraint is the backstop; this is the message. An account whose
@@ -424,6 +440,7 @@ export async function createTarget(
   // against depends on `scalars.type`.
   const scalars = createScalarsSchema.parse(input);
   const config = targetConfigSchemaFor(scalars.type).parse(input.config) as Record<string, unknown>;
+  assertCredentialShape(scalars.type, scalars.bindPassword);
 
   const created = await withTenant(tenantId, async (tx) => {
     const bound = await currentTenant(tx);
@@ -611,6 +628,7 @@ export async function updateTarget(
           : ladderInput.deleteAfterDays,
     };
     assertLadder({ ...ladder, type: scalars.type ?? before.type });
+    assertCredentialShape(scalars.type ?? before.type, scalars.bindPassword);
 
     // Mirroring is judged against the configuration the target will HAVE, so
     // a save that changes the base DN and the root together is checked as one.
@@ -931,12 +949,6 @@ const testScalarsSchema = z.object({
   borrowFromTargetId: z.string().uuid().optional(),
 });
 
-/**
- * Whether a REST target's test would send the saved credential to the same
- * place the saved document does: the same `baseUrl` origin and the same
- * authentication, including where an OAuth secret is posted. Paths and
- * mappings may differ; that is what a test of an edited document is for.
- */
 /** Scheme, host and port equal. An unparseable URL is never the same origin. */
 function sameOrigin(a: string, b: string): boolean {
   try {
@@ -946,6 +958,19 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+/** A loop, not `/\/+$/`, which is quadratic on a long slash run (CodeQL js/polynomial-redos). */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end--;
+  return value.slice(0, end);
+}
+
+/**
+ * Whether a REST target's test would send the saved credential to the same
+ * place the saved document does: the same `baseUrl` origin and the same
+ * authentication, including where an OAuth secret is posted. Paths and
+ * mappings may differ; that is what a test of an edited document is for.
+ */
 export function sameHttpCredentialDestination(saved: unknown, requested: unknown): boolean {
   const documentOf = (config: unknown) =>
     (config as { document?: { baseUrl?: unknown; auth?: Record<string, unknown> } } | null)?.document;
@@ -1036,6 +1061,16 @@ export async function testTargetConfiguration(
         // there. Same origin rule as `sameHttpCredentialDestination`.
         const savedConfig = targetConfigSchemaFor(target.type).safeParse(target.config);
         if (!savedConfig.success || !sameOrigin((savedConfig.data as { baseUrl: string }).baseUrl, (config as { baseUrl: string }).baseUrl)) {
+          return 'mismatch' as const;
+        }
+      }
+      if (type === 'remote') {
+        // The shared secret never leaves this process, but a request signed
+        // with it is still a request somebody else could replay to the real
+        // service inside its window. Signed only for the service it belongs to.
+        const savedConfig = targetConfigSchemaFor(target.type).parse(target.config) as { baseUrl: string };
+        const requested = config as { baseUrl: string };
+        if (withoutTrailingSlashes(savedConfig.baseUrl) !== withoutTrailingSlashes(requested.baseUrl)) {
           return 'mismatch' as const;
         }
       }

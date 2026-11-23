@@ -1,0 +1,1009 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Syntra connector protocol",
+  "x-protocolVersion": 1,
+  "x-headers": {
+    "version": "syntra-protocol-version",
+    "timestamp": "syntra-timestamp",
+    "nonce": "syntra-nonce",
+    "signature": "syntra-signature",
+    "timeout": "syntra-timeout-ms"
+  },
+  "x-signature": "HMAC-SHA256(secret, \"v1\\n\" + timestamp + \"\\n\" + nonce + \"\\n\" + method + \"\\n\" + hex(sha256(body))), sent as \"v1=<hex>\"",
+  "x-reservedAttributes": [
+    "active",
+    "enabled",
+    "accountenabled",
+    "useraccountcontrol",
+    "correlationkey"
+  ],
+  "x-errorStatus": {
+    "unauthenticated": 401,
+    "unsupported_version": 400,
+    "invalid_request": 400,
+    "unknown_method": 404,
+    "payload_too_large": 413,
+    "throttled": 429,
+    "internal": 500,
+    "not_implemented": 501,
+    "unavailable": 503
+  },
+  "x-methods": {
+    "describe": {
+      "path": "/describe",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {}
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "protocolVersions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "connector": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "placesAccountsInContainers": {
+                "type": "boolean"
+              },
+              "entitlements": {
+                "type": "boolean"
+              },
+              "operations": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "create_container",
+                    "move_container",
+                    "create_account",
+                    "update_account",
+                    "enable_account",
+                    "disable_account",
+                    "archive_account",
+                    "delete_account",
+                    "rename_account",
+                    "grant_entitlement",
+                    "revoke_entitlement"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "placesAccountsInContainers",
+              "entitlements",
+              "operations"
+            ],
+            "additionalProperties": false
+          },
+          "schema": {
+            "type": "object",
+            "properties": {
+              "objectClasses": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "attributes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "objectClasses",
+              "attributes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "protocolVersions",
+          "connector",
+          "capabilities",
+          "schema"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test": {
+      "path": "/test",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {}
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "accounts.list": {
+      "path": "/accounts.list",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "cursor",
+          "pageSize"
+        ]
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "anchor": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "correlationKey": {
+                  "type": "string"
+                },
+                "dn": {
+                  "type": "string"
+                },
+                "attributes": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "enabled": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "readFailure": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "anchor",
+                "correlationKey",
+                "attributes",
+                "enabled"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "accounts",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "accounts.read": {
+      "path": "/accounts.read",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "anchor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "anchor"
+        ]
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "correlationKey": {
+                    "type": "string"
+                  },
+                  "dn": {
+                    "type": "string"
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "enabled": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "readFailure": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "anchor",
+                  "correlationKey",
+                  "attributes",
+                  "enabled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entitlementIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "entitlementsComplete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "account",
+          "entitlementIds",
+          "entitlementsComplete"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "entitlements.list": {
+      "path": "/entitlements.list",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "cursor",
+          "pageSize"
+        ]
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "group",
+                    "licence",
+                    "role"
+                  ]
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "manageable": {
+                  "type": "boolean"
+                },
+                "unmanageableReason": {
+                  "type": "string"
+                },
+                "membershipKind": {
+                  "type": "string",
+                  "enum": [
+                    "assigned",
+                    "dynamic"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "type",
+                "displayName"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entitlements",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "entitlements.members": {
+      "path": "/entitlements.members",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "entitlementId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "entitlementId"
+        ]
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "containers.list": {
+      "path": "/containers.list",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "cursor",
+          "pageSize"
+        ]
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dn": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              },
+              "required": [
+                "dn"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "containers",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "write": {
+      "path": "/write",
+      "httpMethod": "POST",
+      "request": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "create_container"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "dn": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "dn"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "move_container"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "fromDn": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "toDn": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "fromDn",
+                  "toDn"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "create_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "correlationKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "initialPassword": {
+                    "type": "string"
+                  },
+                  "requirePasswordChange": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "correlationKey",
+                  "attributes",
+                  "enabled",
+                  "initialPassword"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "update_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "attributes": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "attributes"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "enable_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "disable_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "reason"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "archive_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "entitlementDns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1024
+                    }
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "entitlementDns"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "delete_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "rename_account"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "correlationKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "correlationKey"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "grant_entitlement"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "entitlementId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "entitlementId"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "revoke_entitlement"
+                  },
+                  "actionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "anchor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  },
+                  "entitlementId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024
+                  }
+                },
+                "required": [
+                  "op",
+                  "actionId",
+                  "anchor",
+                  "entitlementId"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "response": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean",
+                "const": true
+              },
+              "message": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            },
+            "required": [
+              "ok",
+              "message"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ok": {
+                "type": "boolean",
+                "const": false
+              },
+              "message": {
+                "type": "string"
+              },
+              "failure": {
+                "type": "string",
+                "enum": [
+                  "transient",
+                  "throttled",
+                  "conflict",
+                  "rejected",
+                  "unauthorized",
+                  "not_found"
+                ]
+              },
+              "retryAfterMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400000
+              }
+            },
+            "required": [
+              "ok",
+              "message",
+              "failure"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "supportedVersions": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "retryAfterMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
