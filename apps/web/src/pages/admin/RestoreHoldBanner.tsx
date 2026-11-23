@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Dialog } from '@syntra/ui';
 import { ApiError, api } from '../../session/api.js';
+import { useConsoleT } from '../../i18n/console/index.js';
+import { useLocale } from '../../i18n/LocaleProvider.js';
+import { fill } from '../../i18n/rich.js';
 
 export interface RestoreHoldStatus {
   hold: {
@@ -21,6 +24,8 @@ const POLL_MS = 60_000;
  * the button.
  */
 export function RestoreHoldBanner() {
+  const t = useConsoleT();
+  const { format } = useLocale();
   const [status, setStatus] = useState<RestoreHoldStatus | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,7 +58,7 @@ export function RestoreHoldBanner() {
         setConfirming(false);
         await load();
       } else {
-        setError(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : 'Resume failed.');
+        setError(cause instanceof ApiError ? (cause.problem.detail ?? cause.problem.title) : t('console.restore.failed'));
       }
     } finally {
       setBusy(false);
@@ -63,17 +68,19 @@ export function RestoreHoldBanner() {
   const hold = status?.hold;
   if (!hold) return null;
 
-  const taken = hold.backupTakenAt ? `, taken ${new Date(hold.backupTakenAt).toLocaleString()}` : '';
+  const restored = hold.backupTakenAt
+    ? t('console.restore.from_taken', { taken: format.dateTime(hold.backupTakenAt) })
+    : t('console.restore.from');
 
   return (
     <div className="mb-4">
-      <Alert tone="warning" title="Background work paused after restore">
-        Restored from <span className="font-mono">{hold.backupName}</span>
-        {taken}. Scheduled runs, queued jobs and writes to target systems wait until resumed.
+      <Alert tone="warning" title={t('console.restore.title')}>
+        {fill(restored, { backup: <span className="font-mono">{hold.backupName}</span> })}{' '}
+        {t('console.restore.waiting')}
         {status.mayResume ? (
           <div className="mt-3">
             <Button size="sm" onClick={() => setConfirming(true)}>
-              Resume
+              {t('console.restore.resume')}
             </Button>
           </div>
         ) : null}
@@ -81,19 +88,19 @@ export function RestoreHoldBanner() {
       <Dialog
         open={confirming}
         onClose={() => setConfirming(false)}
-        title="Resume background work?"
+        title={t('console.restore.confirm_title')}
         actions={
           <>
             <Button variant="secondary" disabled={busy} onClick={() => setConfirming(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button loading={busy} disabled={busy} onClick={() => void resume()}>
-              Resume
+              {t('console.restore.resume')}
             </Button>
           </>
         }
       >
-        <p>Scheduled runs and queued jobs start, and target systems accept writes again, in every tenant.</p>
+        <p>{t('console.restore.confirm_body')}</p>
         {error ? (
           <div className="mt-3">
             <Alert tone="danger">{error}</Alert>

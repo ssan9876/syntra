@@ -14,6 +14,8 @@ import { useApiResource } from './hooks.js';
 import { PageHeader } from './PageHeader.js';
 import { TenantWriteStopPanel } from './TenantWriteStopPanel.js';
 import { StatCard, StatGrid } from '../../components/StatCards.js';
+import { useConsoleT, type ConsoleT } from '../../i18n/console/index.js';
+import { useLocale } from '../../i18n/LocaleProvider.js';
 
 interface TargetRow {
   id: string;
@@ -29,9 +31,6 @@ interface TargetRow {
   lastSkipReason: string | null;
 }
 
-const when = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString() : 'Never run';
-
 /**
  * How each connector type reads on the list, so targets are distinguishable
  * at a glance.
@@ -39,16 +38,19 @@ const when = (iso: string | null) =>
  * A record rather than a chain of ternaries: the previous shape read
  * "anything that is not scim2 is Active Directory", which labelled a third
  * connector type as the wrong system rather than as an unknown one.
+ *
+ * Product and protocol names stay as they are in every language; `remote` is
+ * a description, so it comes from the catalog.
  */
 const TYPE_LABELS: Record<string, string> = {
   activeDirectory: 'Active Directory',
   scim2: 'SCIM 2.0',
   httpJson: 'REST API',
   entraId: 'Entra ID',
-  remote: 'Connector service',
 };
 
-const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
+const typeLabel = (t: ConsoleT, type: string) =>
+  type === 'remote' ? t('targets.type_remote') : (TYPE_LABELS[type] ?? type);
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -93,19 +95,17 @@ function cadenceCeilingMs(schedule: string): number | null {
   return MINUTE;
 }
 
-const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
-
 /** "3 hours", "9 days" — the coarsest unit that is not zero. */
-function duration(ms: number): string {
-  if (ms < HOUR) return plural(Math.max(1, Math.floor(ms / MINUTE)), 'minute');
-  if (ms < DAY) return plural(Math.floor(ms / HOUR), 'hour');
-  return plural(Math.floor(ms / DAY), 'day');
+function duration(t: ConsoleT, ms: number): string {
+  if (ms < HOUR) return t.plural('targets.minutes', Math.max(1, Math.floor(ms / MINUTE)));
+  if (ms < DAY) return t.plural('targets.hours', Math.floor(ms / HOUR));
+  return t.plural('targets.days', Math.floor(ms / DAY));
 }
 
-/** "3 hours ago", from a fixed `now` so the badge is testable. */
-function since(iso: string, now: number): string {
+/** "Ran 3 hours ago", from a fixed `now` so the badge is testable. */
+function ran(t: ConsoleT, iso: string, now: number): string {
   const ms = Math.max(0, now - new Date(iso).getTime());
-  return ms < HOUR ? 'in the last hour' : `${duration(ms)} ago`;
+  return ms < HOUR ? t('targets.ran_last_hour') : t('targets.ran_ago', { duration: duration(t, ms) });
 }
 
 /**
@@ -133,6 +133,7 @@ function since(iso: string, now: number): string {
  * is a fault and "disabled" is a decision somebody made.
  */
 function health(
+  t: ConsoleT,
   target: TargetRow,
   now: number,
 ): {
@@ -147,26 +148,24 @@ function health(
   if (target.consecutiveSkippedRuns > 0) {
     return {
       state: 'blocked',
-      label: `${target.consecutiveSkippedRuns} scheduled run${
-        target.consecutiveSkippedRuns === 1 ? '' : 's'
-      } skipped`,
+      label: t.plural('targets.skipped', target.consecutiveSkippedRuns),
       ...(target.lastSkipReason === null ? {} : { title: target.lastSkipReason }),
     };
   }
-  if (!target.enabled) return { state: 'inactive', label: 'Disabled' };
+  if (!target.enabled) return { state: 'inactive', label: t('targets.disabled') };
 
   if (target.schedule === null) {
     // Nothing is late when nothing is scheduled, so this states the fact and
     // makes no claim about health either way.
     return target.lastRunAt === null
-      ? { state: 'setup', label: 'Never run' }
-      : { label: `Ran ${since(target.lastRunAt, now)}` };
+      ? { state: 'setup', label: t('targets.never_run') }
+      : { label: ran(t, target.lastRunAt, now) };
   }
 
   if (target.lastRunAt === null) {
     return {
       state: 'blocked',
-      label: 'No completed run yet',
+      label: t('targets.no_completed_run'),
     };
   }
 
@@ -175,17 +174,19 @@ function health(
   if (ceiling !== null && age > 2 * ceiling) {
     return {
       state: 'blocked',
-      label: `No completed run for ${duration(age)}`,
+      label: t('targets.no_completed_run_for', { duration: duration(t, age) }),
     };
   }
 
   return {
     state: 'healthy',
-    label: `Ran ${since(target.lastRunAt, now)}`,
+    label: ran(t, target.lastRunAt, now),
   };
 }
 
 export function TargetsPage() {
+  const t = useConsoleT();
+  const { format } = useLocale();
   const { data, error } = useApiResource<{ targets: TargetRow[] }>(
     '/api/admin/targets',
   );
@@ -201,10 +202,10 @@ export function TargetsPage() {
   return (
     <>
       <PageHeader
-        title="Target systems"
+        title={t('targets.title')}
         actions={
           <Link to="/admin/targets/new" className={buttonClasses('primary')}>
-            New target
+            {t('targets.new')}
           </Link>
         }
       />
@@ -213,10 +214,10 @@ export function TargetsPage() {
           failure: it looks healthy, it is enabled, and nothing is being
           provisioned. Silent while it is zero. */}
       <StatGrid>
-        <StatCard label="Targets" value={targets.length} />
-        <StatCard label="Enabled" value={targets.filter((t) => t.enabled).length} tone="success" />
+        <StatCard label={t('targets.stat_targets')} value={targets.length} />
+        <StatCard label={t('targets.stat_enabled')} value={targets.filter((t) => t.enabled).length} tone="success" />
         <StatCard
-          label="Skipping runs"
+          label={t('targets.stat_skipping')}
           value={targets.filter((t) => t.consecutiveSkippedRuns > 0).length}
           tone="warning"
           quietWhenZero
@@ -237,13 +238,13 @@ export function TargetsPage() {
           {data?.targets.length === 0 && (
             <div className="p-6">
               <Empty
-                title="No targets yet"
+                title={t('targets.empty')}
                 action={
                   <Link
                     to="/admin/targets/new"
                     className={buttonClasses('primary')}
                   >
-                    Connect a target
+                    {t('targets.connect')}
                   </Link>
                 }
               />
@@ -251,36 +252,28 @@ export function TargetsPage() {
           )}
 
           {data && data.targets.length > 0 && (
-            <Table stackOnPhone label="Target systems">
+            <Table stackOnPhone label={t('targets.title')}>
               <thead>
                 <tr>
-                  <th scope="col">
-                    Name
-                  </th>
-                  <th scope="col">
-                    Enforcement
-                  </th>
+                  <th scope="col">{t('targets.col_name')}</th>
+                  <th scope="col">{t('targets.col_enforcement')}</th>
                   <th
                     scope="col"
                     className="max-sm:hidden"
                   >
-                    Schedule
+                    {t('targets.col_schedule')}
                   </th>
                   {/* Never `max-sm:hidden`. This timestamp is the evidence
                       the Status column's judgement is made from, and hiding it
                       on the screens most likely to be in somebody's hand left
                       the badge unfalsifiable. */}
-                  <th scope="col">
-                    Last run
-                  </th>
-                  <th scope="col">
-                    Status
-                  </th>
+                  <th scope="col">{t('targets.col_last_run')}</th>
+                  <th scope="col">{t('targets.col_status')}</th>
                 </tr>
               </thead>
               <tbody>
                 {data.targets.map((target) => {
-                  const state = health(target, now);
+                  const state = health(t, target, now);
                   return (
                     <tr key={target.id}>
                       <td>
@@ -291,7 +284,7 @@ export function TargetsPage() {
                           {target.name}
                         </Link>
                         <span className="ml-2">
-                          <Status tone="neutral">{typeLabel(target.type)}</Status>
+                          <Status tone="neutral">{typeLabel(t, target.type)}</Status>
                         </span>
                       </td>
                       <td>
@@ -306,7 +299,9 @@ export function TargetsPage() {
                               : 'neutral'
                           }
                         >
-                          {target.enforcementMode}
+                          {target.enforcementMode === 'authoritative'
+                            ? t('targets.mode_authoritative')
+                            : t('targets.mode_additive')}
                         </Status>
                       </td>
                       <td className="max-sm:hidden">
@@ -318,12 +313,14 @@ export function TargetsPage() {
                             to={`/admin/targets/${target.id}`}
                             className="text-muted underline-offset-2 hover:text-ink hover:underline"
                           >
-                            By hand only
+                            {t('targets.by_hand')}
                           </Link>
                         )}
                       </td>
                       <td>
-                        {when(target.lastRunAt)}
+                        {target.lastRunAt
+                          ? format.dateTime(target.lastRunAt)
+                          : t('targets.never_run')}
                       </td>
                       <td>
                         <span title={state.title}>

@@ -20,3 +20,4 @@ export * from './Status.js';
 export * from './Table.js';
 export * from './Textarea.js';
 export * from './Toast.js';
+export * from './i18n.js';

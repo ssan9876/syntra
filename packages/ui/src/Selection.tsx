@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useUiLocale } from './i18n.js';
 
 export interface CheckboxProps {
   checked: boolean;
@@ -47,8 +48,12 @@ export function Checkbox({ checked, onChange, label, indeterminate, disabled }: 
 export interface BulkActionBarProps {
   /** How many rows are selected. The bar is present at zero, see below. */
   count: number;
-  /** "person", "operation" — the noun being counted, singular. */
-  noun: string;
+  /**
+   * The selection in words, from the caller's catalog: "3 operations
+   * selected". The noun and its plural belong to the caller's language, so
+   * the bar does not build them; without it the bar says "3 selected".
+   */
+  selected?: string | undefined;
   onClear(): void;
   children: ReactNode;
   /**
@@ -71,12 +76,12 @@ export interface BulkActionBarProps {
  * selection is named — "3 operations selected" — rather than a bare figure
  * that a screen reader announces as "3".
  */
-export function BulkActionBar({ count, noun, onClear, children, result }: BulkActionBarProps) {
-  const plural = count === 1 ? noun : `${noun}s`;
+export function BulkActionBar({ count, selected, onClear, children, result }: BulkActionBarProps) {
+  const { t } = useUiLocale();
   return (
     <div
       role="toolbar"
-      aria-label="Bulk actions"
+      aria-label={t('ui.selection.label')}
       className={[
         'mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-control border px-3 py-2',
         'transition-colors duration-150 ease-out-quart',
@@ -84,7 +89,7 @@ export function BulkActionBar({ count, noun, onClear, children, result }: BulkAc
       ].join(' ')}
     >
       <span aria-live="polite" aria-atomic="true" className="text-sm font-medium text-ink tabular-nums">
-        {count === 0 ? `No ${plural} selected` : `${count.toLocaleString()} ${plural} selected`}
+        {selected ?? (count === 0 ? t('ui.selection.none') : t.plural('ui.selection.count', count))}
       </span>
       <div className="flex flex-wrap items-center gap-2">{children}</div>
       {count > 0 && (
@@ -93,7 +98,7 @@ export function BulkActionBar({ count, noun, onClear, children, result }: BulkAc
           onClick={onClear}
           className="rounded-control px-2 py-1 text-sm font-medium text-muted underline-offset-2 hover:text-ink hover:underline"
         >
-          Clear selection
+          {t('ui.selection.clear')}
         </button>
       )}
       {result && <div className="w-full text-sm text-ink" role="status">{result}</div>}

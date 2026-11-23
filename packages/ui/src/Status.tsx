@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useUiLocale } from './i18n.js';
 
 type Tone = 'neutral' | 'active' | 'inactive' | 'warning' | 'danger' | 'primary' | 'info';
 
@@ -71,21 +72,22 @@ export function Status({
  */
 export type State = 'healthy' | 'attention' | 'blocked' | 'pending' | 'running' | 'setup' | 'inactive';
 
-const STATES: Record<State, { tone: Tone; glyph: Glyph; label: string }> = {
-  healthy: { tone: 'active', glyph: 'check', label: 'Healthy' },
-  attention: { tone: 'warning', glyph: 'alert', label: 'Needs attention' },
-  blocked: { tone: 'danger', glyph: 'blocked', label: 'Blocked' },
-  pending: { tone: 'info', glyph: 'clock', label: 'Pending verification' },
-  running: { tone: 'primary', glyph: 'progress', label: 'In progress' },
-  setup: { tone: 'neutral', glyph: 'setup', label: 'Needs setup' },
-  inactive: { tone: 'inactive', glyph: 'minus', label: 'Inactive' },
+const STATES: Record<State, { tone: Tone; glyph: Glyph }> = {
+  healthy: { tone: 'active', glyph: 'check' },
+  attention: { tone: 'warning', glyph: 'alert' },
+  blocked: { tone: 'danger', glyph: 'blocked' },
+  pending: { tone: 'info', glyph: 'clock' },
+  running: { tone: 'primary', glyph: 'progress' },
+  setup: { tone: 'neutral', glyph: 'setup' },
+  inactive: { tone: 'inactive', glyph: 'minus' },
 };
 
 export function StateBadge({ state, children }: { state: State; children?: ReactNode }) {
+  const { t } = useUiLocale();
   const style = STATES[state];
   return (
     <Status tone={style.tone} glyph={style.glyph}>
-      {children ?? style.label}
+      {children ?? t(`ui.state.${state}`)}
     </Status>
   );
 }

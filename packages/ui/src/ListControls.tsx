@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Field } from './Field.js';
 import { Select } from './Select.js';
+import { useUiLocale } from './i18n.js';
 
 export interface ListControlsProps {
   /** The search currently in effect, which comes from the URL. */
@@ -44,6 +45,7 @@ export function ListControls({
   searchPlaceholder,
   status,
 }: ListControlsProps) {
+  const { t } = useUiLocale();
   const [draft, setDraft] = useState(search);
   /**
    * The last value this component put into the URL.
@@ -88,7 +90,7 @@ export function ListControls({
       />
       {status && (
         <Select
-          label="Status"
+          label={t('ui.list.status')}
           value={status.value}
           onChange={status.onChange}
           options={status.options}

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useUiLocale } from './i18n.js';
 
 export interface ComboOption {
   value: string;
@@ -58,6 +59,7 @@ export function AsyncCombobox({
   disabled,
   className = '',
 }: AsyncComboboxProps) {
+  const { t } = useUiLocale();
   const id = useId();
   const listId = `${id}-list`;
   const [text, setText] = useState(value?.label ?? '');
@@ -145,13 +147,13 @@ export function AsyncCombobox({
   const activeId = open && options[active] ? `${id}-opt-${active}` : undefined;
   const status =
     phase === 'loading'
-      ? 'Searching…'
+      ? t('ui.combobox.searching')
       : phase === 'failed'
-        ? 'Search failed. Keep typing to try again.'
+        ? t('ui.combobox.failed')
         : phase === 'ready'
           ? options.length === 0
-            ? 'No matches'
-            : `${options.length} result${options.length === 1 ? '' : 's'}`
+            ? t('ui.combobox.no_matches')
+            : t.plural('ui.combobox.results', options.length)
           : '';
 
   return (
@@ -198,7 +200,7 @@ export function AsyncCombobox({
         {value && !disabled && (
           <button
             type="button"
-            aria-label={`Clear ${label}`}
+            aria-label={t('ui.combobox.clear', { label })}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               onChange(null);
@@ -225,7 +227,7 @@ export function AsyncCombobox({
         >
           {phase !== 'ready' || options.length === 0 ? (
             <li role="presentation" className="px-3 py-2 text-sm text-muted">
-              {status || 'Type to search'}
+              {status || t('ui.combobox.prompt')}
             </li>
           ) : (
             options.map((option, index) => (

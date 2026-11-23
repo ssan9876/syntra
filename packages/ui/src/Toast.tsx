@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useUiLocale } from './i18n.js';
 
 type Tone = 'success' | 'info' | 'warning' | 'danger';
 
@@ -95,6 +96,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss(): void }) {
+  const { t } = useUiLocale();
   const [paused, setPaused] = useState(false);
 
   useEffect(() => {
@@ -125,7 +127,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastItem; onDismiss(): void }
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="Dismiss"
+        aria-label={t('ui.toast.dismiss')}
         className="-mr-1 flex size-6 shrink-0 items-center justify-center rounded-control text-muted hover:bg-surface-2 hover:text-ink"
       >
         <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">

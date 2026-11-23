@@ -8,6 +8,7 @@ import { PersonSourcesTab } from './PersonSourcesTab.js';
 import { RunsTab } from './RunsTab.js';
 import { DuplicateReviewsTab, type DuplicateReview } from './DuplicateReviewsTab.js';
 import { ReferenceDataTab } from './ReferenceDataTab.js';
+import { useConsoleT } from '../../i18n/console/index.js';
 
 interface SourceRow {
   id: string;
@@ -33,6 +34,7 @@ interface RunRow {
  * which is whether the last run worked.
  */
 export function SourcesPage() {
+  const t = useConsoleT();
   const sources = useApiResource<{ sources: SourceRow[] }>('/api/admin/sources');
   const personSources = useApiResource<{ sources: SourceRow[] }>(
     '/api/admin/person-sources',
@@ -54,27 +56,27 @@ export function SourcesPage() {
 
   return (
     <>
-      <PageHeader title="Sources" />
+      <PageHeader title={t('sources.title')} />
 
       {error && <Alert tone="danger">{error}</Alert>}
 
       <StatGrid>
         <StatCard
-          label="Sources"
+          label={t('sources.stat_sources')}
           value={sourceRows.length + personSourceRows.length}
           to="/admin/sources?tab=sources"
         />
-        <StatCard label="Duplicate reviews" value={reviewRows.length} tone="warning" quietWhenZero to="/admin/sources?tab=duplicates" />
-        <StatCard label="Runs" value={runRows.length} to="/admin/sources?tab=runs" />
+        <StatCard label={t('sources.stat_duplicates')} value={reviewRows.length} tone="warning" quietWhenZero to="/admin/sources?tab=duplicates" />
+        <StatCard label={t('sources.stat_runs')} value={runRows.length} to="/admin/sources?tab=runs" />
         <StatCard
-          label="Failed runs"
+          label={t('sources.stat_failed')}
           value={failed}
           tone="danger"
           quietWhenZero
           to="/admin/sources?tab=runs"
         />
         <StatCard
-          label="Blocked runs"
+          label={t('sources.stat_blocked')}
           value={blocked}
           tone="warning"
           quietWhenZero
@@ -92,11 +94,11 @@ export function SourcesPage() {
         * navigation.
         */}
       <Tabs
-        label="Sources"
+        label={t('sources.title')}
         tabs={[
           {
             id: 'sources',
-            label: 'Directory',
+            label: t('sources.tab_directory'),
             badge: sourceRows.length || undefined,
             content: <SourcesTab />,
           },
@@ -107,24 +109,24 @@ export function SourcesPage() {
             // name -- so an administrator looking for where to plug in an HR
             // export found nothing here saying so. The id stays `people`:
             // links carry it, and nobody reads a query string.
-            label: 'HR feeds',
+            label: t('sources.tab_hr'),
             badge: personSourceRows.length || undefined,
             content: <PersonSourcesTab />,
           },
           {
             id: 'reference-data',
-            label: 'Reference data',
+            label: t('sources.tab_reference'),
             content: <ReferenceDataTab />,
           },
           {
             id: 'runs',
-            label: 'Runs',
+            label: t('sources.tab_runs'),
             badge: runRows.length || undefined,
             content: <RunsTab />,
           },
           {
             id: 'duplicates',
-            label: 'Duplicate reviews',
+            label: t('sources.tab_duplicates'),
             badge: reviewRows.length || undefined,
             content: <DuplicateReviewsTab reviews={reviewRows} loading={duplicateReviews.loading} error={duplicateReviews.error} reload={duplicateReviews.reload} />,
           },

@@ -1,4 +1,5 @@
 import { buttonClasses } from './Button.js';
+import { useUiLocale } from './i18n.js';
 
 export interface PagerProps {
   /** 1-based. */
@@ -24,6 +25,7 @@ export interface PagerProps {
  * -- "1-12 of 12" is an answer, and hiding the control would take it away.
  */
 export function Pager({ page, pageSize, total, onPage }: PagerProps) {
+  const { t, format } = useUiLocale();
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
   const first = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const last = Math.min(page * pageSize, total);
@@ -36,7 +38,7 @@ export function Pager({ page, pageSize, total, onPage }: PagerProps) {
     // otherwise offers "navigation" and leaves the reader to open it and find
     // out which one it was.
     <nav
-      aria-label="Pages"
+      aria-label={t('ui.pager.label')}
       className="mt-4 flex items-center justify-between gap-4 text-sm text-muted"
     >
       {/* Polite, not assertive: the count changing is worth hearing after the
@@ -50,8 +52,12 @@ export function Pager({ page, pageSize, total, onPage }: PagerProps) {
           the pager itself is no longer gated on having rows. */}
       <span aria-live="polite" aria-atomic="true">
         {total === 0
-          ? 'No results'
-          : `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`}
+          ? t('ui.pager.no_results')
+          : t('ui.pager.range', {
+              first: format.number(first),
+              last: format.number(last),
+              total: format.number(total),
+            })}
       </span>
       <div className="flex gap-2">
         {/* `aria-disabled` and a guarded handler rather than `disabled`.
@@ -72,7 +78,7 @@ export function Pager({ page, pageSize, total, onPage }: PagerProps) {
             if (!atStart) onPage(page - 1);
           }}
         >
-          Previous
+          {t('ui.pager.previous')}
         </button>
         <button
           type="button"
@@ -86,7 +92,7 @@ export function Pager({ page, pageSize, total, onPage }: PagerProps) {
             if (!atEnd) onPage(page + 1);
           }}
         >
-          Next
+          {t('ui.pager.next')}
         </button>
       </div>
     </nav>

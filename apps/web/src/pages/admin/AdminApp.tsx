@@ -6,6 +6,7 @@ import { BreakGlassBanner } from './BreakGlassBanner.js';
 import { RestoreHoldBanner } from './RestoreHoldBanner.js';
 import { AttentionBanner } from './AttentionBanner.js';
 import { HeldChangePrompt } from './HeldChangePrompt.js';
+import { useConsoleT } from '../../i18n/console/index.js';
 
 /**
  * Every console page is its own chunk.
@@ -74,9 +75,10 @@ const DashboardPage = page(() => import('./DashboardPage.js'), 'DashboardPage');
 
 /** Quiet, like the boot screen: most pages arrive before it is noticed. */
 function PageLoading() {
+  const t = useConsoleT();
   return (
     <div className="py-8" role="status">
-      <span className="sr-only">Loading page</span>
+      <span className="sr-only">{t('console.loading_page')}</span>
       <div className="skeleton h-2 w-32 rounded-full" />
     </div>
   );

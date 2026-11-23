@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useUiLocale } from './i18n.js';
 
 type Tone = 'neutral' | 'warning' | 'danger' | 'primary';
 
@@ -47,6 +48,7 @@ export function Segmented({
   onChange(value: string): void;
   options: SegmentOption[];
 }) {
+  const { format } = useUiLocale();
   return (
     <div
       role="group"
@@ -80,7 +82,7 @@ export function Segmented({
                     COUNT_TONES[tone],
                   ].join(' ')}
                 >
-                  {option.count.toLocaleString()}
+                  {format.number(option.count)}
                 </span>
               </>
             )}
@@ -118,9 +120,10 @@ export function FilterChips({
   filters: ActiveFilter[];
   onReset(): void;
 }) {
+  const { t } = useUiLocale();
   if (filters.length === 0) return null;
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Active filters" role="group">
+    <div className="mb-3 flex flex-wrap items-center gap-2" aria-label={t('ui.filters.active')} role="group">
       {filters.map((filter) => (
         <span
           key={filter.key}
@@ -130,7 +133,7 @@ export function FilterChips({
           <button
             type="button"
             onClick={filter.onRemove}
-            aria-label={`Remove filter ${filter.label}`}
+            aria-label={t('ui.filters.remove', { label: filter.label })}
             className="inline-flex size-5 items-center justify-center rounded-full text-muted hover:bg-surface-2 hover:text-ink"
           >
             <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
@@ -145,7 +148,7 @@ export function FilterChips({
           onClick={onReset}
           className="rounded-control px-1.5 py-0.5 text-sm font-medium text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-current"
         >
-          Reset filters
+          {t('ui.filters.reset')}
         </button>
       )}
     </div>

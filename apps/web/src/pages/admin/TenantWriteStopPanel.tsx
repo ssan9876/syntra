@@ -1,6 +1,7 @@
 import { Alert } from '@syntra/ui';
 import { useApiResource } from './hooks.js';
 import { ExternalWriteStopPanel, type WriteStopState } from './ExternalWriteStopPanel.js';
+import { useConsoleT } from '../../i18n/console/index.js';
 
 interface TenantWriteStop extends WriteStopState {
   active: boolean;
@@ -20,12 +21,13 @@ interface TenantWriteStop extends WriteStopState {
  * stop having just been placed.
  */
 export function TenantWriteStopPanel() {
+  const t = useConsoleT();
   const { data, error, reload } = useApiResource<TenantWriteStop>('/api/admin/provision/external-write-stop');
-  if (error) return <Alert tone="warning">The tenant-wide external-write stop could not be read: {error}</Alert>;
+  if (error) return <Alert tone="warning">{t('writeStop.tenant_unreadable', { error })}</Alert>;
   if (!data) return null;
   return <ExternalWriteStopPanel
-    title="Tenant-wide external writes"
-    stoppedTitle="Provisioning writes stopped for every target"
+    title={t('writeStop.tenant_title')}
+    stoppedTitle={t('writeStop.tenant_stopped')}
     state={{ pausedAt: data.pausedAt ?? null, pauseReason: data.pauseReason ?? null, pauseExpiresAt: data.pauseExpiresAt ?? null }}
     basePath="/api/admin/provision"
     onChanged={reload}

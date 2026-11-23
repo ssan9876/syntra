@@ -39,7 +39,7 @@ export function PortalNav() {
   const t = useT();
   return (
     <nav
-      aria-label="Portal"
+      aria-label={t('shell.portal_nav')}
       className="border-b border-border-subtle bg-surface-2"
     >
       <ul className="mx-auto flex w-full max-w-7xl gap-1 overflow-x-auto overflow-y-hidden px-6">

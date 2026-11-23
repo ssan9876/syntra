@@ -1,8 +1,24 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  startTransition,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  UiLocaleProvider,
+  createFormat,
+  createTranslate,
+  type Format,
+  type Translate,
+} from '@syntra/ui';
 import { CATALOGS, LOCALES, en, isLocale, type Locale, type MessageKey } from './catalog.js';
 
 /**
- * Which language the screens before sign-in are in.
+ * Which language the screens are in.
  *
  * Chosen from the browser, overridable by the reader, and remembered. Nothing
  * asks: a language picker presented as a question on first load is a question
@@ -12,11 +28,12 @@ import { CATALOGS, LOCALES, en, isLocale, type Locale, type MessageKey } from '.
 
 const STORAGE_KEY = 'syntra.locale';
 
-interface LocaleValue {
+export interface LocaleValue {
   locale: Locale;
   setLocale(next: Locale): void;
   /**
-   * A message, with `{name}`-style placeholders filled in.
+   * A message, with `{name}`-style placeholders filled in; `t.plural` picks
+   * the plural form for a count.
    *
    * Placeholders rather than string concatenation at the call site, because
    * word order is exactly what a translation changes: "Good day, Jo" and
@@ -24,21 +41,9 @@ interface LocaleValue {
    * A caller that built the sentence from parts would have pinned English
    * grammar into every language.
    */
-  t(key: MessageKey, vars?: Record<string, string | number>): string;
-}
-
-/**
- * Fills `{name}` from `vars`.
- *
- * A placeholder with nothing to fill it is left ALONE rather than blanked. A
- * sentence reading "Good day, {name}" is visibly broken and gets reported; one
- * reading "Good day," looks deliberate and never does.
- */
-function interpolate(text: string, vars?: Record<string, string | number>): string {
-  if (!vars) return text;
-  return text.replace(/\{(\w+)\}/g, (whole, key: string) =>
-    key in vars ? String(vars[key]) : whole,
-  );
+  t: Translate<MessageKey>;
+  /** Numbers and dates in the reader's language, and region where known. */
+  format: Format;
 }
 
 const LocaleContext = createContext<LocaleValue | null>(null);
@@ -52,18 +57,35 @@ const LocaleContext = createContext<LocaleValue | null>(null);
  *
  * `navigator.languages` in order, then `navigator.language`. Anything not
  * translated falls through to English, which is the source language rather
- * than a fourth translation.
+ * than one more translation.
  */
-export function preferredLocale(
-  languages: readonly string[] = typeof navigator === 'undefined'
-    ? []
-    : (navigator.languages ?? [navigator.language]),
-): Locale {
+export function preferredLocale(languages: readonly string[] = browserLanguages()): Locale {
   for (const tag of languages) {
-    const base = tag.split('-')[0]?.toLowerCase() ?? '';
+    const base = baseLanguage(tag);
     if (isLocale(base)) return base;
   }
   return 'en';
+}
+
+/**
+ * The tag to format dates and numbers with: the browser's own tag when it is
+ * in the active language, so `en-GB` keeps day-first dates and `pt-PT` keeps
+ * its own, and the bare language otherwise.
+ */
+export function formatLocale(
+  locale: Locale,
+  languages: readonly string[] = browserLanguages(),
+): string {
+  return languages.find((tag) => baseLanguage(tag) === locale) ?? locale;
+}
+
+function browserLanguages(): readonly string[] {
+  if (typeof navigator === 'undefined') return [];
+  return navigator.languages ?? [navigator.language];
+}
+
+function baseLanguage(tag: string): string {
+  return tag.split('-')[0]?.toLowerCase() ?? '';
 }
 
 function stored(): Locale | null {
@@ -76,6 +98,23 @@ function stored(): Locale | null {
     // remembered convenience.
     return null;
   }
+}
+
+/** A translator over the base catalog for `locale`, falling back to English. */
+export function baseValue(locale: Locale): Pick<LocaleValue, 't' | 'format'> {
+  const catalog = CATALOGS[locale];
+  const format = createFormat(formatLocale(locale));
+  return {
+    format,
+    // English when a key is missing, never the key itself. A screen reading
+    // `login.submit` is a screen nobody can use, and an untranslated string
+    // is a gap in a catalogue rather than a reason to break a sign-in.
+    t: createTranslate<MessageKey>(
+      locale,
+      (key) => catalog[key as MessageKey] ?? en[key as MessageKey],
+      format,
+    ),
+  };
 }
 
 export function LocaleProvider({
@@ -91,43 +130,41 @@ export function LocaleProvider({
   );
 
   const setLocale = useCallback((next: Locale) => {
-    setLocaleState(next);
+    // A transition, so a console page waiting for its catalog in the new
+    // language keeps showing the old one rather than a loading screen.
+    startTransition(() => setLocaleState(next));
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {
       // As above. The choice still applies to this visit.
     }
-    document.documentElement.lang = next;
   }, []);
 
-  const value = useMemo<LocaleValue>(() => {
-    const catalog = CATALOGS[locale];
-    return {
-      locale,
-      setLocale,
-      // English when a key is missing, never the key itself. A screen reading
-      // `login.submit` is a screen nobody can use, and an untranslated string
-      // is a gap in a catalogue rather than a reason to break a sign-in.
-      t: (key, vars) => interpolate(catalog[key] ?? en[key], vars),
-    };
-  }, [locale, setLocale]);
+  // On the first render too, not only on a change: a screen reader picks its
+  // voice from `lang`, and French typography depends on it.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
-  return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
+  const value = useMemo<LocaleValue>(
+    () => ({ locale, setLocale, ...baseValue(locale) }),
+    [locale, setLocale],
+  );
+
+  return (
+    <LocaleContext.Provider value={value}>
+      <UiLocaleProvider value={value}>{children}</UiLocaleProvider>
+    </LocaleContext.Provider>
+  );
 }
 
+const fallback: LocaleValue = { locale: 'en', setLocale: () => {}, ...baseValue('en') };
+
 export function useLocale(): LocaleValue {
-  const value = useContext(LocaleContext);
-  if (value === null) {
-    // A default rather than a throw. Every one of these screens has to render;
-    // a component used outside the provider — in a test, or in a tree somebody
-    // reorganised — should be in English, not blank.
-    return {
-      locale: 'en',
-      setLocale: () => {},
-      t: (key, vars) => interpolate(en[key], vars),
-    };
-  }
-  return value;
+  // A default rather than a throw. Every one of these screens has to render;
+  // a component used outside the provider — in a test, or in a tree somebody
+  // reorganised — should be in English, not blank.
+  return useContext(LocaleContext) ?? fallback;
 }
 
 /** Shorthand, because the alternative is `useLocale().t` in every component. */
@@ -156,7 +193,7 @@ export function LanguagePicker({ className = '' }: { className?: string }) {
         className="h-8 rounded-control border border-border-control bg-bg px-2 text-ink"
       >
         {LOCALES.map((option) => (
-          <option key={option.code} value={option.code}>
+          <option key={option.code} value={option.code} lang={option.code}>
             {option.name}
           </option>
         ))}
